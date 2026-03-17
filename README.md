@@ -2,6 +2,8 @@
 
 Learning Context System is an experimental CLI for **coding with teaching, memory, and context control at the same time**.
 
+> Spanish summary available in [README.es.md](README.es.md).
+
 It does three things together:
 
 1. selects useful context
@@ -28,6 +30,21 @@ It is **not** yet a mature framework.
 - Preserve useful probability mass inside the context window by filtering noise, duplicates, and stale material.
 - Keep memory and prompt context separate but cooperative.
 
+## Resumen rapido en espanol
+
+Este proyecto es una CLI experimental para:
+
+- filtrar contexto antes de usar un LLM
+- ensenar sobre el codigo mientras se trabaja
+- recordar decisiones duraderas del proyecto
+
+La idea no es mandar todo al modelo, sino elegir mejor:
+
+- que codigo entra
+- que test importa
+- que memoria historica vale recuperar
+- que ruido debe quedar afuera
+
 ## External repo decision
 
 The primary repo to use as the architectural base is `engram`.
@@ -45,6 +62,40 @@ Use these other repositories as complementary references:
 - `Gentleman-MCP` later, if we need external tool orchestration
 
 Full analysis lives in `docs/repo-analysis.md`.
+
+## Exact use of Engram in this repository
+
+This project uses **[Engram](https://github.com/Gentleman-Programming/engram)** from Gentleman-Programming **only for the durable memory layer**.
+
+In concrete terms, Engram is used to:
+
+- save durable project memories
+- recall past decisions and summaries
+- keep historical memory separate from the current prompt context
+
+Engram is **not** used here as:
+
+- the code-generation engine
+- the context selector
+- the pedagogical layer
+- the general orchestration layer
+
+## Uso exacto de Engram en espanol
+
+En este repo usamos **Engram de Gentleman-Programming unicamente para la memoria durable**.
+
+Se usa solo para:
+
+- guardar memorias importantes
+- recuperar decisiones previas
+- traer resumenes utiles de sesiones anteriores
+
+No se usa aqui para:
+
+- generar codigo
+- rankear chunks
+- ensenar el contenido
+- reemplazar la logica principal de la CLI
 
 ## Project layout
 
@@ -110,7 +161,7 @@ This repo now has three benchmark layers:
 - recall benchmark
 - vertical benchmark
 
-The goal is not only to say “it feels better”, but to show when behavior improves or regresses.
+The goal is not only to say "it feels better", but to show when behavior improves or regresses.
 
 ## Initial direction
 

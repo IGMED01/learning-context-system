@@ -20,6 +20,8 @@ Use the following external repositories as inspiration, not as blind dependencie
 
 Current decision: treat `engram` as the core repo to emulate for memory/context architecture.
 
+Current implementation note: in this repository, Engram is used only for durable memory persistence and recall. It is not the selector, teaching engine, or code generator.
+
 ## Product Goals
 
 1. Teach while coding.

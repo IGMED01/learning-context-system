@@ -26,6 +26,19 @@ How we should use it:
 - as the reference model for durable summaries, decisions, and facts
 - as the future bridge between current task context and long-lived project memory
 
+Exact use in this repository:
+
+- durable memory persistence
+- memory retrieval
+- recall of previous project decisions and summaries
+
+Not used here for:
+
+- code generation
+- the context selector itself
+- the pedagogical packet builder
+- general orchestration
+
 ### 2. `gentleman-architecture-agents`
 
 Best fit for agent structure, not for memory.
@@ -78,6 +91,16 @@ Then borrow patterns from:
 
 - `gentleman-architecture-agents` for project context and scoping
 - `Gentle-Learning` for the teaching experience
+
+## Nota breve en espanol
+
+Elegimos `engram` como referencia principal solo para la parte de **memoria durable**:
+
+- guardar memoria util
+- recuperar decisiones anteriores
+- separar memoria historica del contexto inmediato
+
+No se usa aqui como motor de generacion, selector de contexto ni capa pedagogica.
 
 ## Recommended Build Order
 
