@@ -5,10 +5,11 @@ import path from "node:path";
 
 import { buildLearningReadme } from "../src/analysis/readme-generator.js";
 import { runCli } from "../src/cli/app.js";
+import { defaultProjectConfig } from "../src/contracts/config-contracts.js";
 import { parseChunkFile } from "../src/contracts/context-contracts.js";
 import { loadWorkspaceChunks } from "../src/io/workspace-chunks.js";
 import { buildLearningPacket } from "../src/learning/mentor-loop.js";
-import { initProjectConfig } from "../src/system/project-ops.js";
+import { initProjectConfig, runProjectDoctor } from "../src/system/project-ops.js";
 import {
   buildCloseSummaryContent,
   createEngramClient,
@@ -419,6 +420,25 @@ run("cli select debug exposes selection diagnostics", async () => {
   assert.match(result.stdout, /origin=workspace/);
 });
 
+run("cli select workspace json exposes scan stats metadata", async () => {
+  const result = await runCli([
+    "select",
+    "--workspace",
+    ".",
+    "--focus",
+    "cli context selector config",
+    "--format",
+    "json"
+  ]);
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.equal(parsed.command, "select");
+  assert.equal(typeof parsed.meta.durationMs, "number");
+  assert.equal(parsed.meta.scanStats.includedFiles > 0, true);
+  assert.equal(parsed.meta.scanStats.discoveredFiles >= parsed.meta.scanStats.includedFiles, true);
+});
+
 run("cli teach returns a teaching packet summary", async () => {
   const result = await runCli([
     "teach",
@@ -612,6 +632,54 @@ run("init creates config with a stable project id from package name", async () =
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+run("doctor reports missing dependencies as actionable warnings", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-doctor-"));
+
+  try {
+    await writeFile(
+      path.join(tempRoot, "package.json"),
+      JSON.stringify({ name: "doctor-fixture" }, null, 2),
+      "utf8"
+    );
+
+    const config = defaultProjectConfig();
+    config.project = "doctor-fixture";
+    config.workspace = ".";
+
+    const result = await runProjectDoctor({
+      cwd: tempRoot,
+      configInfo: {
+        found: false,
+        path: "",
+        config
+      }
+    });
+
+    const dependencyCheck = result.checks.find((check) => check.id === "dependencies");
+    const npmCheck = result.checks.find((check) => check.id === "npm");
+
+    assert.ok(dependencyCheck);
+    assert.equal(dependencyCheck.status, "warn");
+    assert.match(dependencyCheck.fix, /npm ci/i);
+    assert.ok(npmCheck);
+    assert.equal(npmCheck.status, "pass");
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("cli doctor emits runtime metadata in json mode", async () => {
+  const result = await runCli(["doctor", "--format", "json"]);
+  const parsed = JSON.parse(result.stdout);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(parsed.command, "doctor");
+  assert.equal(typeof parsed.meta.durationMs, "number");
+  assert.equal(parsed.meta.durationMs >= 0, true);
+  assert.match(parsed.meta.cwd, /Nueva carpeta/);
+  assert.ok(parsed.checks.length >= 1);
 });
 
 run("readme generator infers concepts and reading order", async () => {
@@ -1002,6 +1070,8 @@ run("cli recall uses config defaults and emits a stable JSON contract", async ()
   assert.equal(parsed.degraded, false);
   assert.equal(parsed.config.found, true);
   assert.match(parsed.config.path, /cli-config\.json/);
+  assert.equal(typeof parsed.meta.durationMs, "number");
+  assert.match(parsed.meta.cwd, /Nueva carpeta/);
   assert.equal(parsed.project, "configured-project");
   assert.equal(seen.query, "auth middleware");
   assert.equal(seen.options?.project, "configured-project");
@@ -1336,6 +1406,8 @@ run("cli teach emits a stable JSON contract and marks degraded recall", async ()
   assert.equal(parsed.command, "teach");
   assert.equal(parsed.status, "ok");
   assert.equal(parsed.degraded, true);
+  assert.equal(typeof parsed.meta.durationMs, "number");
+  assert.equal(parsed.meta.scanStats, null);
   assert.equal(parsed.memoryRecall.status, "failed");
   assert.equal(parsed.memoryRecall.degraded, true);
   assert.equal(parsed.warnings.length, 1);

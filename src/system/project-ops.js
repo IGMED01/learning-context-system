@@ -54,24 +54,37 @@ async function detectStableProjectId(cwd) {
  * @param {string[]} args
  */
 async function tryExec(command, args) {
-  try {
-    const result = await execFile(command, args, {
-      windowsHide: true,
-      maxBuffer: 1024 * 1024
-    });
+  const candidates =
+    process.platform === "win32" && !command.toLowerCase().endsWith(".cmd")
+      ? [command, `${command}.cmd`]
+      : [command];
 
-    return {
-      ok: true,
-      stdout: result.stdout?.trim() ?? "",
-      stderr: result.stderr?.trim() ?? ""
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      stdout: "",
-      stderr: error instanceof Error ? error.message : String(error)
-    };
+  for (const candidate of candidates) {
+    try {
+      const result = await execFile(candidate, args, {
+        windowsHide: true,
+        maxBuffer: 1024 * 1024
+      });
+
+      return {
+        ok: true,
+        stdout: result.stdout?.trim() ?? "",
+        stderr: result.stderr?.trim() ?? ""
+      };
+    } catch (error) {
+      if (candidate !== candidates[candidates.length - 1]) {
+        continue;
+      }
+
+      return {
+        ok: false,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error)
+      };
+    }
   }
+
+  return { ok: false, stdout: "", stderr: `Unable to execute ${command}` };
 }
 
 /**
@@ -106,6 +119,18 @@ export async function runProjectDoctor(input) {
     fix: nodeMajor >= 20 ? "" : "Install Node.js 20 or newer."
   });
 
+  const npmResult =
+    process.platform === "win32"
+      ? await tryExec("cmd.exe", ["/c", "npm.cmd", "--version"])
+      : await tryExec("npm", ["--version"]);
+  checks.push({
+    id: "npm",
+    label: "npm availability",
+    status: npmResult.ok ? "pass" : "fail",
+    detail: npmResult.ok ? `npm ${npmResult.stdout}` : npmResult.stderr,
+    fix: npmResult.ok ? "" : "Install npm (bundled with Node.js) and ensure it is available in PATH."
+  });
+
   const gitResult = await tryExec("git", ["--version"]);
   checks.push({
     id: "git",
@@ -113,6 +138,26 @@ export async function runProjectDoctor(input) {
     status: gitResult.ok ? "pass" : "fail",
     detail: gitResult.ok ? gitResult.stdout : gitResult.stderr,
     fix: gitResult.ok ? "" : "Install Git and ensure it is available in PATH."
+  });
+
+  const packageJsonPath = path.join(cwd, "package.json");
+  const packageJsonExists = await pathExists(packageJsonPath);
+  checks.push({
+    id: "package-json",
+    label: "Package manifest",
+    status: packageJsonExists ? "pass" : "fail",
+    detail: packageJsonExists ? packageJsonPath : `Missing package.json at ${packageJsonPath}`,
+    fix: packageJsonExists ? "" : "Create package.json before using npm-based workflows."
+  });
+
+  const nodeModulesPath = path.join(cwd, "node_modules");
+  const nodeModulesExists = await pathExists(nodeModulesPath);
+  checks.push({
+    id: "dependencies",
+    label: "Installed dependencies",
+    status: nodeModulesExists ? "pass" : "warn",
+    detail: nodeModulesExists ? nodeModulesPath : `Missing dependency directory: ${nodeModulesPath}`,
+    fix: nodeModulesExists ? "" : "Run `npm ci` (or `npm install`) in the project root."
   });
 
   checks.push({

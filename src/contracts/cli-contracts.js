@@ -11,7 +11,12 @@ export const CLI_SCHEMA_VERSION = "1.0.0";
  *   degraded?: boolean,
  *   warnings?: string[],
  *   configPath?: string,
- *   configFound?: boolean
+ *   configFound?: boolean,
+ *   generatedAt?: string,
+ *   cwd?: string,
+ *   durationMs?: number,
+ *   debug?: boolean,
+ *   scanStats?: Record<string, unknown> | null
  * }} [meta]
  */
 export function buildCliJsonContract(command, payload, meta = {}) {
@@ -24,6 +29,13 @@ export function buildCliJsonContract(command, payload, meta = {}) {
     config: {
       found: meta.configFound === true,
       path: meta.configPath ?? ""
+    },
+    meta: {
+      generatedAt: meta.generatedAt ?? "",
+      cwd: meta.cwd ?? "",
+      durationMs: meta.durationMs ?? 0,
+      debug: meta.debug === true,
+      scanStats: meta.scanStats ?? null
     },
     ...payload
   };

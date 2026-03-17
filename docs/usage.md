@@ -129,6 +129,16 @@ Today this validates the hardened bootstrap layer first:
 
 That scope is deliberate. It is a real baseline, not a fake claim that the whole repo is already under strict TypeScript.
 
+## Privacy and redaction
+
+The workspace scanner now applies a simple safety policy before chunks are built:
+
+1. ignore obviously sensitive files such as `.env`, private keys, and certificate files
+2. redact inline secret-looking values such as API keys, bearer tokens, passwords, and secrets
+3. report redaction counts through scan statistics
+
+This is not a perfect DLP system, but it is a serious production-minded baseline.
+
 ## Command 1: Select useful context in the synthetic playground
 
 ```bash
@@ -335,6 +345,7 @@ When you pass `--format json`, the CLI now emits a versioned contract that inclu
 - `degraded`
 - `warnings`
 - `config`
+- `meta`
 
 Concept:
 

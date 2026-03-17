@@ -26,6 +26,23 @@ function chunkDebugLines(chunk, indent = "  ") {
   ];
 }
 
+function formatScanStats(scanStats) {
+  if (!scanStats) {
+    return [];
+  }
+
+  return [
+    "Workspace scan:",
+    `- root: ${scanStats.rootPath}`,
+    `- discovered: ${scanStats.discoveredFiles}`,
+    `- included: ${scanStats.includedFiles}`,
+    `- ignored: ${scanStats.ignoredFiles}`,
+    `- truncated: ${scanStats.truncatedFiles}`,
+    `- redacted files: ${scanStats.redactedFiles}`,
+    `- redactions: ${scanStats.redactionCount}`
+  ];
+}
+
 function formatSectionChunk(chunk) {
   if (!chunk) {
     return "- none";
@@ -43,9 +60,15 @@ export function formatSelectionAsText(result, options = {}) {
   const lines = [
     `Focus: ${result.focus}`,
     `Token budget: ${result.usedTokens}/${result.tokenBudget}`,
-    "",
-    "Selected chunks:"
+    ""
   ];
+
+  if (result.scanStats) {
+    lines.push(...formatScanStats(result.scanStats));
+    lines.push("");
+  }
+
+  lines.push("Selected chunks:");
 
   if (!result.selected.length) {
     lines.push("- none");
@@ -102,7 +125,15 @@ export function formatLearningPacketAsText(packet, options = {}) {
     `Objective: ${packet.objective}`,
     `Changed files: ${packet.changedFiles.join(", ") || "none"}`,
     `Token budget used: ${packet.diagnostics.usedTokens}/${packet.diagnostics.tokenBudget}`,
-    "",
+    ""
+  ];
+
+  if (packet.scanStats) {
+    lines.push(...formatScanStats(packet.scanStats));
+    lines.push("");
+  }
+
+  lines.push(
     "Memory recall:",
     `- Enabled: ${packet.memoryRecall?.enabled ? "yes" : "no"}`,
     `- Status: ${packet.memoryRecall?.status || "none"}`,
@@ -112,7 +143,7 @@ export function formatLearningPacketAsText(packet, options = {}) {
     `- Project: ${packet.memoryRecall?.project || "none"}`,
     `- Recovered chunks: ${packet.memoryRecall?.recoveredChunks ?? 0}`,
     `- Degraded: ${packet.memoryRecall?.degraded ? "yes" : "no"}`
-  ];
+  );
 
   if (packet.memoryRecall?.error) {
     lines.push(`- Error: ${packet.memoryRecall.error}`);

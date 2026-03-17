@@ -33,6 +33,16 @@ function serialize(result) {
   return JSON.stringify(result, null, 2);
 }
 
+function buildRuntimeMeta(startedAt, options = {}) {
+  return {
+    generatedAt: new Date().toISOString(),
+    cwd: process.cwd(),
+    durationMs: Date.now() - startedAt,
+    debug: options.debug === true,
+    scanStats: options.scanStats ?? null
+  };
+}
+
 function serializeCommandResult(command, payload, format, configInfo, meta = {}) {
   if (format === "text") {
     return typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
@@ -245,6 +255,7 @@ async function safeLoadConfig(command, rawOptions) {
  * @param {{ engramClient?: ReturnType<typeof createEngramClient> }} [dependencies]
  */
 export async function runCli(argv, dependencies = {}) {
+  const startedAt = Date.now();
   const { command, options: rawOptions } = parseArgv(argv);
 
   if (!command || command === "help" || rawOptions.help === "true") {
@@ -282,7 +293,9 @@ export async function runCli(argv, dependencies = {}) {
       exitCode: 0,
       stdout:
         format === "json"
-          ? serialize(buildCliJsonContract("init", result))
+          ? serialize(
+              buildCliJsonContract("init", result, buildRuntimeMeta(startedAt))
+            )
           : formatInitResultAsText(result)
     };
   }
@@ -305,7 +318,8 @@ export async function runCli(argv, dependencies = {}) {
               buildCliJsonContract("doctor", result, {
                 status: result.summary.fail ? "error" : "ok",
                 configFound: loadedConfig.found,
-                configPath: loadedConfig.path
+                configPath: loadedConfig.path,
+                ...buildRuntimeMeta(startedAt)
               })
             )
           : formatDoctorResultAsText(result)
@@ -383,7 +397,8 @@ export async function runCli(argv, dependencies = {}) {
           ? formatMemoryRecallAsText(result, { debug: debugEnabled })
           : serializeCommandResult("recall", result, format, loadedConfig, {
               degraded,
-              warnings
+              warnings,
+              ...buildRuntimeMeta(startedAt, { debug: debugEnabled })
             })
     };
   }
@@ -404,7 +419,7 @@ export async function runCli(argv, dependencies = {}) {
       stdout:
         format === "text"
           ? formatMemoryWriteAsText(result, "Memory saved")
-          : serializeCommandResult("remember", result, format, loadedConfig)
+          : serializeCommandResult("remember", result, format, loadedConfig, buildRuntimeMeta(startedAt))
     };
   }
 
@@ -425,7 +440,7 @@ export async function runCli(argv, dependencies = {}) {
       stdout:
         format === "text"
           ? formatMemoryWriteAsText(result, "Session close note saved")
-          : serializeCommandResult("close", result, format, loadedConfig)
+          : serializeCommandResult("close", result, format, loadedConfig, buildRuntimeMeta(startedAt))
     };
   }
 
@@ -459,7 +474,8 @@ export async function runCli(argv, dependencies = {}) {
                 ...selectionResult
               },
               format,
-              loadedConfig
+              loadedConfig,
+              buildRuntimeMeta(startedAt, { debug: debugEnabled, scanStats: stats ?? null })
             )
     };
   }
@@ -497,7 +513,8 @@ export async function runCli(argv, dependencies = {}) {
                   ...result
                 },
                 format,
-                loadedConfig
+                loadedConfig,
+                buildRuntimeMeta(startedAt, { scanStats: stats ?? null })
               )
             : `README generated at ${writtenPath}`
       };
@@ -515,7 +532,8 @@ export async function runCli(argv, dependencies = {}) {
                 ...result
               },
               format,
-              loadedConfig
+              loadedConfig,
+              buildRuntimeMeta(startedAt, { scanStats: stats ?? null })
             )
           : result.markdown
     };
@@ -605,7 +623,8 @@ export async function runCli(argv, dependencies = {}) {
               warnings:
                 packetWithMemory.memoryRecall.degraded && packetWithMemory.memoryRecall.error
                   ? [packetWithMemory.memoryRecall.error]
-                  : []
+                  : [],
+              ...buildRuntimeMeta(startedAt, { debug: debugEnabled, scanStats: stats ?? null })
             }
           )
   };

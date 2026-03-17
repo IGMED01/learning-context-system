@@ -7,6 +7,8 @@ function wantsJson(argv) {
   return argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json";
 }
 
+const startedAt = Date.now();
+
 try {
   const argv = process.argv.slice(2);
   const result = await runCli(argv);
@@ -33,7 +35,10 @@ try {
             message
           }
         }, {
-          status: "error"
+          status: "error",
+          generatedAt: new Date().toISOString(),
+          cwd: process.cwd(),
+          durationMs: Date.now() - startedAt
         }),
         null,
         2

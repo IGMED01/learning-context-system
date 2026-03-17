@@ -200,6 +200,18 @@ npm run init:config
 
 El `typecheck` actual es incremental a proposito: primero endurece config/bootstrap y el scanner de workspace, en vez de fingir que todo el repo ya esta migrado a TypeScript estricto.
 
+## Privacidad y politica de escaneo
+
+El scanner del workspace no hace un volcado ciego.
+
+Hoy:
+
+- ignora `.env`, `.pem`, `.key`, `.pfx`, `.crt`, `.cer`, `id_rsa` e `id_dsa`
+- redacta secretos inline como API keys, bearer tokens y asignaciones comunes de password/secret
+- cuenta archivos redactados y reemplazos de secretos dentro de las estadisticas del escaneo
+
+Eso significa que la CLI ya no solo muestra contexto seleccionado, sino tambien **cuanto se ignoro, truncó o redactó**.
+
 ## Contrato JSON estable
 
 Cuando usás `--format json`, la CLI ahora devuelve un contrato versionado con:
@@ -210,6 +222,7 @@ Cuando usás `--format json`, la CLI ahora devuelve un contrato versionado con:
 - `degraded`
 - `warnings`
 - `config`
+- `meta`
 
 y después el payload del comando.
 

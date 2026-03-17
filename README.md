@@ -230,6 +230,18 @@ npm run init:config
 
 Current `typecheck` scope is intentionally incremental: it hardens the config/bootstrap and workspace-scan layer first, instead of pretending the whole repo is already fully migrated to strict TypeScript.
 
+## Privacy and scan policy
+
+The workspace scanner is not a blind dump.
+
+It currently:
+
+- ignores `.env`, `.pem`, `.key`, `.pfx`, `.crt`, `.cer`, `id_rsa`, and `id_dsa`
+- redacts inline secrets such as API keys, bearer tokens, and common password/secret assignments
+- counts redacted files and secret replacements in scan statistics
+
+That means the CLI now exposes not only selected context, but also **how much data was ignored, truncated, or redacted**.
+
 ## Best demo right now
 
 The strongest current demo is the TypeScript backend middleware vertical:
@@ -268,6 +280,7 @@ When you use `--format json`, the CLI now returns a versioned JSON contract with
 - `degraded`
 - `warnings`
 - `config`
+- `meta`
 
 and then the command payload itself.
 
