@@ -1,5 +1,30 @@
 // @ts-check
 
+/**
+ * @typedef {Record<string, string>} CliOptions
+ */
+
+/**
+ * @typedef {{
+ *   key: string,
+ *   value: string,
+ *   nextIndex: number
+ * }} ParsedOption
+ */
+
+/**
+ * @typedef {{
+ *   command: string,
+ *   options: CliOptions
+ * }} ParsedArgv
+ */
+
+/**
+ * @param {string[]} argv
+ * @param {number} index
+ * @param {string} token
+ * @returns {ParsedOption | null}
+ */
 function readValue(argv, index, token) {
   const inline = token.match(/^--([^=]+)=(.*)$/);
 
@@ -35,6 +60,7 @@ function readValue(argv, index, token) {
 
 /**
  * @param {string[]} argv
+ * @returns {ParsedArgv}
  */
 export function parseArgv(argv) {
   const [command, ...rest] = argv;
@@ -60,7 +86,7 @@ export function parseArgv(argv) {
 }
 
 /**
- * @param {Record<string, string>} options
+ * @param {CliOptions} options
  * @param {string} key
  */
 export function requireOption(options, key) {
@@ -74,7 +100,7 @@ export function requireOption(options, key) {
 }
 
 /**
- * @param {Record<string, string>} options
+ * @param {CliOptions} options
  * @param {string} key
  * @param {number} fallback
  */
@@ -116,7 +142,7 @@ export function assertNumberRules(value, key, rules = {}) {
 }
 
 /**
- * @param {Record<string, string>} options
+ * @param {CliOptions} options
  * @param {string} key
  * @param {string[]} fallback
  */

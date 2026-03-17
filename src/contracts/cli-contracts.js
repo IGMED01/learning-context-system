@@ -6,7 +6,7 @@ export const CLI_SCHEMA_VERSION = "1.0.0";
 
 /**
  * @param {string} command
- * @param {Record<string, unknown>} payload
+ * @param {object} payload
  * @param {CliContractMeta} [meta]
  */
 export function buildCliJsonContract(command, payload, meta = {}) {

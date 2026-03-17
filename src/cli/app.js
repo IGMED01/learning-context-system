@@ -1,6 +1,5 @@
 ﻿// @ts-check
 
-import { buildLearningReadme } from "../analysis/readme-generator.js";
 import { buildCliJsonContract } from "../contracts/cli-contracts.js";
 import { defaultProjectConfig } from "../contracts/config-contracts.js";
 import { selectContextWindow } from "../context/noise-canceler.js";
@@ -29,10 +28,121 @@ import {
   requireOption
 } from "./arg-parser.js";
 
+/** @typedef {import("../types/core-contracts.d.ts").ScanStats} ScanStats */
+/** @typedef {import("../types/core-contracts.d.ts").RuntimeMeta} RuntimeMeta */
+/** @typedef {import("../types/core-contracts.d.ts").DoctorResult} DoctorResult */
+/** @typedef {import("../types/core-contracts.d.ts").LearningPacket} LearningPacket */
+/** @typedef {import("../types/core-contracts.d.ts").MemoryRecallState} MemoryRecallState */
+/** @typedef {import("../contracts/context-contracts.js").ChunkFile} ChunkFile */
+
+/**
+ * @typedef {Record<string, string>} CliOptions
+ */
+
+/**
+ * @typedef {Awaited<ReturnType<typeof loadProjectConfig>>} LoadedConfigInfo
+ */
+
+/**
+ * @typedef {{
+ *   loadedConfig: LoadedConfigInfo,
+ *   configLoadError: string
+ * }} SafeLoadConfigResult
+ */
+
+/**
+ * @typedef {{
+ *   path: string,
+ *   payload: ChunkFile,
+ *   stats?: ScanStats
+ * }} ChunkSourceResult
+ */
+
+/**
+ * @typedef {{
+ *   debug?: boolean,
+ *   scanStats?: ScanStats | null
+ * }} RuntimeMetaOptions
+ */
+
+/**
+ * @typedef {{
+ *   engramClient?: ReturnType<typeof createEngramClient>
+ * }} AppDependencies
+ */
+
+/**
+ * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "init"} CliCommand
+ */
+
+/**
+ * @typedef {MemoryRecallState & {
+ *   selectedChunkIds?: string[],
+ *   suppressedChunkIds?: string[]
+ * }} RenderMemoryRecallState
+ */
+
+/**
+ * @typedef {LearningPacket & {
+ *   scanStats?: ScanStats,
+ *   memoryRecall: RenderMemoryRecallState,
+ *   debug?: {
+ *     selectedOrigins: Record<string, number>,
+ *     suppressedOrigins: Record<string, number>,
+ *     suppressionReasons: Record<string, number>
+ *   }
+ * }} LearningPacketWithMemory
+ */
+
+/**
+ * @typedef {{
+ *   action: string,
+ *   status: string,
+ *   created: boolean,
+ *   path: string,
+ *   message: string,
+ *   project?: string
+ * }} InitCommandResult
+ */
+
+/**
+ * @typedef {{
+ *   mode: string,
+ *   project?: string,
+ *   query?: string,
+ *   type?: string,
+ *   scope?: string,
+ *   limit?: number | null,
+ *   stdout?: string,
+ *   stderr?: string,
+ *   dataDir?: string,
+ *   degraded?: boolean,
+ *   warning?: string,
+ *   error?: string
+ * }} RecallCommandResult
+ */
+
+/**
+ * @typedef {{
+ *   tokenBudget: number,
+ *   maxChunks: number,
+ *   minScore: number,
+ *   sentenceBudget: number
+ * }} NumericOptions
+ */
+
+/**
+ * @param {unknown} result
+ */
 function serialize(result) {
   return JSON.stringify(result, null, 2);
 }
 
+/**
+ * @param {number} startedAt
+ * @param {RuntimeMetaOptions} [options]
+ * @returns {RuntimeMeta}
+ */
 function buildRuntimeMeta(startedAt, options = {}) {
   return {
     generatedAt: new Date().toISOString(),
@@ -43,13 +153,22 @@ function buildRuntimeMeta(startedAt, options = {}) {
   };
 }
 
+/**
+ * @param {string} command
+ * @param {object | string} payload
+ * @param {"json" | "text"} format
+ * @param {LoadedConfigInfo} configInfo
+ * @param {Partial<import("../types/core-contracts.d.ts").CliContractMeta>} [meta]
+ */
 function serializeCommandResult(command, payload, format, configInfo, meta = {}) {
   if (format === "text") {
     return typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
   }
 
+  const jsonPayload = typeof payload === "string" ? { value: payload } : payload;
+
   return serialize(
-    buildCliJsonContract(command, payload, {
+    buildCliJsonContract(command, jsonPayload, {
       schemaVersion: configInfo.config.output.jsonSchemaVersion,
       configFound: configInfo.found,
       configPath: configInfo.path,
@@ -58,6 +177,11 @@ function serializeCommandResult(command, payload, format, configInfo, meta = {})
   );
 }
 
+/**
+ * @param {CliCommand | "help" | ""} command
+ * @param {CliOptions} options
+ * @returns {Promise<ChunkSourceResult>}
+ */
 async function loadChunkSource(command, options) {
   if (options.input) {
     return loadChunkFile(options.input);
@@ -70,6 +194,10 @@ async function loadChunkSource(command, options) {
   throw new Error("Provide --input <file> or --workspace <dir>.");
 }
 
+/**
+ * @param {CliOptions} options
+ * @returns {NumericOptions}
+ */
 function readNumericOptions(options) {
   return {
     tokenBudget: assertNumberRules(numberOption(options, "token-budget", 350), "token-budget", {
@@ -95,6 +223,9 @@ function readNumericOptions(options) {
   };
 }
 
+/**
+ * @param {CliOptions} options
+ */
 function getContentOption(options) {
   const value = options.content ?? options.message;
 
@@ -105,6 +236,11 @@ function getContentOption(options) {
   return value;
 }
 
+/**
+ * @param {CliOptions} options
+ * @param {AppDependencies} dependencies
+ * @returns {ReturnType<typeof createEngramClient>}
+ */
 function getEngramClient(options, dependencies) {
   if (dependencies.engramClient) {
     return dependencies.engramClient;
@@ -116,6 +252,11 @@ function getEngramClient(options, dependencies) {
   });
 }
 
+/**
+ * @param {CliOptions} options
+ * @param {string} key
+ * @param {boolean} [fallback]
+ */
 function booleanOption(options, key, fallback = false) {
   const value = options[key];
 
@@ -130,6 +271,29 @@ function booleanOption(options, key, fallback = false) {
   return value === "true";
 }
 
+/**
+ * @param {string} command
+ * @returns {command is CliCommand}
+ */
+function isSupportedCommand(command) {
+  return (
+    command === "select" ||
+    command === "teach" ||
+    command === "readme" ||
+    command === "recall" ||
+    command === "remember" ||
+    command === "close" ||
+    command === "doctor" ||
+    command === "init"
+  );
+}
+
+/**
+ * @param {CliCommand} command
+ * @param {CliOptions} rawOptions
+ * @param {LoadedConfigInfo} loadedConfig
+ * @returns {CliOptions}
+ */
 function applyConfigDefaults(command, rawOptions, loadedConfig) {
   const options = { ...rawOptions };
   const config = loadedConfig.config;
@@ -204,6 +368,12 @@ function applyConfigDefaults(command, rawOptions, loadedConfig) {
   return options;
 }
 
+/**
+ * @param {ReturnType<typeof createEngramClient>} engram
+ * @param {{ query?: string, project?: string, type?: string, scope?: string, limit?: number }} input
+ * @param {unknown} error
+ * @returns {RecallCommandResult}
+ */
 function buildDegradedRecallResult(engram, input, error) {
   const message = error instanceof Error ? error.message : String(error);
   const warning = "Engram unavailable; returning an empty recall result in degraded mode.";
@@ -224,6 +394,11 @@ function buildDegradedRecallResult(engram, input, error) {
   };
 }
 
+/**
+ * @param {CliCommand | "help" | ""} command
+ * @param {CliOptions} rawOptions
+ * @returns {Promise<SafeLoadConfigResult>}
+ */
 async function safeLoadConfig(command, rawOptions) {
   try {
     return {
@@ -252,7 +427,7 @@ async function safeLoadConfig(command, rawOptions) {
 
 /**
  * @param {string[]} argv
- * @param {{ engramClient?: ReturnType<typeof createEngramClient> }} [dependencies]
+ * @param {AppDependencies} [dependencies]
  */
 export async function runCli(argv, dependencies = {}) {
   const startedAt = Date.now();
@@ -265,16 +440,7 @@ export async function runCli(argv, dependencies = {}) {
     };
   }
 
-  if (
-    command !== "select" &&
-    command !== "teach" &&
-    command !== "readme" &&
-    command !== "recall" &&
-    command !== "remember" &&
-    command !== "close" &&
-    command !== "doctor" &&
-    command !== "init"
-  ) {
+  if (!isSupportedCommand(command)) {
     return {
       exitCode: 1,
       stderr: `Unknown command '${command}'.\n\n${usageText()}`
@@ -387,7 +553,9 @@ export async function runCli(argv, dependencies = {}) {
         },
         error
       );
-      warnings.push(result.warning);
+      if (result.warning) {
+        warnings.push(result.warning);
+      }
     }
 
     return {
@@ -481,6 +649,7 @@ export async function runCli(argv, dependencies = {}) {
   }
 
   if (command === "readme") {
+    const { buildLearningReadme } = await import("../analysis/readme-generator.js");
     const task = options.task;
     const objective = options.objective;
     const focus =
@@ -580,7 +749,7 @@ export async function runCli(argv, dependencies = {}) {
   const suppressedMemoryChunkIds = packet.suppressedContext
     .filter((chunk) => String(chunk.id).startsWith("engram-memory-"))
     .map((chunk) => chunk.id);
-  const packetWithMemory = {
+  const packetWithMemory = /** @type {LearningPacketWithMemory} */ ({
     ...packet,
     ...(stats ? { scanStats: stats } : {}),
     memoryRecall: {
@@ -595,7 +764,7 @@ export async function runCli(argv, dependencies = {}) {
           }
         : {})
     }
-  };
+  });
 
   if (debugEnabled) {
     packetWithMemory.debug = {

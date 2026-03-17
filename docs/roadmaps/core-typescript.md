@@ -19,6 +19,10 @@ Move the core from "disciplined JavaScript" to "strictly typed and safer to refa
 - shared core contracts already exist in `src/types/core-contracts.d.ts`
 - selector, mentor loop, and memory recall now share typed shapes instead of ad-hoc inline objects
 - enforced `typecheck` already covers:
+  - `src/analysis/readme-generator.js`
+  - `src/cli/app.js`
+  - `src/cli/arg-parser.js`
+  - `src/cli/formatters.js`
   - `src/context/noise-canceler.js`
   - `src/learning/mentor-loop.js`
   - `src/memory/recall-queries.js`
@@ -37,13 +41,18 @@ Move the core from "disciplined JavaScript" to "strictly typed and safer to refa
 ### Milestone 2 - Core modules under strict typing
 
 - [x] harden:
+  - `src/analysis/readme-generator.js`
+  - `src/cli/app.js`
+  - `src/cli/arg-parser.js`
+  - `src/cli/formatters.js`
   - `src/context/noise-canceler.js`
   - `src/learning/mentor-loop.js`
   - `src/memory/teach-recall.js`
   - `src/memory/engram-client.js`
   - `src/memory/recall-queries.js`
 - [x] eliminate the most fragile implicit `any` paths
-- [ ] widen strict typing to CLI orchestration and formatter edges
+- [x] widen strict typing to CLI orchestration and formatter edges
+- [ ] move typed JS modules to publishable `.ts` build targets
 
 ### Milestone 3 - Real `.ts` migration
 

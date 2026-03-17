@@ -9,6 +9,53 @@
  */
 
 /**
+ * @typedef {{
+ *   defaultFormat: string,
+ *   jsonSchemaVersion: string
+ * }} ProjectOutputConfig
+ */
+
+/**
+ * @typedef {{
+ *   tokenBudget: number,
+ *   maxChunks: number,
+ *   minScore: number,
+ *   sentenceBudget: number
+ * }} ProjectSelectionConfig
+ */
+
+/**
+ * @typedef {{
+ *   enabled: boolean,
+ *   project: string,
+ *   limit: number,
+ *   scope: string,
+ *   type: string,
+ *   strictRecall: boolean,
+ *   degradedRecall: boolean
+ * }} ProjectMemoryConfig
+ */
+
+/**
+ * @typedef {{
+ *   binaryPath: string,
+ *   dataDir: string
+ * }} ProjectEngramConfig
+ */
+
+/**
+ * @typedef {{
+ *   schemaVersion: string,
+ *   project: string,
+ *   workspace: string,
+ *   output: ProjectOutputConfig,
+ *   selection: ProjectSelectionConfig,
+ *   memory: ProjectMemoryConfig,
+ *   engram: ProjectEngramConfig
+ * }} ProjectConfig
+ */
+
+/**
  * @param {string} message
  */
 function fail(message) {
@@ -28,6 +75,7 @@ function assertObject(value, label) {
 /**
  * @param {unknown} value
  * @param {string} label
+ * @returns {string | undefined}
  */
 function optionalString(value, label) {
   if (value === undefined) {
@@ -38,12 +86,13 @@ function optionalString(value, label) {
     fail(`${label} must be a non-empty string.`);
   }
 
-  return value;
+  return /** @type {string} */ (value);
 }
 
 /**
  * @param {unknown} value
  * @param {string} label
+ * @returns {boolean | undefined}
  */
 function optionalBoolean(value, label) {
   if (value === undefined) {
@@ -54,13 +103,14 @@ function optionalBoolean(value, label) {
     fail(`${label} must be a boolean.`);
   }
 
-  return value;
+  return /** @type {boolean} */ (value);
 }
 
 /**
  * @param {unknown} value
  * @param {string} label
  * @param {NumberRules} [rules]
+ * @returns {number | undefined}
  */
 function optionalNumber(value, label, rules = {}) {
   if (value === undefined) {
@@ -88,6 +138,9 @@ function optionalNumber(value, label, rules = {}) {
   return numericValue;
 }
 
+/**
+ * @returns {ProjectConfig}
+ */
 export function defaultProjectConfig() {
   return {
     schemaVersion: "1.0.0",
@@ -121,6 +174,7 @@ export function defaultProjectConfig() {
 
 /**
  * @param {unknown} value
+ * @returns {ProjectConfig}
  */
 export function validateProjectConfig(value) {
   assertObject(value, "Project config");
@@ -232,6 +286,7 @@ export function validateProjectConfig(value) {
 /**
  * @param {string} raw
  * @param {string} sourceLabel
+ * @returns {ProjectConfig}
  */
 export function parseProjectConfig(raw, sourceLabel) {
   try {

@@ -5,6 +5,36 @@ import { resolve } from "node:path";
 
 import { buildLearningPacket } from "../learning/mentor-loop.js";
 
+/** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
+/** @typedef {import("../types/core-contracts.d.ts").LearningPacket} LearningPacket */
+
+/**
+ * @typedef {{
+ *   title: string,
+ *   description: string,
+ *   signals: string[],
+ *   hits?: number
+ * }} ConceptEntry
+ */
+
+/**
+ * @typedef {{
+ *   builtin: string[],
+ *   external: string[],
+ *   local: string[]
+ * }} ImportClassification
+ */
+
+/**
+ * @typedef {{
+ *   name: string | null,
+ *   type: string | null,
+ *   scripts: Record<string, string>,
+ *   dependencies: Record<string, string>,
+ *   devDependencies: Record<string, string>
+ * }} ProjectMetadata
+ */
+
 const CONCEPT_CATALOG = [
   {
     title: "Node.js CLI orchestration",
@@ -76,14 +106,25 @@ const CONCEPT_CATALOG = [
 
 const BUILTIN_PREFIX = "node:";
 
+/**
+ * @param {string} value
+ */
 function normalizeForMatching(value) {
   return value.toLowerCase();
 }
 
+/**
+ * @param {string[]} values
+ * @returns {string[]}
+ */
 function unique(values) {
   return Array.from(new Set(values));
 }
 
+/**
+ * @param {string} raw
+ * @returns {unknown | null}
+ */
 function safeJsonParse(raw) {
   try {
     return JSON.parse(raw);
@@ -92,6 +133,10 @@ function safeJsonParse(raw) {
   }
 }
 
+/**
+ * @param {string} text
+ * @returns {string[]}
+ */
 function extractImports(text) {
   const matches = [];
   const importRegex =
@@ -111,6 +156,10 @@ function extractImports(text) {
   return matches;
 }
 
+/**
+ * @param {Chunk[]} chunks
+ * @returns {ImportClassification}
+ */
 function classifyImports(chunks) {
   const allImports = unique(
     chunks
@@ -130,6 +179,10 @@ function classifyImports(chunks) {
   };
 }
 
+/**
+ * @param {string} projectRoot
+ * @returns {Promise<ProjectMetadata | null>}
+ */
 async function inferProjectMetadata(projectRoot) {
   const packageJsonPath = resolve(projectRoot, "package.json");
 
@@ -160,6 +213,9 @@ async function inferProjectMetadata(projectRoot) {
     .catch(() => null);
 }
 
+/**
+ * @param {string} source
+ */
 function sourceWeight(source) {
   if (source === "src/cli.js") {
     return 1000;
@@ -204,6 +260,11 @@ function sourceWeight(source) {
   return 600;
 }
 
+/**
+ * @param {Chunk[]} chunks
+ * @param {LearningPacket} packet
+ * @returns {string[]}
+ */
 function buildReadingOrder(chunks, packet) {
   const selectedSources = packet.selectedContext.map((chunk) => chunk.source);
   const allSources = unique([...selectedSources, ...chunks.map((chunk) => chunk.source)]);
@@ -226,6 +287,10 @@ function buildReadingOrder(chunks, packet) {
   return unique([...preferred, ...ranked]).slice(0, 8);
 }
 
+/**
+ * @param {string[]} sources
+ * @returns {string[]}
+ */
 function buildFlow(sources) {
   const steps = [];
 
@@ -256,6 +321,12 @@ function buildFlow(sources) {
   return steps;
 }
 
+/**
+ * @param {Chunk[]} chunks
+ * @param {LearningPacket} packet
+ * @param {ProjectMetadata | null} metadata
+ * @returns {ConceptEntry[]}
+ */
 function detectConcepts(chunks, packet, metadata) {
   const corpus = normalizeForMatching(
     [
@@ -275,6 +346,10 @@ function detectConcepts(chunks, packet, metadata) {
     .slice(0, 7);
 }
 
+/**
+ * @param {ProjectMetadata | null} metadata
+ * @param {ImportClassification} imports
+ */
 function formatDependencySection(metadata, imports) {
   const lines = ["## Dependencies", ""];
   const runtime = Object.keys(metadata?.dependencies ?? {});
@@ -304,6 +379,9 @@ function formatDependencySection(metadata, imports) {
   return lines.join("\n");
 }
 
+/**
+ * @param {ConceptEntry[]} concepts
+ */
 function formatConceptSection(concepts) {
   const lines = ["## Core Concepts To Learn First", ""];
 
@@ -319,6 +397,9 @@ function formatConceptSection(concepts) {
   return lines.join("\n");
 }
 
+/**
+ * @param {string[]} readingOrder
+ */
 function formatReadingOrder(readingOrder) {
   const lines = ["## Reading Order", ""];
 
@@ -329,6 +410,9 @@ function formatReadingOrder(readingOrder) {
   return lines.join("\n");
 }
 
+/**
+ * @param {string[]} flowSteps
+ */
 function formatFlowSection(flowSteps) {
   const lines = ["## How The Code Flows", ""];
 
@@ -339,6 +423,9 @@ function formatFlowSection(flowSteps) {
   return lines.join("\n");
 }
 
+/**
+ * @param {LearningPacket} packet
+ */
 function formatSelectedContext(packet) {
   const lines = ["## High-Signal Files For This Goal", ""];
 
@@ -354,6 +441,9 @@ function formatSelectedContext(packet) {
   return lines.join("\n");
 }
 
+/**
+ * @param {ProjectMetadata | null} metadata
+ */
 function formatCommands(metadata) {
   const scripts = metadata?.scripts ?? {};
   const lines = ["## Useful Commands", ""];
@@ -368,6 +458,10 @@ function formatCommands(metadata) {
   return lines.join("\n");
 }
 
+/**
+ * @param {string | undefined} task
+ * @param {string | undefined} objective
+ */
 function formatScope(task, objective) {
   const lines = ["## Scope", ""];
 
@@ -387,17 +481,18 @@ function formatScope(task, objective) {
 }
 
 /**
- * @param {object} input
- * @param {string=} input.title
- * @param {string=} input.task
- * @param {string=} input.objective
- * @param {string=} input.focus
- * @param {string=} input.projectRoot
- * @param {Array<any>} input.chunks
- * @param {number=} input.tokenBudget
- * @param {number=} input.maxChunks
- * @param {number=} input.minScore
- * @param {number=} input.sentenceBudget
+ * @param {{
+ *   title?: string,
+ *   task?: string,
+ *   objective?: string,
+ *   focus?: string,
+ *   projectRoot?: string,
+ *   chunks?: Chunk[],
+ *   tokenBudget?: number,
+ *   maxChunks?: number,
+ *   minScore?: number,
+ *   sentenceBudget?: number
+ * }} input
  */
 export async function buildLearningReadme(input) {
   const {
