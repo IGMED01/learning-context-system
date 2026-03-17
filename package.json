@@ -11,8 +11,17 @@
     "benchmark": "node benchmark/run-benchmark.js",
     "benchmark:recall": "node benchmark/run-recall-benchmark.js",
     "select:example": "node src/cli.js select --input examples/auth-context.json --focus \"jwt middleware expired session validation\" --min-score 0.25 --format text",
-    "teach:example": "node src/cli.js teach --input examples/auth-context.json --task \"Improve auth middleware\" --objective \"Teach why validation runs before route handlers\" --changed-files \"src/auth/middleware.ts,test/auth/middleware.test.ts\" --project learning-context-system --min-score 0.25 --format text",
+    "teach:example": "node src/cli.js teach --input examples/auth-context.json --task \"Improve auth middleware\" --objective \"Teach why validation runs before route handlers\" --changed-files \"src/auth/middleware.ts,test/auth/middleware.test.ts\" --project learning-context-system --no-recall --min-score 0.25 --format text",
+    "teach:memory:example": "node src/cli.js teach --workspace . --task \"Summarize teach recall architecture\" --objective \"Teach how Engram recall is injected into teach\" --changed-files \"src/memory/teach-recall.js,src/cli/app.js\" --project learning-context-system --recall-query \"teach recall\" --token-budget 520 --max-chunks 8 --min-score 0.25 --format text",
     "readme:example": "node src/cli.js readme --workspace . --focus \"learning context cli noise cancellation\" --output README.LEARN.md --format text",
-    "recall:example": "node src/cli.js recall --project learning-context-system --query \"auth middleware\" --type decision --scope project --limit 5 --format text"
+    "recall:example": "node src/cli.js recall --project learning-context-system --query \"teach recall\" --scope project --limit 5 --format text",
+    "playground:select": "node src/cli.js select --input examples/auth-context.json --focus \"jwt middleware expired session validation\" --min-score 0.25 --format text",
+    "playground:select:debug": "node src/cli.js select --input examples/auth-context.json --focus \"jwt middleware expired session validation\" --min-score 0.25 --debug --format text",
+    "playground:teach:synthetic": "node src/cli.js teach --input examples/auth-context.json --task \"Improve auth middleware\" --objective \"Teach why validation runs before route handlers\" --changed-files \"src/auth/middleware.ts,test/auth/middleware.test.ts\" --project learning-context-system --no-recall --min-score 0.25 --format text",
+    "playground:teach:memory": "node src/cli.js teach --workspace . --task \"Summarize teach recall architecture\" --objective \"Teach how Engram recall is injected into teach\" --changed-files \"src/memory/teach-recall.js,src/cli/app.js\" --project learning-context-system --recall-query \"teach recall\" --token-budget 520 --max-chunks 8 --min-score 0.25 --format text",
+    "playground:teach:memory:debug": "node src/cli.js teach --workspace . --task \"Summarize teach recall architecture\" --objective \"Teach how Engram recall is injected into teach\" --changed-files \"src/memory/teach-recall.js,src/cli/app.js\" --project learning-context-system --recall-query \"teach recall\" --token-budget 520 --max-chunks 8 --min-score 0.25 --debug --format text",
+    "playground:readme": "node src/cli.js readme --workspace . --focus \"learning context cli noise cancellation\" --output README.LEARN.md --format text",
+    "playground:recall": "node src/cli.js recall --project learning-context-system --query \"teach recall\" --scope project --limit 5 --format text",
+    "playground:recall:debug": "node src/cli.js recall --project learning-context-system --query \"teach recall\" --scope project --limit 5 --debug --format text"
   }
 }

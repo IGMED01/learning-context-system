@@ -79,7 +79,7 @@ Lower priority:
 - `docs/context-noise-cancellation.md`: mathematical and architectural design
 - `src/context/noise-canceler.js`: scoring, deduplication, compression
 - `src/learning/mentor-loop.js`: teaching packet builder
-- `skills/`: language-specific teaching skills
+- `skills/`: language-specific and workflow-specific teaching skills
 
 ## Current Runtime Constraint
 

@@ -93,16 +93,13 @@ function getEngramClient(options, dependencies) {
   });
 }
 
-function countRecalledChunks(chunks) {
-  return chunks.filter((chunk) => chunk.source.startsWith("engram://")).length;
-}
-
 /**
  * @param {string[]} argv
  * @param {{ engramClient?: ReturnType<typeof createEngramClient> }} [dependencies]
  */
 export async function runCli(argv, dependencies = {}) {
   const { command, options } = parseArgv(argv);
+  const debugEnabled = options.debug === "true";
   const defaultFormat =
     command === "readme" ||
     command === "recall" ||
@@ -158,7 +155,10 @@ export async function runCli(argv, dependencies = {}) {
 
     return {
       exitCode: 0,
-      stdout: format === "text" ? formatMemoryRecallAsText(result) : serialize(result, format)
+      stdout:
+        format === "text"
+          ? formatMemoryRecallAsText(result, { debug: debugEnabled })
+          : serialize(result, format)
     };
   }
 
@@ -220,7 +220,7 @@ export async function runCli(argv, dependencies = {}) {
       exitCode: 0,
       stdout:
         format === "text"
-          ? formatSelectionAsText(result)
+          ? formatSelectionAsText(result, { debug: debugEnabled })
           : serialize(
               {
                 input: path,
@@ -315,26 +315,47 @@ export async function runCli(argv, dependencies = {}) {
     tokenBudget: numeric.tokenBudget,
     maxChunks: numeric.maxChunks,
     sentenceBudget: numeric.sentenceBudget,
-    minScore: numeric.minScore
+    minScore: numeric.minScore,
+    debug: debugEnabled
   });
-  const selectedMemoryChunks = countRecalledChunks(packet.selectedContext);
-  const suppressedMemoryChunks = packet.suppressedContext.filter((chunk) =>
-    String(chunk.id).startsWith("engram-memory-")
-  ).length;
+  const selectedMemoryChunkIds = packet.selectedContext
+    .filter((chunk) => chunk.source.startsWith("engram://"))
+    .map((chunk) => chunk.id);
+  const suppressedMemoryChunkIds = packet.suppressedContext
+    .filter((chunk) =>
+      String(chunk.id).startsWith("engram-memory-")
+    )
+    .map((chunk) => chunk.id);
+  const selectedMemoryChunks = selectedMemoryChunkIds.length;
+  const suppressedMemoryChunks = suppressedMemoryChunkIds.length;
   const packetWithMemory = {
     ...packet,
     memoryRecall: {
       ...teachChunks.memoryRecall,
       selectedChunks: selectedMemoryChunks,
-      suppressedChunks: suppressedMemoryChunks
+      suppressedChunks: suppressedMemoryChunks,
+      ...(debugEnabled
+        ? {
+            selectedChunkIds: selectedMemoryChunkIds,
+            suppressedChunkIds: suppressedMemoryChunkIds
+          }
+        : {})
     }
   };
+
+  if (debugEnabled) {
+    packetWithMemory.debug = {
+      selectedOrigins: packet.diagnostics.summary?.selectedOrigins ?? {},
+      suppressedOrigins: packet.diagnostics.summary?.suppressedOrigins ?? {},
+      suppressionReasons: packet.diagnostics.summary?.suppressionReasons ?? {}
+    };
+  }
 
   return {
     exitCode: 0,
     stdout:
       format === "text"
-        ? formatLearningPacketAsText(packetWithMemory)
+        ? formatLearningPacketAsText(packetWithMemory, { debug: debugEnabled })
         : serialize(
             {
               input: path,

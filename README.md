@@ -39,7 +39,7 @@ Full analysis lives in `docs/repo-analysis.md`.
 - `src/learning/mentor-loop.js`: learning packet builder
 - `src/memory/engram-client.js`: local Engram adapter for recall and durable memory writes
 - `src/cli.js`: local CLI entrypoint
-- `skills/`: language-specific teaching skills
+- `skills/`: language-specific and workflow-specific teaching skills
 
 ## Run
 

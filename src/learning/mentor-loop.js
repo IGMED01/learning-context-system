@@ -1,5 +1,86 @@
 import { selectContextWindow } from "../context/noise-canceler.js";
 
+function normalizeSource(source = "") {
+  return String(source).replace(/\\/gu, "/").toLowerCase();
+}
+
+function sourceTouchesChangedFile(source, changedFiles = []) {
+  const normalizedSource = normalizeSource(source);
+
+  return changedFiles.some((file) => {
+    const normalizedFile = normalizeSource(file);
+    return (
+      normalizedSource === normalizedFile ||
+      normalizedSource.endsWith(`/${normalizedFile}`) ||
+      normalizedSource.includes(normalizedFile)
+    );
+  });
+}
+
+function extractMemoryType(content = "") {
+  const match = String(content).match(/Memory type:\s*([^.]+)/iu);
+  return match?.[1]?.trim().toLowerCase() ?? "memory";
+}
+
+function toPacketChunk(chunk, debug = false) {
+  return {
+    id: chunk.id,
+    source: chunk.source,
+    kind: chunk.kind,
+    score: Number(chunk.score.toFixed(3)),
+    content: chunk.content,
+    ...(chunk.kind === "memory" ? { memoryType: extractMemoryType(chunk.content) } : {}),
+    ...(debug
+      ? {
+          origin: chunk.origin,
+          tokenCount: chunk.tokenCount,
+          diagnostics: chunk.diagnostics
+        }
+      : {})
+  };
+}
+
+function summarizeTeachingSections(selectedContext, changedFiles = []) {
+  const codeFocus =
+    selectedContext.find(
+      (chunk) => chunk.kind === "code" && sourceTouchesChangedFile(chunk.source, changedFiles)
+    ) ??
+    selectedContext.find((chunk) => chunk.kind === "code") ??
+    null;
+  const relatedTests = selectedContext.filter((chunk) => chunk.kind === "test");
+  const historicalMemory = selectedContext.filter((chunk) => chunk.kind === "memory");
+  const supportingContext = selectedContext.filter(
+    (chunk) =>
+      chunk.id !== codeFocus?.id &&
+      chunk.kind !== "test" &&
+      chunk.kind !== "memory"
+  );
+  const flow = [];
+
+  if (codeFocus) {
+    flow.push(`Empezá por ${codeFocus.source}: es el ancla del cambio.`);
+  }
+
+  if (relatedTests[0]) {
+    flow.push(`Validá con ${relatedTests[0].source}: confirma el comportamiento esperado.`);
+  }
+
+  if (historicalMemory[0]) {
+    const memoryType = historicalMemory[0].memoryType ?? "memory";
+    flow.push(
+      `Usá ${historicalMemory[0].source} como contexto histórico (${memoryType}), no como reemplazo del código actual.`
+    );
+  }
+
+  return {
+    codeFocus,
+    relatedTests,
+    historicalMemory,
+    supportingContext,
+    flow
+  };
+}
+
 export function buildLearningPacket(input) {
   const {
     task,
@@ -10,7 +91,8 @@ export function buildLearningPacket(input) {
     tokenBudget = 350,
     maxChunks,
     minScore,
-    sentenceBudget
+    sentenceBudget,
+    debug = false
   } = input;
 
   const context = selectContextWindow(chunks, {
@@ -21,6 +103,8 @@ export function buildLearningPacket(input) {
     sentenceBudget,
     changedFiles
   });
+  const selectedContext = context.selected.map((chunk) => toPacketChunk(chunk, debug));
+  const teachingSections = summarizeTeachingSections(selectedContext, changedFiles);
 
   return {
     objective,
@@ -32,18 +116,27 @@ export function buildLearningPacket(input) {
       "Mostrar el trade-off principal de la solucion.",
       "Cerrar con una practica corta o siguiente paso."
     ],
-    selectedContext: context.selected.map((chunk) => ({
+    teachingSections,
+    selectedContext,
+    suppressedContext: context.suppressed.map((chunk) => ({
       id: chunk.id,
-      source: chunk.source,
-      kind: chunk.kind,
-      score: Number(chunk.score.toFixed(3)),
-      content: chunk.content
+      reason: chunk.reason,
+      score: chunk.score,
+      ...(debug
+        ? {
+            source: chunk.source,
+            kind: chunk.kind,
+            origin: chunk.origin,
+            tokenCount: chunk.tokenCount,
+            diagnostics: chunk.diagnostics
+          }
+        : {})
     })),
-    suppressedContext: context.suppressed,
     diagnostics: {
       focus: context.focus,
       tokenBudget: context.tokenBudget,
-      usedTokens: context.usedTokens
+      usedTokens: context.usedTokens,
+      summary: context.summary
     }
   };
 }

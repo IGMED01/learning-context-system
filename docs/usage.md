@@ -27,7 +27,47 @@ With the CLI, the workflow becomes:
 
 You can now skip manual JSON for many tasks by using `--workspace .`, which scans the repository and builds chunks from local files automatically.
 
-## Command 1: Select useful context
+## Current playground surface
+
+There is no separate `playground/` UI yet. The current playground is the CLI itself.
+
+That playground has two deliberate modes:
+
+1. **Synthetic playground**
+   - uses `examples/auth-context.json`
+   - demonstrates ranking, suppression, and teaching output deterministically
+   - disables Engram recall on purpose so the auth demo does not pretend to have historical memory
+2. **Memory-backed playground**
+   - scans the real workspace with `--workspace .`
+   - recalls real Engram memories from this repository
+   - demonstrates how local code context and durable memory interact
+
+Recommended scripts:
+
+- `cmd /c npm.cmd run playground:select`
+- `cmd /c npm.cmd run playground:select:debug`
+- `cmd /c npm.cmd run playground:teach:synthetic`
+- `cmd /c npm.cmd run playground:teach:memory`
+- `cmd /c npm.cmd run playground:teach:memory:debug`
+- `cmd /c npm.cmd run playground:readme`
+- `cmd /c npm.cmd run playground:recall`
+- `cmd /c npm.cmd run playground:recall:debug`
+
+If PowerShell blocks `npm.ps1`, use `cmd /c npm.cmd run ...` or call the raw `node src/cli.js ...` commands shown below.
+
+## Debug mode
+
+Use `--debug` when you want the playground to explain its decisions instead of only showing the final result.
+
+The debug view currently exposes:
+
+- score signals for selected chunks
+- origin of each chunk (`workspace` vs `engram`)
+- suppression reasons and counts
+- recovered memory ids
+- which recalled memories were selected versus suppressed
+
+## Command 1: Select useful context in the synthetic playground
 
 ```bash
 node src/cli.js select --input examples/auth-context.json --focus "jwt middleware expired session validation" --min-score 0.25 --format text
@@ -40,25 +80,43 @@ What happens internally:
 3. it calls the context selector
 4. it returns selected chunks and suppressed chunks
 
-## Command 2: Build a learning packet
+## Command 2: Build a learning packet from synthetic example data
 
 ```bash
-node src/cli.js teach --input examples/auth-context.json --task "Improve auth middleware" --objective "Teach why validation runs before route handlers" --changed-files "src/auth/middleware.ts,test/auth/middleware.test.ts" --project learning-context-system --min-score 0.25 --format text
+node src/cli.js teach --input examples/auth-context.json --task "Improve auth middleware" --objective "Teach why validation runs before route handlers" --changed-files "src/auth/middleware.ts,test/auth/middleware.test.ts" --project learning-context-system --no-recall --min-score 0.25 --format text
 ```
 
 What happens internally:
 
 1. the CLI parses command-line options
 2. it loads the same chunk file
-3. it builds several recall queries from the task, objective, focus, and changed files
-4. it searches Engram progressively until it finds useful memory or exhausts those queries
-5. it converts the recovered memories into `memory` chunks
-6. it merges those chunks with the local code/test/spec context
-7. it calls the mentor loop
-8. the mentor loop first calls the context selector
-9. it then adds teaching scaffolding on top of the selected context
+3. it skips Engram recall because this demo is intentionally synthetic
+4. it calls the mentor loop
+5. the mentor loop first calls the context selector
+6. it then adds teaching scaffolding on top of the selected context
 
-## Command 3: Generate a learning README
+This is the safest place to evaluate the teaching loop itself because the output does not depend on previously saved project memory.
+
+## Command 3: Build a learning packet with real workspace memory
+
+```bash
+node src/cli.js teach --workspace . --task "Summarize teach recall architecture" --objective "Teach how Engram recall is injected into teach" --changed-files "src/memory/teach-recall.js,src/cli/app.js" --project learning-context-system --recall-query "teach recall" --token-budget 520 --max-chunks 8 --min-score 0.25 --format text
+```
+
+What happens internally:
+
+1. the CLI scans the workspace into chunks
+2. it recalls Engram memory for a query that is known to exist in this repository
+3. it merges recalled memory chunks with the workspace chunks
+4. it calls the mentor loop
+5. it reports both recalled memory diagnostics and the final selected context
+6. it now separates the result into `Código principal`, `Test relacionado`, `Memoria histórica útil`, and `Contexto de soporte`
+
+Use this mode when you want to debug the interaction between current code, recall heuristics, and the final teaching packet.
+
+If you want the extra diagnostics inline, rerun the same command with `--debug`.
+
+## Command 4: Generate a learning README
 
 ```bash
 node src/cli.js readme --workspace . --focus "learning context cli noise cancellation" --output README.LEARN.md --format text
@@ -72,10 +130,10 @@ What happens internally:
 4. it infers which concepts are required to understand the code
 5. it writes a markdown guide that lists dependencies, concepts, reading order, and data flow
 
-## Command 4: Recall memory from Engram
+## Command 5: Recall memory from Engram
 
 ```bash
-node src/cli.js recall --project learning-context-system --query "auth middleware" --type decision --scope project --limit 5 --format text
+node src/cli.js recall --project learning-context-system --query "teach recall" --scope project --limit 5 --format text
 ```
 
 What happens internally:
@@ -86,7 +144,7 @@ What happens internally:
 4. it runs `engram context` when you omit `--query`
 5. it returns the raw Engram memory wrapped in a clearer CLI summary
 
-## Command 5: Save a durable memory into Engram
+## Command 6: Save a durable memory into Engram
 
 ```bash
 node src/cli.js remember --title "JWT order" --content "Validation runs before route handlers." --project learning-context-system --type decision --topic architecture/auth-order --format text
@@ -100,7 +158,7 @@ What happens internally:
 4. Engram persists the observation in SQLite
 5. the CLI prints what was saved and where the database lives
 
-## Command 6: Close the work session with a structured note
+## Command 7: Close the work session with a structured note
 
 ```bash
 node src/cli.js close --summary "Integrated recall and remember commands." --learned "Context retrieval and durable memory are different layers." --next "Connect recall to the teaching flow." --project learning-context-system --format text
@@ -117,6 +175,8 @@ What happens internally:
 
 By default, `teach` now does a best-effort recall from Engram.
 
+That default is useful for real workspace flows, but the synthetic auth playground should usually opt out with `--no-recall`.
+
 It no longer depends on one raw sentence only. The CLI first derives shorter concept-heavy queries such as:
 
 - architecture terms from changed files
@@ -132,6 +192,7 @@ Useful options:
 - `--memory-scope`: defaults to `project`
 - `--no-recall`: disables the feature
 - `--strict-recall`: fails the command if Engram recall fails instead of continuing without memory
+- `--debug`: prints ranking signals, suppression breakdown, and recall internals for inspection
 
 ## Input contract
 

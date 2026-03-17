@@ -135,6 +135,8 @@ run("builds a learning packet with teaching scaffolding", () => {
   assert.equal(packet.selectedContext.length, 1);
   assert.equal(packet.changedFiles[0], "src/auth.js");
   assert.equal(packet.teachingChecklist.length, 4);
+  assert.equal(packet.teachingSections.codeFocus?.source, "src/auth.js");
+  assert.equal(packet.teachingSections.relatedTests.length, 0);
 });
 
 run("implementation flows prioritize changed code and related tests over generic docs", () => {
@@ -195,6 +197,68 @@ run("implementation flows prioritize changed code and related tests over generic
   assert.equal(packet.selectedContext[0].source, "src/cli/app.js");
   assert.equal(packet.selectedContext.some((chunk) => chunk.source === "test/cli/app.test.js"), true);
   assert.equal(packet.selectedContext.some((chunk) => chunk.source === "README.md"), false);
+  assert.equal(packet.teachingSections.codeFocus?.source, "src/cli/app.js");
+  assert.equal(packet.teachingSections.relatedTests[0]?.source, "test/cli/app.test.js");
+});
+
+run("teaching packet separates code, tests, and historical memory into pedagogical sections", () => {
+  const packet = buildLearningPacket({
+    task: "Integrate Engram recall",
+    objective: "Teach the historical role of memory in the flow",
+    changedFiles: ["src/cli/app.js"],
+    tokenBudget: 120,
+    maxChunks: 4,
+    chunks: [
+      {
+        id: "cli-app",
+        source: "src/cli/app.js",
+        kind: "code",
+        content: "The CLI app resolves teach recall before building the packet.",
+        certainty: 0.95,
+        recency: 0.9,
+        teachingValue: 0.84,
+        priority: 0.94
+      },
+      {
+        id: "cli-test",
+        source: "test/cli/app.test.js",
+        kind: "test",
+        content: "Tests verify the CLI app consumes recalled memory.",
+        certainty: 0.93,
+        recency: 0.86,
+        teachingValue: 0.84,
+        priority: 0.87
+      },
+      {
+        id: "memory-arch",
+        source: "engram://learning-context-system/22",
+        kind: "memory",
+        content:
+          "CLI Engram integration. Durable memory now enters the teach packet automatically. Memory type: architecture. Memory scope: project",
+        certainty: 0.92,
+        recency: 0.94,
+        teachingValue: 0.9,
+        priority: 0.88
+      },
+      {
+        id: "spec-doc",
+        source: "docs/usage.md",
+        kind: "spec",
+        content: "Usage docs explain how teach invokes recall.",
+        certainty: 0.9,
+        recency: 0.82,
+        teachingValue: 0.74,
+        priority: 0.72
+      }
+    ]
+  });
+
+  assert.equal(packet.teachingSections.codeFocus?.source, "src/cli/app.js");
+  assert.equal(packet.teachingSections.relatedTests[0]?.source, "test/cli/app.test.js");
+  assert.equal(packet.teachingSections.historicalMemory[0]?.source, "engram://learning-context-system/22");
+  assert.equal(packet.teachingSections.historicalMemory[0]?.memoryType, "architecture");
+  assert.equal(packet.teachingSections.supportingContext[0]?.source, "docs/usage.md");
+  assert.equal(packet.teachingSections.flow.length >= 3, true);
 });
 
 run("tests that map directly to changed files outrank generic test runners", () => {
@@ -334,6 +398,24 @@ run("cli select returns a readable context summary", async () => {
   assert.doesNotMatch(result.stdout, /legacy-chat from/);
 });
 
+run("cli select debug exposes selection diagnostics", async () => {
+  const result = await runCli([
+    "select",
+    "--input",
+    "examples/auth-context.json",
+    "--focus",
+    "jwt middleware expired session validation",
+    "--debug",
+    "--format",
+    "text"
+  ]);
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /Selection diagnostics:/);
+  assert.match(result.stdout, /Suppression reasons:/);
+  assert.match(result.stdout, /origin=workspace/);
+});
+
 run("cli teach returns a teaching packet summary", async () => {
   const result = await runCli([
     "teach",
@@ -352,8 +434,77 @@ run("cli teach returns a teaching packet summary", async () => {
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout, /Memory recall:/);
   assert.match(result.stdout, /Teaching checklist:/);
+  assert.match(result.stdout, /Teaching map:/);
+  assert.match(result.stdout, /Pedagogical sections:/);
   assert.match(result.stdout, /Changed files:/);
   assert.doesNotMatch(result.stdout, /legacy-chat from/);
+});
+
+run("cli teach debug exposes recall ids and selection diagnostics", async () => {
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async searchMemories(query, options) {
+      if (!/auth/u.test(query) || !/(middleware|validation)/u.test(query)) {
+        return {
+          mode: "search",
+          project: options?.project ?? "",
+          query,
+          stdout: "No memories found for that query.",
+          dataDir: ".engram"
+        };
+      }
+
+      return {
+        mode: "search",
+        project: options?.project ?? "",
+        query,
+        stdout: [
+          "Found 1 memories:",
+          "",
+          "[1] #7 (decision) â€” Auth validation order",
+          "    Reject invalid tokens before route handlers so the failure stays at the boundary.",
+          "    2026-03-17 18:05:00 | project: learning-context-system | scope: project"
+        ].join("\n"),
+        dataDir: ".engram"
+      };
+    },
+    async saveMemory() {
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  const result = await runCli(
+    [
+      "teach",
+      "--input",
+      "examples/auth-context.json",
+      "--task",
+      "Improve auth middleware",
+      "--objective",
+      "Teach why validation runs before route handlers",
+      "--changed-files",
+      "src/auth/middleware.ts,test/auth/middleware.test.ts",
+      "--project",
+      "learning-context-system",
+      "--debug",
+      "--format",
+      "text"
+    ],
+    {
+      engramClient: fakeClient
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /Recall debug:/);
+  assert.match(result.stdout, /Recovered memory ids:/);
+  assert.match(result.stdout, /Selected recalled ids:/);
+  assert.match(result.stdout, /Selection diagnostics:/);
 });
 
 run("workspace scanning collects repository chunks", async () => {
@@ -670,6 +821,55 @@ run("cli recall delegates to Engram search when a query is provided", async () =
   assert.match(result.stdout, /Recall mode: search/);
   assert.match(result.stdout, /auth middleware/);
   assert.match(result.stdout, /Auth order decision/);
+});
+
+run("cli recall debug shows active filter state", async () => {
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async searchMemories(query, options) {
+      return {
+        mode: "search",
+        project: options?.project ?? "",
+        query,
+        type: options?.type ?? "",
+        scope: options?.scope ?? "",
+        limit: options?.limit ?? null,
+        stdout: "1. Auth order decision",
+        dataDir: ".engram"
+      };
+    },
+    async saveMemory() {
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  const result = await runCli(
+    [
+      "recall",
+      "--query",
+      "auth middleware",
+      "--project",
+      "learning-context-system",
+      "--scope",
+      "project",
+      "--debug",
+      "--format",
+      "text"
+    ],
+    {
+      engramClient: fakeClient
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /Recall debug:/);
+  assert.match(result.stdout, /Query provided: yes/);
+  assert.match(result.stdout, /Scope filter active: yes/);
 });
 
 run("cli remember saves a durable memory through Engram", async () => {

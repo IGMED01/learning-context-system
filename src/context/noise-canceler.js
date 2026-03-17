@@ -122,6 +122,10 @@ function normalizeSource(source = "") {
   return String(source).replace(/\\/g, "/").toLowerCase();
 }
 
+function chunkOrigin(source = "") {
+  return normalizeSource(source).startsWith("engram://") ? "engram" : "workspace";
+}
+
 function sourceTerms(source = "") {
   return normalizeSource(source)
     .split(/[/. _-]+/)
@@ -468,6 +472,7 @@ export function selectContextWindow(chunks, options = {}) {
     const compressedContent = compressContent(chunk.content, focus, sentenceBudget);
     return {
       ...chunk,
+      origin: chunkOrigin(chunk.source),
       content: compressedContent,
       tokenCount: approximateTokenCount(compressedContent)
     };
@@ -498,8 +503,13 @@ export function selectContextWindow(chunks, options = {}) {
     if (chunk.score < minScore) {
       suppressed.push({
         id: chunk.id,
+        source: chunk.source,
+        kind: chunk.kind,
+        origin: chunk.origin,
+        tokenCount: chunk.tokenCount,
         reason: "score-below-threshold",
-        score: chunk.score
+        score: chunk.score,
+        diagnostics: chunk.diagnostics
       });
       continue;
     }
@@ -513,8 +523,13 @@ export function selectContextWindow(chunks, options = {}) {
     ) {
       suppressed.push({
         id: chunk.id,
+        source: chunk.source,
+        kind: chunk.kind,
+        origin: chunk.origin,
+        tokenCount: chunk.tokenCount,
         reason: "generic-doc-noise",
-        score: chunk.score
+        score: chunk.score,
+        diagnostics: chunk.diagnostics
       });
       continue;
     }
@@ -529,8 +544,13 @@ export function selectContextWindow(chunks, options = {}) {
     ) {
       suppressed.push({
         id: chunk.id,
+        source: chunk.source,
+        kind: chunk.kind,
+        origin: chunk.origin,
+        tokenCount: chunk.tokenCount,
         reason: "generic-test-noise",
-        score: chunk.score
+        score: chunk.score,
+        diagnostics: chunk.diagnostics
       });
       continue;
     }
@@ -538,8 +558,13 @@ export function selectContextWindow(chunks, options = {}) {
     if (selected.length >= maxChunks) {
       suppressed.push({
         id: chunk.id,
+        source: chunk.source,
+        kind: chunk.kind,
+        origin: chunk.origin,
+        tokenCount: chunk.tokenCount,
         reason: "max-chunks-reached",
-        score: chunk.score
+        score: chunk.score,
+        diagnostics: chunk.diagnostics
       });
       continue;
     }
@@ -547,8 +572,13 @@ export function selectContextWindow(chunks, options = {}) {
     if (usedTokens + chunk.tokenCount > tokenBudget) {
       suppressed.push({
         id: chunk.id,
+        source: chunk.source,
+        kind: chunk.kind,
+        origin: chunk.origin,
+        tokenCount: chunk.tokenCount,
         reason: "token-budget-exceeded",
-        score: chunk.score
+        score: chunk.score,
+        diagnostics: chunk.diagnostics
       });
       continue;
     }
@@ -556,8 +586,13 @@ export function selectContextWindow(chunks, options = {}) {
     if (chunk.diagnostics.redundancy >= 0.65) {
       suppressed.push({
         id: chunk.id,
+        source: chunk.source,
+        kind: chunk.kind,
+        origin: chunk.origin,
+        tokenCount: chunk.tokenCount,
         reason: "redundant-context",
-        score: chunk.score
+        score: chunk.score,
+        diagnostics: chunk.diagnostics
       });
       continue;
     }
@@ -571,6 +606,24 @@ export function selectContextWindow(chunks, options = {}) {
     tokenBudget,
     usedTokens,
     selected,
-    suppressed
+    suppressed,
+    summary: {
+      selectedCount: selected.length,
+      suppressedCount: suppressed.length,
+      selectedOrigins: summarizeBy(selected, (chunk) => chunk.origin),
+      suppressedOrigins: summarizeBy(suppressed, (chunk) => chunk.origin ?? chunkOrigin(chunk.source)),
+      suppressionReasons: summarizeBy(suppressed, (chunk) => chunk.reason)
+    }
   };
+}
+
+function summarizeBy(items, keySelector) {
+  const counts = {};
+
+  for (const item of items) {
+    const key = keySelector(item) || "unknown";
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+
+  return counts;
 }
