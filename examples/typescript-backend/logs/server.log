@@ -1,0 +1,6 @@
+INFO boot service=api
+INFO heartbeat service=api
+DEBUG trace auth pipeline start
+DEBUG trace auth pipeline start
+DEBUG trace auth pipeline start
+INFO heartbeat service=api
