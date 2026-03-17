@@ -87,7 +87,17 @@ export interface ScanStats {
   truncatedFiles: number;
   redactedFiles: number;
   redactionCount: number;
+  security: SecurityScanStats;
   kinds: Record<ChunkKind, number>;
+}
+
+export interface SecurityScanStats {
+  ignoredSensitiveFiles: number;
+  privateBlocks: number;
+  inlineSecrets: number;
+  tokenPatterns: number;
+  jwtLike: number;
+  connectionStrings: number;
 }
 
 export interface RuntimeMeta {
@@ -235,4 +245,19 @@ export interface EngramCommandResult extends EngramResolvedConfig {
   args: string[];
   stdout: string;
   stderr: string;
+}
+
+export interface SecretRedactionBreakdown {
+  privateBlocks: number;
+  inlineSecrets: number;
+  tokenPatterns: number;
+  jwtLike: number;
+  connectionStrings: number;
+}
+
+export interface SecretRedactionResult {
+  content: string;
+  redacted: boolean;
+  redactionCount: number;
+  breakdown: SecretRedactionBreakdown;
 }

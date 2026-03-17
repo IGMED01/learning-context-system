@@ -13,28 +13,30 @@ Reduce the chance of leaking sensitive material while still preserving useful co
 
 ## Current state
 
-- `.env`, private key, and certificate-like files are ignored
-- inline secret-like values are redacted
-- scan stats expose redaction counts
+- a dedicated security module now separates ignore policy from redaction policy
+- `.env*`, private keys, credential files, and cloud/tool configs are ignored before chunking
+- inline secret-like values, JWT-like tokens, and connection strings are redacted
+- scan stats expose ignored sensitive files plus redaction categories
 
 ## Milestones
 
-### Milestone 1 — Baseline protection
+### Milestone 1 - Baseline protection
 
-- keep the obvious sensitive patterns covered
-- keep tests for ignored files and inline redaction
+- [x] keep the obvious sensitive patterns covered
+- [x] keep tests for ignored files and inline redaction
+- [x] report ignored sensitive files and redaction categories
 
-### Milestone 2 — Better policy control
+### Milestone 2 - Better policy control
 
 - allowlist/denylist style configuration
 - per-project scan rules
 - clearer operator messaging around what never enters context
 
-### Milestone 3 — Safer real-world adoption
+### Milestone 3 - Safer real-world adoption
 
-- regression tests for secret handling
-- better coverage of token formats and accidental credential patterns
-- document limitations honestly
+- [x] regression tests for secret handling
+- [x] better coverage of token formats and accidental credential patterns
+- [x] document limitations honestly
 
 ## Done means
 

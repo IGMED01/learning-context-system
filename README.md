@@ -164,6 +164,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `CONTRIBUTING.md`: contributor rules and local validation checklist
 - `docs/context-noise-cancellation.md`: design of the context filtering system
 - `docs/benchmark.md`: benchmark method and metrics
+- `docs/security-model.md`: scan safety model, secret redaction policy, and limits
 - `docs/typescript-backend-vertical.md`: end-to-end TypeScript backend demo flow
 - `docs/usage.md`: CLI usage and input contract
 - `examples/typescript-backend/`: realistic TypeScript middleware workspace
@@ -236,11 +237,24 @@ The workspace scanner is not a blind dump.
 
 It currently:
 
-- ignores `.env`, `.pem`, `.key`, `.pfx`, `.crt`, `.cer`, `id_rsa`, and `id_dsa`
-- redacts inline secrets such as API keys, bearer tokens, and common password/secret assignments
-- counts redacted files and secret replacements in scan statistics
+- ignores high-risk credential containers such as:
+  - `.env*`
+  - `.npmrc`, `.pypirc`, `.netrc`
+  - `.aws/credentials`, `.docker/config.json`, `.kube/config`
+  - `id_rsa`, `id_dsa`, `id_ed25519`
+  - `.pem`, `.key`, `.pfx`, `.crt`, `.cer`, `.tfvars`
+- redacts secret-like fragments inside otherwise useful files:
+  - private key blocks
+  - API keys and access tokens
+  - bearer tokens
+  - JWT-like tokens
+  - connection strings and DSNs
+  - common password/secret assignments
+- counts redacted files, ignored sensitive files, and redaction categories in scan statistics
 
 That means the CLI now exposes not only selected context, but also **how much data was ignored, truncated, or redacted**.
+
+Security model details live in [docs/security-model.md](docs/security-model.md).
 
 ## Best demo right now
 

@@ -80,7 +80,13 @@ function formatScanStats(scanStats) {
     `- ignored: ${scanStats.ignoredFiles}`,
     `- truncated: ${scanStats.truncatedFiles}`,
     `- redacted files: ${scanStats.redactedFiles}`,
-    `- redactions: ${scanStats.redactionCount}`
+    `- redactions: ${scanStats.redactionCount}`,
+    `- ignored sensitive files: ${scanStats.security.ignoredSensitiveFiles}`,
+    `- private key blocks: ${scanStats.security.privateBlocks}`,
+    `- inline secrets: ${scanStats.security.inlineSecrets}`,
+    `- token patterns: ${scanStats.security.tokenPatterns}`,
+    `- jwt-like tokens: ${scanStats.security.jwtLike}`,
+    `- connection strings: ${scanStats.security.connectionStrings}`
   ];
 }
 

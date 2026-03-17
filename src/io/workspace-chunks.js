@@ -3,6 +3,12 @@
 import { readFile, readdir } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 
+import {
+  createSecurityScanStats,
+  redactSensitiveContent,
+  shouldIgnoreSensitiveFile
+} from "../security/secret-redaction.js";
+
 /** @typedef {import("../types/core-contracts.d.ts").ChunkKind} ChunkKind */
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
 /** @typedef {import("../types/core-contracts.d.ts").ScanStats} ScanStats */
@@ -42,22 +48,6 @@ const ALLOWED_EXTENSIONS = new Set([
 
 const MAX_FILE_CHARS = 32000;
 
-const INLINE_SECRET_PATTERNS = [
-  /(api[_-]?key\s*[:=]\s*["'`])([^"'`\r\n]+)(["'`])/giu,
-  /(access[_-]?token\s*[:=]\s*["'`])([^"'`\r\n]+)(["'`])/giu,
-  /(refresh[_-]?token\s*[:=]\s*["'`])([^"'`\r\n]+)(["'`])/giu,
-  /(client[_-]?secret\s*[:=]\s*["'`])([^"'`\r\n]+)(["'`])/giu,
-  /(password\s*[:=]\s*["'`])([^"'`\r\n]+)(["'`])/giu,
-  /(secret\s*[:=]\s*["'`])([^"'`\r\n]+)(["'`])/giu
-];
-
-const TOKEN_PATTERNS = [
-  /ghp_[A-Za-z0-9]{20,}/gu,
-  /github_pat_[A-Za-z0-9_]{20,}/gu,
-  /sk-[A-Za-z0-9]{20,}/gu,
-  /Bearer\s+[A-Za-z0-9._-]{10,}/gu
-];
-
 /**
  * @param {string} value
  */
@@ -68,22 +58,8 @@ function toPosixPath(value) {
 /**
  * @param {string} source
  */
-function shouldIgnoreFile(source) {
-  const normalized = toPosixPath(source);
-  const lower = normalized.toLowerCase();
-
-  return (
-    normalized.endsWith("README.LEARN.md") ||
-    lower.endsWith(".pem") ||
-    lower.endsWith(".key") ||
-    lower.endsWith(".pfx") ||
-    lower.endsWith(".crt") ||
-    lower.endsWith(".cer") ||
-    lower.endsWith(".env") ||
-    lower.includes("/.env") ||
-    lower.endsWith("/id_rsa") ||
-    lower.endsWith("/id_dsa")
-  );
+function shouldIgnoreGeneratedFile(source) {
+  return toPosixPath(source).endsWith("README.LEARN.md");
 }
 
 /**
@@ -148,80 +124,6 @@ function defaultSignals(kind) {
 }
 
 /**
- * @param {string} content
- */
-function redactPrivateBlocks(content) {
-  let redactionCount = 0;
-  const redacted = content.replace(
-    /-----BEGIN [^-]+PRIVATE KEY-----[\s\S]*?-----END [^-]+PRIVATE KEY-----/gu,
-    () => {
-      redactionCount += 1;
-      return "[REDACTED_PRIVATE_KEY_BLOCK]";
-    }
-  );
-
-  return {
-    content: redacted,
-    redactionCount
-  };
-}
-
-/**
- * @param {string} content
- */
-function redactInlineSecrets(content) {
-  let redactionCount = 0;
-  let redacted = content;
-
-  for (const pattern of INLINE_SECRET_PATTERNS) {
-    redacted = redacted.replace(pattern, (_match, prefix, _value, suffix) => {
-      redactionCount += 1;
-      return `${prefix}[REDACTED]${suffix}`;
-    });
-  }
-
-  for (const pattern of TOKEN_PATTERNS) {
-    redacted = redacted.replace(pattern, (match) => {
-      redactionCount += 1;
-
-      if (match.startsWith("Bearer ")) {
-        return "Bearer [REDACTED]";
-      }
-
-      return "[REDACTED_TOKEN]";
-    });
-  }
-
-  return {
-    content: redacted,
-    redactionCount
-  };
-}
-
-/**
- * @param {string} raw
- */
-function redactSensitiveContent(raw) {
-  const privateBlocks = redactPrivateBlocks(raw);
-  const inlineSecrets = redactInlineSecrets(privateBlocks.content);
-  const redactionCount = privateBlocks.redactionCount + inlineSecrets.redactionCount;
-
-  if (!redactionCount) {
-    return {
-      content: raw,
-      redactionCount: 0,
-      redacted: false
-    };
-  }
-
-  return {
-    content: `${inlineSecrets.content}\n\n/* redacted secrets: ${redactionCount} */`,
-    redactionCount,
-    redacted: true
-  };
-}
-
-/**
  * @param {string} rootPath
  * @returns {ScanStats}
  */
@@ -234,6 +136,7 @@ function createScanStats(rootPath) {
     truncatedFiles: 0,
     redactedFiles: 0,
     redactionCount: 0,
+    security: createSecurityScanStats(),
     kinds: {
       code: 0,
       test: 0,
@@ -266,20 +169,25 @@ async function walk(rootPath, currentPath, files, stats) {
     }
 
     stats.discoveredFiles += 1;
+    const absolutePath = resolve(currentPath, entry.name);
+    const source = toPosixPath(relative(rootPath, absolutePath));
     const extension = extname(entry.name);
+
+    if (shouldIgnoreGeneratedFile(source)) {
+      stats.ignoredFiles += 1;
+      continue;
+    }
+
+    if (shouldIgnoreSensitiveFile(source)) {
+      stats.ignoredFiles += 1;
+      stats.security.ignoredSensitiveFiles += 1;
+      continue;
+    }
 
     if (
       !ALLOWED_EXTENSIONS.has(extension) &&
       !["README.md", "AGENTS.md", "agents.md", "package.json"].includes(entry.name)
     ) {
-      stats.ignoredFiles += 1;
-      continue;
-    }
-
-    const absolutePath = resolve(currentPath, entry.name);
-    const source = toPosixPath(relative(rootPath, absolutePath));
-
-    if (shouldIgnoreFile(source)) {
       stats.ignoredFiles += 1;
       continue;
     }
@@ -324,6 +232,11 @@ export async function loadWorkspaceChunks(rootPath) {
     if (redaction.redacted) {
       stats.redactedFiles += 1;
       stats.redactionCount += redaction.redactionCount;
+      stats.security.privateBlocks += redaction.breakdown.privateBlocks;
+      stats.security.inlineSecrets += redaction.breakdown.inlineSecrets;
+      stats.security.tokenPatterns += redaction.breakdown.tokenPatterns;
+      stats.security.jwtLike += redaction.breakdown.jwtLike;
+      stats.security.connectionStrings += redaction.breakdown.connectionStrings;
     }
 
     /** @type {Chunk} */

@@ -133,11 +133,19 @@ That scope is deliberate. It is a real baseline, not a fake claim that the whole
 
 The workspace scanner now applies a simple safety policy before chunks are built:
 
-1. ignore obviously sensitive files such as `.env`, private keys, and certificate files
-2. redact inline secret-looking values such as API keys, bearer tokens, passwords, and secrets
-3. report redaction counts through scan statistics
+1. ignore high-risk credential containers such as `.env*`, `.npmrc`, `.netrc`, `.aws/credentials`, and private key files
+2. redact secret-looking fragments inside normal code/text files, including API keys, bearer tokens, JWT-like tokens, and connection strings
+3. report both ignored sensitive files and redaction categories through scan statistics
 
 This is not a perfect DLP system, but it is a serious production-minded baseline.
+
+Conceptually:
+
+- **ignore** = safer, but you lose the whole file
+- **redact** = keep structure, hide sensitive values
+- **report** = make the safety layer auditable instead of invisible
+
+See `docs/security-model.md` for the exact policy and limits.
 
 ## Command 1: Select useful context in the synthetic playground
 

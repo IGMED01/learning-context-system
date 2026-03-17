@@ -18,6 +18,10 @@ import {
 import { buildTeachRecallQueries } from "../src/memory/recall-queries.js";
 import { resolveTeachRecall } from "../src/memory/teach-recall.js";
 import { compressContent, selectContextWindow } from "../src/context/noise-canceler.js";
+import {
+  redactSensitiveContent,
+  shouldIgnoreSensitiveFile
+} from "../src/security/secret-redaction.js";
 
 const tests = [];
 
@@ -593,14 +597,68 @@ run("workspace scanning redacts inline secrets and ignores dot env files", async
 
     assert.ok(chunk);
     assert.match(chunk.content, /apiKey = "\[REDACTED\]"/);
-    assert.match(chunk.content, /Bearer \[REDACTED\]/);
+    assert.match(chunk.content, /\[REDACTED_TOKEN\]/);
     assert.match(chunk.content, /\[REDACTED\]/);
     assert.equal(result.payload.chunks.some((entry) => entry.source === ".env"), false);
     assert.equal(result.stats.redactedFiles, 1);
     assert.equal(result.stats.ignoredFiles >= 1, true);
+    assert.equal(result.stats.security.ignoredSensitiveFiles >= 1, true);
+    assert.equal(result.stats.security.inlineSecrets >= 2, true);
+    assert.equal(result.stats.security.tokenPatterns >= 1, true);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+run("workspace scanning ignores common credential files before chunking", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-sensitive-ignore-"));
+
+  try {
+    await mkdir(path.join(tempRoot, ".aws"), { recursive: true });
+    await writeFile(path.join(tempRoot, ".env.local"), "TOKEN=value\n", "utf8");
+    await writeFile(path.join(tempRoot, ".npmrc"), "//registry.npmjs.org/:_authToken=abc\n", "utf8");
+    await writeFile(path.join(tempRoot, ".aws", "credentials"), "[default]\naws_access_key_id=abc\n", "utf8");
+    await writeFile(path.join(tempRoot, "id_ed25519"), "PRIVATE KEY\n", "utf8");
+    await writeFile(path.join(tempRoot, "safe.js"), "export const ok = true;\n", "utf8");
+
+    const result = await loadWorkspaceChunks(tempRoot);
+
+    assert.equal(result.payload.chunks.some((entry) => entry.source === ".env.local"), false);
+    assert.equal(result.payload.chunks.some((entry) => entry.source === ".npmrc"), false);
+    assert.equal(result.payload.chunks.some((entry) => entry.source === ".aws/credentials"), false);
+    assert.equal(result.payload.chunks.some((entry) => entry.source === "id_ed25519"), false);
+    assert.equal(result.payload.chunks.some((entry) => entry.source === "safe.js"), true);
+    assert.equal(result.stats.security.ignoredSensitiveFiles, 4);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("secret redaction catches private keys jwt tokens and connection strings", () => {
+  const redacted = redactSensitiveContent(
+    [
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "very-secret-material",
+      "-----END OPENSSH PRIVATE KEY-----",
+      'const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepayload12345";',
+      'const database_url = "postgres://admin:password@localhost:5432/app";'
+    ].join("\n")
+  );
+
+  assert.equal(redacted.redacted, true);
+  assert.match(redacted.content, /\[REDACTED_PRIVATE_KEY_BLOCK\]/);
+  assert.match(redacted.content, /\[REDACTED_JWT\]/);
+  assert.match(redacted.content, /database_url = "\[REDACTED\]"/);
+  assert.equal(redacted.breakdown.privateBlocks, 1);
+  assert.equal(redacted.breakdown.jwtLike, 1);
+  assert.equal(redacted.breakdown.connectionStrings, 1);
+});
+
+run("sensitive file matcher flags high-risk credential paths", () => {
+  assert.equal(shouldIgnoreSensitiveFile(".env.local"), true);
+  assert.equal(shouldIgnoreSensitiveFile(".aws/credentials"), true);
+  assert.equal(shouldIgnoreSensitiveFile("secrets/prod.json"), true);
+  assert.equal(shouldIgnoreSensitiveFile("src/auth/service.ts"), false);
 });
 
 run("cli help documents doctor and init", async () => {

@@ -129,6 +129,7 @@ Si es hoy:
 - `AGENTS.md`: contrato operativo del proyecto
 - `docs/repo-analysis.md`: por que se eligio Engram como referencia principal
 - `docs/context-noise-cancellation.md`: diseno del filtro de contexto
+- `docs/security-model.md`: modelo de seguridad, redaccion y limites del escaneo
 - `docs/usage.md`: como usar la CLI
 - `learning-context.config.json`: defaults versionados del proyecto
 - `src/context/noise-canceler.js`: selector de contexto
@@ -206,11 +207,24 @@ El scanner del workspace no hace un volcado ciego.
 
 Hoy:
 
-- ignora `.env`, `.pem`, `.key`, `.pfx`, `.crt`, `.cer`, `id_rsa` e `id_dsa`
-- redacta secretos inline como API keys, bearer tokens y asignaciones comunes de password/secret
-- cuenta archivos redactados y reemplazos de secretos dentro de las estadisticas del escaneo
+- ignora contenedores de credenciales de alto riesgo como:
+  - `.env*`
+  - `.npmrc`, `.pypirc`, `.netrc`
+  - `.aws/credentials`, `.docker/config.json`, `.kube/config`
+  - `id_rsa`, `id_dsa`, `id_ed25519`
+  - `.pem`, `.key`, `.pfx`, `.crt`, `.cer`, `.tfvars`
+- redacta fragmentos sensibles dentro de archivos que sí conviene leer:
+  - bloques de llaves privadas
+  - API keys y access tokens
+  - bearer tokens
+  - tokens tipo JWT
+  - connection strings y DSNs
+  - asignaciones comunes de password/secret
+- cuenta archivos redactados, archivos sensibles ignorados y categorias de redaccion en las estadisticas del escaneo
 
 Eso significa que la CLI ya no solo muestra contexto seleccionado, sino tambien **cuanto se ignoro, truncó o redactó**.
+
+La explicacion de seguridad y limites operativos esta en `docs/security-model.md`.
 
 ## Contrato JSON estable
 
