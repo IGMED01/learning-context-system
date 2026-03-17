@@ -1,0 +1,22 @@
+﻿# Local runtime and generated artifacts
+.engram/
+test-output/
+README.LEARN.md
+
+# Downloaded installers / local tools
+engram_*.zip
+tools/engram/
+
+# Node / build
+node_modules/
+dist/
+build/
+coverage/
+
+# Logs
+*.log
+*.tmp
+
+# OS / editor
+.DS_Store
+Thumbs.db

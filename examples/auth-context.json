@@ -1,0 +1,64 @@
+{
+  "chunks": [
+    {
+      "id": "auth-middleware",
+      "source": "src/auth/middleware.ts",
+      "kind": "code",
+      "content": "The authentication middleware validates the bearer token before route handlers run. If the token is missing or expired, the request stops immediately with a 401 response.",
+      "certainty": 0.95,
+      "recency": 0.9,
+      "teachingValue": 0.92,
+      "priority": 0.95
+    },
+    {
+      "id": "auth-test-expired",
+      "source": "test/auth/middleware.test.ts",
+      "kind": "test",
+      "content": "Tests verify that expired tokens never reach the protected route handler and that the API returns 401 consistently.",
+      "certainty": 0.92,
+      "recency": 0.88,
+      "teachingValue": 0.8,
+      "priority": 0.84
+    },
+    {
+      "id": "decision-fast-fail",
+      "source": "docs/adr/auth-order.md",
+      "kind": "spec",
+      "content": "Authentication runs before business logic so the pipeline fails fast, reduces wasted work, and keeps authorization checks consistent across all routes.",
+      "certainty": 0.9,
+      "recency": 0.82,
+      "teachingValue": 0.85,
+      "priority": 0.8
+    },
+    {
+      "id": "legacy-chat",
+      "source": "chat/history.txt",
+      "kind": "chat",
+      "content": "Maybe we should later revisit CSS modules and maybe there was also something about auth but the thread drifted and repeated the same concerns several times.",
+      "certainty": 0.35,
+      "recency": 0.2,
+      "teachingValue": 0.1,
+      "priority": 0.1
+    },
+    {
+      "id": "runtime-log",
+      "source": "logs/server.log",
+      "kind": "log",
+      "content": "INFO start INFO start INFO start debug trace debug trace debug trace request heartbeat request heartbeat request heartbeat.",
+      "certainty": 0.2,
+      "recency": 0.4,
+      "teachingValue": 0.05,
+      "priority": 0.05
+    },
+    {
+      "id": "memory-auth-order",
+      "source": "memory/auth-order.md",
+      "kind": "memory",
+      "content": "Keep validation close to the boundary. The earlier the server rejects invalid auth state, the easier it is to reason about downstream handlers.",
+      "certainty": 0.86,
+      "recency": 0.78,
+      "teachingValue": 0.83,
+      "priority": 0.78
+    }
+  ]
+}
