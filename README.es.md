@@ -49,6 +49,55 @@ Engram **no** se usa aqui para:
 - construir la parte pedagogica
 - reemplazar la logica principal de la CLI
 
+## Lenguajes usados en este repositorio
+
+Este repo **no es solo JavaScript**.
+
+Hoy usa:
+
+- **JavaScript (ESM)** para la CLI principal, el selector, el recall y la capa pedagógica
+- **TypeScript** en el vertical real de backend dentro de `examples/typescript-backend/`
+- **Markdown** para documentación, contratos de agentes y skills
+- **JSON** para fixtures, benchmarks, manifiestos y entradas estructuradas
+- **YAML** para la CI de GitHub Actions
+
+## Runtimes y dependencias
+
+### Runtime principal
+
+- **Node.js** es el runtime requerido para la CLI principal
+- **Engram** es el runtime externo usado solo para memoria durable en `recall`, `remember` y `close`
+
+### Dependencias del paquete raíz
+
+El paquete raíz fue dejado **sin dependencias npm externas de runtime**.
+
+Eso es intencional:
+
+- menos fricción de instalación
+- superficie de dependencias más chica
+- iteración local más simple
+
+### Dependencias del vertical TypeScript
+
+El vertical `examples/typescript-backend/` usa:
+
+#### Dependencia de runtime
+
+- `zod`
+
+#### Dependencias de desarrollo
+
+- `typescript`
+- `vitest`
+- `@types/node`
+
+### Herramientas usadas en el repo
+
+- **GitHub Actions** para CI
+- **Git** para control de versiones
+- **Engram** solo para memoria durable
+
 ## Que no es este proyecto
 
 No es todavia:

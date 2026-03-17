@@ -97,6 +97,55 @@ No se usa aqui para:
 - ensenar el contenido
 - reemplazar la logica principal de la CLI
 
+## Languages used in this repository
+
+This repository is not JavaScript-only.
+
+It currently uses:
+
+- **JavaScript (ESM)** for the core CLI, selector, recall flow, and teaching packet logic
+- **TypeScript** in the real backend vertical under `examples/typescript-backend/`
+- **Markdown** for documentation, agent contracts, and skills
+- **JSON** for fixtures, benchmarks, package manifests, and structured inputs
+- **YAML** for GitHub Actions CI
+
+## Runtimes and dependencies
+
+### Core runtime
+
+- **Node.js** is the required runtime for the main CLI
+- **Engram binary** is the external memory runtime used for durable memory features such as `recall`, `remember`, and `close`
+
+### Root package dependencies
+
+The root package intentionally has **no external npm runtime dependencies**.
+
+That is deliberate:
+
+- easier local iteration
+- lower installation friction
+- smaller dependency surface
+
+### Example TypeScript vertical dependencies
+
+The TypeScript backend vertical under `examples/typescript-backend/` uses:
+
+#### Runtime dependencies
+
+- `zod`
+
+#### Dev dependencies
+
+- `typescript`
+- `vitest`
+- `@types/node`
+
+### Tooling used in the repository
+
+- **GitHub Actions** for CI
+- **Git** for version control
+- **Engram** for durable memory only
+
 ## Project layout
 
 - `AGENTS.md`: operating contract for future agents
