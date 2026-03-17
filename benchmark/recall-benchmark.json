@@ -1,0 +1,153 @@
+{
+  "cases": [
+    {
+      "name": "auth recall finds technical memory quickly",
+      "input": {
+        "task": "Improve auth middleware",
+        "objective": "Teach why validation runs before route handlers",
+        "focus": "auth middleware validation order route handlers",
+        "changedFiles": ["src/auth/middleware.ts", "test/auth/middleware.test.ts"],
+        "project": "learning-context-system",
+        "limit": 2
+      },
+      "provider": {
+        "rules": [
+          {
+            "observationId": "21",
+            "type": "decision",
+            "title": "Auth validation order",
+            "body": "Reject invalid tokens before route handlers so failure stays at the boundary.",
+            "timestamp": "2026-03-17 18:05:00",
+            "requiresAll": ["auth", "validation"]
+          }
+        ]
+      },
+      "expectations": {
+        "status": "recalled",
+        "recoveredIds": ["engram-memory-21"],
+        "minRecoveredChunks": 1,
+        "exactRecoveredChunks": 1,
+        "maxQueriesTried": 3,
+        "maxFirstMatchIndex": 1
+      }
+    },
+    {
+      "name": "fallback recall reaches cli integration memory after earlier miss",
+      "input": {
+        "task": "Integrate Engram CLI",
+        "objective": "Teach how durable memory feeds the packet",
+        "focus": "cli durable memory integration recall packet",
+        "changedFiles": ["src/cli/app.js", "src/memory/engram-client.js"],
+        "project": "learning-context-system",
+        "limit": 2
+      },
+      "provider": {
+        "rules": [
+          {
+            "observationId": "22",
+            "type": "architecture",
+            "title": "CLI Engram integration",
+            "body": "Durable memory now enters the teach packet automatically.",
+            "timestamp": "2026-03-17 18:15:00",
+            "requiresAll": ["integration"],
+            "requiresAny": ["engram", "cli", "memory"]
+          }
+        ]
+      },
+      "expectations": {
+        "status": "recalled",
+        "recoveredIds": ["engram-memory-22"],
+        "minRecoveredChunks": 1,
+        "exactRecoveredChunks": 1,
+        "maxQueriesTried": 4,
+        "maxFirstMatchIndex": 2
+      }
+    },
+    {
+      "name": "duplicate matches collapse into one recovered memory",
+      "input": {
+        "task": "Integrate Engram CLI",
+        "objective": "Teach durable memory integration",
+        "focus": "engram cli integration durable memory",
+        "changedFiles": ["src/cli/app.js"],
+        "project": "learning-context-system",
+        "limit": 3
+      },
+      "provider": {
+        "rules": [
+          {
+            "observationId": "23",
+            "type": "architecture",
+            "title": "CLI Engram integration",
+            "body": "The CLI reuses durable memory before building the teaching packet.",
+            "timestamp": "2026-03-17 18:20:00",
+            "requiresAny": ["engram", "integration", "memory", "cli"]
+          }
+        ]
+      },
+      "expectations": {
+        "status": "recalled",
+        "recoveredIds": ["engram-memory-23"],
+        "minRecoveredChunks": 1,
+        "exactRecoveredChunks": 1,
+        "maxQueriesTried": 3,
+        "maxFirstMatchIndex": 1
+      }
+    },
+    {
+      "name": "explicit query override narrows the search",
+      "input": {
+        "task": "Integrate Engram CLI",
+        "objective": "Teach durable memory integration",
+        "focus": "engram cli integration durable memory",
+        "changedFiles": ["src/cli/app.js"],
+        "project": "learning-context-system",
+        "explicitQuery": "jwt boundary order",
+        "limit": 2
+      },
+      "provider": {
+        "rules": [
+          {
+            "observationId": "24",
+            "type": "decision",
+            "title": "JWT boundary order",
+            "body": "Validation fails before the route handler is reached.",
+            "timestamp": "2026-03-17 18:25:00",
+            "requiresAll": ["jwt", "boundary", "order"]
+          }
+        ]
+      },
+      "expectations": {
+        "status": "recalled",
+        "recoveredIds": ["engram-memory-24"],
+        "minRecoveredChunks": 1,
+        "exactRecoveredChunks": 1,
+        "maxQueriesTried": 1,
+        "maxFirstMatchIndex": 0
+      }
+    },
+    {
+      "name": "provider failure is surfaced as failed recall",
+      "input": {
+        "task": "Improve auth middleware",
+        "objective": "Teach validation order",
+        "focus": "auth middleware validation order",
+        "changedFiles": ["src/auth/middleware.ts"],
+        "project": "learning-context-system",
+        "limit": 2,
+        "strictRecall": false
+      },
+      "provider": {
+        "failMessage": "temporary Engram failure",
+        "rules": []
+      },
+      "expectations": {
+        "status": "failed",
+        "recoveredIds": [],
+        "minRecoveredChunks": 0,
+        "exactRecoveredChunks": 0,
+        "maxQueriesTried": 5
+      }
+    }
+  ]
+}

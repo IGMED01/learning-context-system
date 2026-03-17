@@ -3,8 +3,8 @@
 import { buildLearningReadme } from "../analysis/readme-generator.js";
 import { selectContextWindow } from "../context/noise-canceler.js";
 import { buildLearningPacket } from "../learning/mentor-loop.js";
-import { createEngramClient, searchOutputToChunks } from "../memory/engram-client.js";
-import { buildTeachRecallQueries } from "../memory/recall-queries.js";
+import { createEngramClient } from "../memory/engram-client.js";
+import { resolveTeachRecall } from "../memory/teach-recall.js";
 import { loadChunkFile } from "../io/json-file.js";
 import { writeTextFile } from "../io/text-file.js";
 import { loadWorkspaceChunks } from "../io/workspace-chunks.js";
@@ -95,137 +95,6 @@ function getEngramClient(options, dependencies) {
 
 function countRecalledChunks(chunks) {
   return chunks.filter((chunk) => chunk.source.startsWith("engram://")).length;
-}
-
-async function attachTeachRecall(options, focus, chunks, dependencies) {
-  if (options["no-recall"] === "true") {
-    return {
-      chunks,
-      memoryRecall: {
-        enabled: false,
-        status: "disabled",
-        reason: "manual-disable",
-        query: "",
-        queriesTried: [],
-        matchedQueries: [],
-        project: options.project ?? "",
-        recoveredChunks: 0,
-        selectedChunks: 0,
-        suppressedChunks: 0,
-        error: ""
-      }
-    };
-  }
-
-  const changedFiles = listOption(options, "changed-files");
-  const queryCandidates = buildTeachRecallQueries({
-    explicitQuery: options["recall-query"],
-    task: options.task,
-    objective: options.objective,
-    focus,
-    changedFiles
-  });
-
-  if (!queryCandidates.length) {
-    return {
-      chunks,
-      memoryRecall: {
-        enabled: false,
-        status: "skipped",
-        reason: "empty-query",
-        query: "",
-        queriesTried: [],
-        matchedQueries: [],
-        project: options.project ?? "",
-        recoveredChunks: 0,
-        selectedChunks: 0,
-        suppressedChunks: 0,
-        error: ""
-      }
-    };
-  }
-
-  const limit = assertNumberRules(numberOption(options, "memory-limit", 3), "memory-limit", {
-    min: 1,
-    integer: true
-  });
-  const strictRecall = options["strict-recall"] === "true";
-  const engram = getEngramClient(options, dependencies);
-
-  try {
-    /** @type {Map<string, import("../contracts/context-contracts.js").Chunk>} */
-    const uniqueChunks = new Map();
-    const queriesTried = [];
-    const matchedQueries = [];
-
-    for (const query of queryCandidates) {
-      queriesTried.push(query);
-
-      const memoryResult = await engram.searchMemories(query, {
-        project: options.project,
-        scope: options["memory-scope"] ?? "project",
-        type: options["memory-type"],
-        limit
-      });
-      const memoryChunks = searchOutputToChunks(memoryResult.stdout, {
-        query,
-        project: options.project
-      });
-
-      if (memoryChunks.length) {
-        matchedQueries.push(query);
-      }
-
-      for (const chunk of memoryChunks) {
-        uniqueChunks.set(chunk.id, chunk);
-      }
-
-      if (uniqueChunks.size >= limit) {
-        break;
-      }
-    }
-
-    const memoryChunks = [...uniqueChunks.values()].slice(0, limit);
-    const winningQuery = matchedQueries[0] ?? queryCandidates[0] ?? "";
-
-    return {
-      chunks: [...chunks, ...memoryChunks],
-      memoryRecall: {
-        enabled: true,
-        status: memoryChunks.length ? "recalled" : "empty",
-        reason: "",
-        query: winningQuery,
-        queriesTried,
-        matchedQueries,
-        project: options.project ?? "",
-        recoveredChunks: memoryChunks.length,
-        selectedChunks: 0,
-        suppressedChunks: 0,
-        error: ""
-      }
-    };
-  } catch (error) {
-    if (strictRecall) {
-      throw error;
-    }
-
-    return {
-      chunks,
-      memoryRecall: {
-        enabled: true,
-        status: "failed",
-        reason: "engram-error",
-        query: queryCandidates[0] ?? "",
-        queriesTried: queryCandidates,
-        matchedQueries: [],
-        project: options.project ?? "",
-        recoveredChunks: 0,
-        selectedChunks: 0,
-        suppressedChunks: 0,
-        error: error instanceof Error ? error.message : String(error)
-      }
-    };
-  }
 }
 
 /**
@@ -418,7 +287,25 @@ export async function runCli(argv, dependencies = {}) {
   const objective = requireOption(options, "objective");
   const changedFiles = listOption(options, "changed-files");
   const focus = options.focus ?? `${task} ${objective}`;
-  const teachChunks = await attachTeachRecall(options, focus, payload.chunks, dependencies);
+  const engram = getEngramClient(options, dependencies);
+  const memoryLimit = assertNumberRules(numberOption(options, "memory-limit", 3), "memory-limit", {
+    min: 1,
+    integer: true
+  });
+  const teachChunks = await resolveTeachRecall({
+    task,
+    objective,
+    focus,
+    changedFiles,
+    project: options.project,
+    explicitQuery: options["no-recall"] === "true" ? "__disabled__" : options["recall-query"],
+    limit: memoryLimit,
+    scope: options["memory-scope"] ?? "project",
+    type: options["memory-type"],
+    strictRecall: options["strict-recall"] === "true",
+    baseChunks: payload.chunks,
+    searchMemories: engram.searchMemories
+  });
   const packet = buildLearningPacket({
     task,
     objective,

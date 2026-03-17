@@ -29,6 +29,7 @@ Full analysis lives in `docs/repo-analysis.md`.
 ## Project layout
 
 - `AGENTS.md`: operating contract for future agents
+- `benchmark/recall-benchmark.json`: fixed benchmark cases for durable-memory recall quality
 - `benchmark/selector-benchmark.json`: fixed benchmark cases for context selection quality
 - `docs/context-noise-cancellation.md`: design of the context filtering system
 - `docs/benchmark.md`: benchmark method and metrics
@@ -45,6 +46,7 @@ Full analysis lives in `docs/repo-analysis.md`.
 ```bash
 node test/run-tests.js
 npm run benchmark
+npm run benchmark:recall
 ```
 
 ## Example usage

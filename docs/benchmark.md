@@ -2,43 +2,45 @@
 
 ## Qué es
 
-Este benchmark mide si el sistema selecciona el contexto correcto en casos repetibles.
+Este proyecto ahora tiene dos benchmarks formales:
 
-No mide "si se siente bien". Mide:
+1. **selector benchmark**: mide si entra el contexto correcto
+2. **recall benchmark**: mide si la estrategia de memoria encuentra recuerdos útiles sin duplicarlos
 
-- si entran chunks obligatorios
-- si quedan afuera chunks prohibidos
-- si el top del ranking está bien ordenado
-- cuánto del contexto seleccionado es realmente relevante
+No mide “si se siente bien”. Mide comportamiento repetible.
 
-## Archivo de casos
+## Archivos de casos
 
 - `benchmark/selector-benchmark.json`
+- `benchmark/recall-benchmark.json`
 
-Cada caso define:
-
-- `mode`: `select` o `teach`
-- `input`: foco, archivos cambiados, presupuesto y chunks
-- `expectations`: qué debe entrar, qué debe quedar afuera y qué debe quedar arriba
-
-## Runner
+## Runners
 
 ```bash
 npm run benchmark
+npm run benchmark:recall
 ```
 
-## Métricas
+## Qué mide el selector benchmark
 
 - `mustSelectRecall`: porcentaje de chunks obligatorios que sí fueron seleccionados
 - `exclusionSuccess`: porcentaje de chunks prohibidos que sí quedaron afuera
-- `relevantRatio`: porcentaje del contexto seleccionado que realmente pertenece al conjunto relevante
+- `relevantRatio`: porcentaje del contexto seleccionado que realmente es útil
 - `topPrefixPass`: valida si los primeros lugares del ranking coinciden con el orden esperado
+
+## Qué mide el recall benchmark
+
+- `requiredRecall`: porcentaje de memorias esperadas que sí fueron recuperadas
+- `queryEfficiency`: cuán rápido apareció la primera memoria útil
+- `queryLimitPass`: valida que la estrategia no desperdicie demasiados intentos
+- `firstMatchPass`: valida que el primer acierto ocurra dentro del rango esperado
+- `exactChunkPass`: valida que la deduplicación no meta memorias repetidas
 
 ## Cómo usarlo
 
-1. corrés el benchmark antes de tocar el ranking
+1. corrés ambos benchmarks antes de tocar ranking o recall
 2. hacés cambios
-3. lo corrés de nuevo
+3. los corrés de nuevo
 4. comparás métricas
 
-Si el `pass rate` baja o el `relevant ratio` cae, el ranking empeoró.
+Si baja el `pass rate`, baja el `relevantRatio` o empeora `queryEfficiency`, el sistema retrocedió.
