@@ -17,6 +17,7 @@
     "src/contracts/config-contracts.js",
     "src/io/config-file.js",
     "src/io/workspace-chunks.js",
-    "src/system/project-ops.js"
+    "src/system/project-ops.js",
+    "src/types/**/*.d.ts"
   ]
 }

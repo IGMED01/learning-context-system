@@ -10,34 +10,22 @@ The repository already has:
 - selector benchmark
 - recall benchmark
 - TypeScript backend vertical
+- `doctor`, `init`, stable JSON contracts, and incremental typecheck
 
-## Next priorities
+## Roadmaps by section
 
-### 1. GitHub readiness
+- [Core TypeScript](./docs/roadmaps/core-typescript.md)
+- [Memory and Engram](./docs/roadmaps/memory-and-engram.md)
+- [CLI and Operability](./docs/roadmaps/cli-and-operability.md)
+- [Privacy and Security](./docs/roadmaps/privacy-and-security.md)
+- [Quality and Benchmarks](./docs/roadmaps/quality-and-benchmarks.md)
+- [Open Source Adoption](./docs/roadmaps/open-source-adoption.md)
 
-- stable CI
-- clearer project metadata
-- contributor workflow
+## Current next focus
 
-### 2. Stronger vertical evaluation
-
-- compare deterministic and memory-backed flows
-- add harder budget and suppression scenarios
-- measure when recovered memory survives final selection
-
-### 3. TypeScript migration of the core
-
-- move from JSDoc-typed JS to real TS
-- preserve CLI behavior
-
-### 4. Better memory pedagogy
-
-- distinguish decision vs pattern vs architecture in output
-- summarize historical memory more explicitly
-
-### 5. Context7 integration
-
-- mix current framework docs with local code and durable memory
+1. strengthen shared core typing
+2. migrate more core logic under strict type checks
+3. keep operability and privacy visible in CI and docs
 
 ## Non-goals for now
 

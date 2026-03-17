@@ -3,25 +3,14 @@
 import { readFile, readdir } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 
-/** @typedef {import("../contracts/context-contracts.js").ChunkKind} ChunkKind */
-/** @typedef {import("../contracts/context-contracts.js").Chunk} Chunk */
+/** @typedef {import("../types/core-contracts.js").ChunkKind} ChunkKind */
+/** @typedef {import("../types/core-contracts.js").Chunk} Chunk */
+/** @typedef {import("../types/core-contracts.js").ScanStats} ScanStats */
 /**
  * @typedef {{
  *   absolutePath: string,
  *   source: string
  * }} WorkspaceFile
- */
-/**
- * @typedef {{
- *   rootPath: string,
- *   discoveredFiles: number,
- *   includedFiles: number,
- *   ignoredFiles: number,
- *   truncatedFiles: number,
- *   redactedFiles: number,
- *   redactionCount: number,
- *   kinds: Record<ChunkKind, number>
- * }} ScanStats
  */
 
 const IGNORED_DIRS = new Set([

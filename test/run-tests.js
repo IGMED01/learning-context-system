@@ -1469,6 +1469,12 @@ run("cli teach retries recall with fallback queries until a memory matches", asy
       "src/cli/app.js,src/memory/engram-client.js",
       "--project",
       "learning-context-system",
+      "--recall-query",
+      "CLI Engram integration",
+      "--token-budget",
+      "520",
+      "--max-chunks",
+      "8",
       "--format",
       "json"
     ],

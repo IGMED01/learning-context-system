@@ -10,6 +10,9 @@ import { writeTextFile } from "../io/text-file.js";
 
 const execFile = promisify(execFileCallback);
 
+/** @typedef {import("../types/core-contracts.js").DoctorCheck} DoctorCheck */
+/** @typedef {import("../types/core-contracts.js").DoctorResult} DoctorResult */
+
 /**
  * @param {string} targetPath
  */
@@ -88,21 +91,12 @@ async function tryExec(command, args) {
 }
 
 /**
- * @typedef {{
- *   id: string,
- *   label: string,
- *   status: "pass" | "warn" | "fail",
- *   detail: string,
- *   fix?: string
- * }} DoctorCheck
- */
-
-/**
  * @param {{
  *   cwd?: string,
  *   configInfo: { found: boolean, path: string, config: ReturnType<typeof defaultProjectConfig> },
  *   configError?: string
  * }} input
+ * @returns {Promise<DoctorResult>}
  */
 export async function runProjectDoctor(input) {
   const cwd = path.resolve(input.cwd ?? process.cwd());

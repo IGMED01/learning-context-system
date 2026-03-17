@@ -299,3 +299,7 @@ The goal is not only to say "it feels better", but to show when behavior improve
 ## Initial direction
 
 The prototype is intentionally dependency-light and runs on plain Node so we can iterate even in a minimal local environment. The only external runtime it now leans on is a locally installed Engram binary for durable memory, and `teach` now uses that memory automatically before building the teaching packet with a smarter multi-query recall strategy.
+
+## Roadmaps by area
+
+Use `ROADMAP.md` as the index and the section roadmaps under `docs/roadmaps/` when you want the next steps split by concern instead of mixed in one list.

@@ -1,5 +1,7 @@
-﻿// @ts-check
+// @ts-check
 
+/** @typedef {import("../types/core-contracts.js").ScanStats} ScanStats */
+/** @typedef {import("../types/core-contracts.js").DoctorResult} DoctorResult */
 function originFromSource(source = "") {
   return String(source).startsWith("engram://") ? "engram" : "workspace";
 }
@@ -26,6 +28,9 @@ function chunkDebugLines(chunk, indent = "  ") {
   ];
 }
 
+/**
+ * @param {ScanStats | null | undefined} scanStats
+ */
 function formatScanStats(scanStats) {
   if (!scanStats) {
     return [];
@@ -115,7 +120,7 @@ export function formatSelectionAsText(result, options = {}) {
 }
 
 /**
- * @param {ReturnType<import("../learning/mentor-loop.js").buildLearningPacket>} packet
+ * @param {ReturnType<import("../learning/mentor-loop.js").buildLearningPacket> & { scanStats?: ScanStats | null, memoryRecall?: Record<string, unknown> }} packet
  * @param {{ debug?: boolean }} [options]
  */
 export function formatLearningPacketAsText(packet, options = {}) {

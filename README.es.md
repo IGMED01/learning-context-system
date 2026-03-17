@@ -237,6 +237,10 @@ Estado actual:
 - ya tiene CI
 - ya tiene un vertical real
 
+## Roadmaps por area
+
+Usa `ROADMAP.md` como indice y `docs/roadmaps/` cuando quieras ver los siguientes pasos separados por seccion en vez de mezclados.
+
 Pero todavia le falta:
 
 - mas dureza en algunos casos reales
