@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
 import { buildLearningReadme } from "../src/analysis/readme-generator.js";
 import { runCli } from "../src/cli/app.js";
@@ -873,6 +873,121 @@ run("cli recall delegates to Engram search when a query is provided", async () =
   assert.match(result.stdout, /Auth order decision/);
 });
 
+run("cli recall uses config defaults and emits a stable JSON contract", async () => {
+  const configPath = "test-output/cli-config.json";
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      project: "configured-project",
+      memory: {
+        project: "configured-project",
+        degradedRecall: true
+      }
+    }),
+    "utf8"
+  );
+
+  /** @type {{ query?: string, options?: unknown }} */
+  const seen = {};
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async searchMemories(query, options) {
+      seen.query = query;
+      seen.options = options;
+      return {
+        mode: "search",
+        project: options?.project ?? "",
+        query,
+        type: options?.type ?? "",
+        scope: options?.scope ?? "",
+        limit: options?.limit ?? null,
+        stdout: "1. Configured project memory",
+        dataDir: ".engram"
+      };
+    },
+    async saveMemory() {
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  const result = await runCli(
+    [
+      "recall",
+      "--config",
+      configPath,
+      "--query",
+      "auth middleware",
+      "--format",
+      "json"
+    ],
+    {
+      engramClient: fakeClient
+    }
+  );
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.equal(parsed.schemaVersion, "1.0.0");
+  assert.equal(parsed.command, "recall");
+  assert.equal(parsed.status, "ok");
+  assert.equal(parsed.degraded, false);
+  assert.equal(parsed.config.found, true);
+  assert.match(parsed.config.path, /cli-config\.json/);
+  assert.equal(parsed.project, "configured-project");
+  assert.equal(seen.query, "auth middleware");
+  assert.equal(seen.options?.project, "configured-project");
+});
+
+run("cli recall returns a degraded contract when Engram is unavailable", async () => {
+  const fakeClient = {
+    config: {
+      dataDir: ".engram"
+    },
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async searchMemories() {
+      throw new Error("engram offline");
+    },
+    async saveMemory() {
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  const result = await runCli(
+    [
+      "recall",
+      "--query",
+      "auth middleware",
+      "--degraded-recall",
+      "true",
+      "--format",
+      "json"
+    ],
+    {
+      engramClient: fakeClient
+    }
+  );
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.equal(parsed.command, "recall");
+  assert.equal(parsed.status, "ok");
+  assert.equal(parsed.degraded, true);
+  assert.equal(parsed.warnings.length, 1);
+  assert.match(parsed.warnings[0], /degraded mode/i);
+  assert.equal(parsed.stdout, "");
+  assert.match(parsed.error, /engram offline/);
+});
+
 run("cli recall debug shows active filter state", async () => {
   const fakeClient = {
     async recallContext() {
@@ -1113,6 +1228,53 @@ run("cli teach consumes recalled Engram memory automatically", async () => {
   assert.equal(parsed.memoryRecall.queriesTried.length >= 1, true);
   assert.equal(seenQueries.length >= 1, true);
   assert.equal(parsed.selectedContext.some((chunk) => chunk.source.startsWith("engram://")), true);
+});
+
+run("cli teach emits a stable JSON contract and marks degraded recall", async () => {
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async searchMemories() {
+      throw new Error("temporary Engram failure");
+    },
+    async saveMemory() {
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  const result = await runCli(
+    [
+      "teach",
+      "--input",
+      "examples/auth-context.json",
+      "--task",
+      "Improve auth middleware",
+      "--objective",
+      "Teach why validation runs before route handlers",
+      "--changed-files",
+      "src/auth/middleware.ts,test/auth/middleware.test.ts",
+      "--project",
+      "learning-context-system",
+      "--format",
+      "json"
+    ],
+    {
+      engramClient: fakeClient
+    }
+  );
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.schemaVersion, "1.0.0");
+  assert.equal(parsed.command, "teach");
+  assert.equal(parsed.status, "ok");
+  assert.equal(parsed.degraded, true);
+  assert.equal(parsed.memoryRecall.status, "failed");
+  assert.equal(parsed.memoryRecall.degraded, true);
+  assert.equal(parsed.warnings.length, 1);
 });
 
 run("cli teach retries recall with fallback queries until a memory matches", async () => {

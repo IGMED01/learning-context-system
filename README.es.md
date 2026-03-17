@@ -130,10 +130,25 @@ Si es hoy:
 - `docs/repo-analysis.md`: por que se eligio Engram como referencia principal
 - `docs/context-noise-cancellation.md`: diseno del filtro de contexto
 - `docs/usage.md`: como usar la CLI
+- `learning-context.config.json`: defaults versionados del proyecto
 - `src/context/noise-canceler.js`: selector de contexto
 - `src/learning/mentor-loop.js`: paquete pedagogico
 - `src/memory/engram-client.js`: adaptador local a Engram
 - `examples/typescript-backend/`: vertical real de TypeScript backend
+
+## Prerrequisitos de instalacion
+
+Para usar el proyecto con seriedad localmente necesitás:
+
+- **Node.js** para la CLI y los benchmarks
+- **Git** para el flujo normal de desarrollo
+- **Engram** si querés usar memoria durable en `recall`, `remember`, `close` o `teach` con memoria
+
+Tambien podés usar partes del sistema sin Engram:
+
+- `select`
+- `readme`
+- `teach --no-recall`
 
 ## Demo principal hoy
 
@@ -144,6 +159,35 @@ npm run vertical:ts:teach
 npm run vertical:ts:seed-memory
 npm run vertical:ts:teach:memory
 ```
+
+## Configuracion oficial del proyecto
+
+La CLI ahora carga automaticamente `learning-context.config.json` cuando existe.
+
+Ese archivo es el lugar oficial para definir:
+
+- proyecto por defecto
+- workspace por defecto
+- budgets de seleccion
+- defaults de recall
+- rutas de Engram
+
+Si pasás flags en CLI, esos flags pisan el valor del config.
+
+## Contrato JSON estable
+
+Cuando usás `--format json`, la CLI ahora devuelve un contrato versionado con:
+
+- `schemaVersion`
+- `command`
+- `status`
+- `degraded`
+- `warnings`
+- `config`
+
+y después el payload del comando.
+
+Eso vuelve más seguro consumir la CLI desde scripts u otras herramientas.
 
 ## Estado real
 

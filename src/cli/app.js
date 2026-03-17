@@ -1,10 +1,12 @@
 // @ts-check
 
 import { buildLearningReadme } from "../analysis/readme-generator.js";
+import { buildCliJsonContract } from "../contracts/cli-contracts.js";
 import { selectContextWindow } from "../context/noise-canceler.js";
 import { buildLearningPacket } from "../learning/mentor-loop.js";
 import { createEngramClient } from "../memory/engram-client.js";
 import { resolveTeachRecall } from "../memory/teach-recall.js";
+import { loadProjectConfig } from "../io/config-file.js";
 import { loadChunkFile } from "../io/json-file.js";
 import { writeTextFile } from "../io/text-file.js";
 import { loadWorkspaceChunks } from "../io/workspace-chunks.js";
@@ -23,16 +25,23 @@ import {
   requireOption
 } from "./arg-parser.js";
 
-function serialize(result, format) {
-  if (format === "text") {
-    return typeof result === "string" ? result : JSON.stringify(result, null, 2);
-  }
-
-  if (typeof result === "string") {
-    return result;
-  }
-
+function serialize(result) {
   return JSON.stringify(result, null, 2);
+}
+
+function serializeCommandResult(command, payload, format, configInfo, meta = {}) {
+  if (format === "text") {
+    return typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+  }
+
+  return serialize(
+    buildCliJsonContract(command, payload, {
+      schemaVersion: configInfo.config.output.jsonSchemaVersion,
+      configFound: configInfo.found,
+      configPath: configInfo.path,
+      ...meta
+    })
+  );
 }
 
 async function loadChunkSource(command, options) {
@@ -93,12 +102,134 @@ function getEngramClient(options, dependencies) {
   });
 }
 
+function booleanOption(options, key, fallback = false) {
+  const value = options[key];
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (value !== "true" && value !== "false") {
+    throw new Error(`Option --${key} must be true or false.`);
+  }
+
+  return value === "true";
+}
+
+function applyConfigDefaults(command, rawOptions, loadedConfig) {
+  const options = { ...rawOptions };
+  const config = loadedConfig.config;
+
+  if (!options.project) {
+    options.project = config.memory.project || config.project || "";
+  }
+
+  if (!options.workspace && !options.input && config.workspace) {
+    if (command === "select" || command === "teach" || command === "readme") {
+      options.workspace = config.workspace;
+    }
+  }
+
+  if (!options["token-budget"]) {
+    options["token-budget"] = String(config.selection.tokenBudget);
+  }
+
+  if (!options["max-chunks"]) {
+    options["max-chunks"] = String(config.selection.maxChunks);
+  }
+
+  if (!options["min-score"]) {
+    options["min-score"] = String(config.selection.minScore);
+  }
+
+  if (!options["sentence-budget"]) {
+    options["sentence-budget"] = String(config.selection.sentenceBudget);
+  }
+
+  if (!options["memory-limit"]) {
+    options["memory-limit"] = String(config.memory.limit);
+  }
+
+  if (!options["memory-scope"] && config.memory.scope) {
+    options["memory-scope"] = config.memory.scope;
+  }
+
+  if (!options["memory-type"] && config.memory.type) {
+    options["memory-type"] = config.memory.type;
+  }
+
+  if (!options["strict-recall"]) {
+    options["strict-recall"] = String(config.memory.strictRecall);
+  }
+
+  if (!options["degraded-recall"]) {
+    options["degraded-recall"] = String(config.memory.degradedRecall);
+  }
+
+  if (!options["engram-bin"] && config.engram.binaryPath) {
+    options["engram-bin"] = config.engram.binaryPath;
+  }
+
+  if (!options["engram-data-dir"] && config.engram.dataDir) {
+    options["engram-data-dir"] = config.engram.dataDir;
+  }
+
+  if (!options.format && config.output.defaultFormat) {
+    options.format = config.output.defaultFormat;
+  }
+
+  if (
+    command === "teach" &&
+    config.memory.enabled === false &&
+    options["no-recall"] === undefined &&
+    options["recall-query"] === undefined
+  ) {
+    options["no-recall"] = "true";
+  }
+
+  return options;
+}
+
+function buildDegradedRecallResult(engram, input, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const warning = "Engram unavailable; returning an empty recall result in degraded mode.";
+
+  return {
+    mode: input.query ? "search" : "context",
+    project: input.project ?? "",
+    query: input.query ?? "",
+    type: input.type ?? "",
+    scope: input.scope ?? "",
+    limit: input.limit ?? null,
+    stdout: "",
+    stderr: "",
+    dataDir: engram.config?.dataDir ?? "",
+    degraded: true,
+    warning,
+    error: message
+  };
+}
+
 /**
  * @param {string[]} argv
  * @param {{ engramClient?: ReturnType<typeof createEngramClient> }} [dependencies]
  */
 export async function runCli(argv, dependencies = {}) {
-  const { command, options } = parseArgv(argv);
+  const { command, options: rawOptions } = parseArgv(argv);
+
+  if (!command || command === "help" || rawOptions.help === "true") {
+    return {
+      exitCode: 0,
+      stdout: usageText()
+    };
+  }
+
+  const loadedConfig = await loadProjectConfig({
+    cwd: process.cwd(),
+    explicitPath: rawOptions.config,
+    workspaceHint: rawOptions.workspace
+  });
+  const options = applyConfigDefaults(command, rawOptions, loadedConfig);
   const debugEnabled = options.debug === "true";
   const defaultFormat =
     command === "readme" ||
@@ -109,13 +240,6 @@ export async function runCli(argv, dependencies = {}) {
       : "json";
   const format =
     options.format === "json" ? "json" : options.format === "text" ? "text" : defaultFormat;
-
-  if (!command || command === "help" || options.help === "true") {
-    return {
-      exitCode: 0,
-      stdout: usageText()
-    };
-  }
 
   if (
     command !== "select" &&
@@ -144,21 +268,54 @@ export async function runCli(argv, dependencies = {}) {
             integer: true
           })
         : undefined;
-    const result = query
-      ? await engram.searchMemories(query, {
+    const allowDegradedRecall = booleanOption(
+      options,
+      "degraded-recall",
+      loadedConfig.config.memory.degradedRecall
+    );
+    let result;
+    let degraded = false;
+    /** @type {string[]} */
+    const warnings = [];
+
+    try {
+      result = query
+        ? await engram.searchMemories(query, {
+            project,
+            type,
+            scope,
+            limit
+          })
+        : await engram.recallContext(project);
+    } catch (error) {
+      if (!allowDegradedRecall) {
+        throw error;
+      }
+
+      degraded = true;
+      result = buildDegradedRecallResult(
+        engram,
+        {
+          query,
           project,
           type,
           scope,
           limit
-        })
-      : await engram.recallContext(project);
+        },
+        error
+      );
+      warnings.push(result.warning);
+    }
 
     return {
       exitCode: 0,
       stdout:
         format === "text"
           ? formatMemoryRecallAsText(result, { debug: debugEnabled })
-          : serialize(result, format)
+          : serializeCommandResult("recall", result, format, loadedConfig, {
+              degraded,
+              warnings
+            })
     };
   }
 
@@ -178,7 +335,7 @@ export async function runCli(argv, dependencies = {}) {
       stdout:
         format === "text"
           ? formatMemoryWriteAsText(result, "Memory saved")
-          : serialize(result, format)
+          : serializeCommandResult("remember", result, format, loadedConfig)
     };
   }
 
@@ -199,7 +356,7 @@ export async function runCli(argv, dependencies = {}) {
       stdout:
         format === "text"
           ? formatMemoryWriteAsText(result, "Session close note saved")
-          : serialize(result, format)
+          : serializeCommandResult("close", result, format, loadedConfig)
     };
   }
 
@@ -221,12 +378,14 @@ export async function runCli(argv, dependencies = {}) {
       stdout:
         format === "text"
           ? formatSelectionAsText(result, { debug: debugEnabled })
-          : serialize(
+          : serializeCommandResult(
+              "select",
               {
                 input: path,
                 ...result
               },
-              format
+              format,
+              loadedConfig
             )
     };
   }
@@ -256,13 +415,15 @@ export async function runCli(argv, dependencies = {}) {
         exitCode: 0,
         stdout:
           format === "json"
-            ? serialize(
+            ? serializeCommandResult(
+                "readme",
                 {
                   input: path,
                   output: writtenPath,
                   ...result
                 },
-                format
+                format,
+                loadedConfig
               )
             : `README generated at ${writtenPath}`
       };
@@ -272,12 +433,14 @@ export async function runCli(argv, dependencies = {}) {
       exitCode: 0,
       stdout:
         format === "json"
-          ? serialize(
+          ? serializeCommandResult(
+              "readme",
               {
                 input: path,
                 ...result
               },
-              format
+              format,
+              loadedConfig
             )
           : result.markdown
     };
@@ -302,7 +465,7 @@ export async function runCli(argv, dependencies = {}) {
     limit: memoryLimit,
     scope: options["memory-scope"] ?? "project",
     type: options["memory-type"],
-    strictRecall: options["strict-recall"] === "true",
+    strictRecall: booleanOption(options, "strict-recall", loadedConfig.config.memory.strictRecall),
     baseChunks: payload.chunks,
     searchMemories: engram.searchMemories
   });
@@ -332,6 +495,7 @@ export async function runCli(argv, dependencies = {}) {
     ...packet,
     memoryRecall: {
       ...teachChunks.memoryRecall,
+      degraded: teachChunks.memoryRecall.degraded === true,
       selectedChunks: selectedMemoryChunks,
       suppressedChunks: suppressedMemoryChunks,
       ...(debugEnabled
@@ -356,12 +520,21 @@ export async function runCli(argv, dependencies = {}) {
     stdout:
       format === "text"
         ? formatLearningPacketAsText(packetWithMemory, { debug: debugEnabled })
-        : serialize(
+        : serializeCommandResult(
+            "teach",
             {
               input: path,
               ...packetWithMemory
             },
-            format
+            format,
+            loadedConfig,
+            {
+              degraded: packetWithMemory.memoryRecall.degraded === true,
+              warnings:
+                packetWithMemory.memoryRecall.degraded && packetWithMemory.memoryRecall.error
+                  ? [packetWithMemory.memoryRecall.error]
+                  : []
+            }
           )
   };
 }

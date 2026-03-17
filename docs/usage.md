@@ -70,6 +70,25 @@ The debug view currently exposes:
 - recovered memory ids
 - which recalled memories were selected versus suppressed
 
+## Project config
+
+The CLI now auto-loads `learning-context.config.json` when present.
+
+Use that file for stable defaults such as:
+
+- project name
+- workspace root
+- token budgets
+- memory limits
+- Engram paths
+
+Concept:
+
+- **config file** = default behavior for the project
+- **CLI flags** = per-run override
+
+That is more production-friendly than relying on long repeated command lines.
+
 ## Command 1: Select useful context in the synthetic playground
 
 ```bash
@@ -171,6 +190,7 @@ What happens internally:
 3. it runs `engram search` when you provide `--query`
 4. it runs `engram context` when you omit `--query`
 5. it returns the raw Engram memory wrapped in a clearer CLI summary
+6. if Engram is unavailable and degraded recall is enabled, it returns an empty but explicit degraded result instead of crashing
 
 ## Command 6: Save a durable memory into Engram
 
@@ -263,3 +283,20 @@ Advanced Engram options:
 
 - `--engram-bin`: override the local path to `engram.exe`
 - `--engram-data-dir`: override the Engram data directory
+- `--degraded-recall`: allow `recall` to return a degraded empty result instead of failing hard
+
+## Stable JSON output
+
+When you pass `--format json`, the CLI now emits a versioned contract that includes:
+
+- `schemaVersion`
+- `command`
+- `status`
+- `degraded`
+- `warnings`
+- `config`
+
+Concept:
+
+- **human output** is optimized for reading
+- **JSON contract** is optimized for integration

@@ -7,6 +7,7 @@ function disabledRecall(project = "") {
   return {
     enabled: false,
     status: "disabled",
+    degraded: false,
     reason: "manual-disable",
     query: "",
     queriesTried: [],
@@ -25,6 +26,7 @@ function skippedRecall(project = "") {
   return {
     enabled: false,
     status: "skipped",
+    degraded: false,
     reason: "empty-query",
     query: "",
     queriesTried: [],
@@ -125,6 +127,7 @@ export async function resolveTeachRecall(input) {
       memoryRecall: {
         enabled: true,
         status: memoryChunks.length ? "recalled" : "empty",
+        degraded: false,
         reason: "",
         query: winningQuery,
         queriesTried,
@@ -148,6 +151,7 @@ export async function resolveTeachRecall(input) {
       memoryRecall: {
         enabled: true,
         status: "failed",
+        degraded: true,
         reason: "engram-error",
         query: queryCandidates[0] ?? "",
         queriesTried: queryCandidates,

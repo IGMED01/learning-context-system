@@ -167,6 +167,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `docs/typescript-backend-vertical.md`: end-to-end TypeScript backend demo flow
 - `docs/usage.md`: CLI usage and input contract
 - `examples/typescript-backend/`: realistic TypeScript middleware workspace
+- `learning-context.config.json`: tracked project defaults for selection, memory, and Engram paths
 - `ROADMAP.md`: next priorities
 - `src/analysis/readme-generator.js`: generated learning README builder
 - `src/context/noise-canceler.js`: prototype signal-over-noise selector
@@ -174,6 +175,20 @@ These projects are credited as architectural inspiration. They are not listed as
 - `src/memory/engram-client.js`: local Engram adapter for recall and durable memory writes
 - `src/cli.js`: local CLI entrypoint
 - `skills/`: language-specific and workflow-specific teaching skills
+
+## Installation prerequisites
+
+To use the project locally in a serious way, you need:
+
+- **Node.js** for the CLI and benchmarks
+- **Git** for normal development workflow
+- **Engram binary** if you want durable-memory commands such as `recall`, `remember`, `close`, or memory-backed `teach`
+
+You can still use parts of the system without Engram:
+
+- `select`
+- `readme`
+- `teach --no-recall`
 
 ## Quick start
 
@@ -183,6 +198,20 @@ npm run benchmark
 npm run benchmark:recall
 npm run benchmark:vertical
 ```
+
+## Project configuration
+
+The CLI now auto-loads `learning-context.config.json` when present.
+
+That file is the official place for:
+
+- default project name
+- default workspace
+- selection budgets
+- recall defaults
+- Engram binary and data directory paths
+
+CLI flags still win over config values when both are present.
 
 ## Best demo right now
 
@@ -211,6 +240,21 @@ node src/cli.js recall --project learning-context-system --query "auth middlewar
 node src/cli.js remember --title "JWT order" --content "Validation runs before route handlers." --project learning-context-system --type decision --topic architecture/auth-order --format text
 node src/cli.js close --summary "Integrated recall and remember commands." --learned "Context retrieval and durable memory are different layers." --next "Connect recall to the teaching flow." --project learning-context-system --format text
 ```
+
+## Stable JSON contract
+
+When you use `--format json`, the CLI now returns a versioned JSON contract with:
+
+- `schemaVersion`
+- `command`
+- `status`
+- `degraded`
+- `warnings`
+- `config`
+
+and then the command payload itself.
+
+That makes the CLI safer to consume from scripts and future tooling.
 
 ## Benchmark coverage
 

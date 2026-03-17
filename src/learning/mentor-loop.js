@@ -1,4 +1,4 @@
-import { selectContextWindow } from "../context/noise-canceler.js";
+﻿import { selectContextWindow } from "../context/noise-canceler.js";
 
 function normalizeSource(source = "") {
   return String(source).replace(/\\/gu, "/").toLowerCase();
@@ -58,17 +58,17 @@ function summarizeTeachingSections(selectedContext, changedFiles = []) {
   const flow = [];
 
   if (codeFocus) {
-    flow.push(`Empezá por ${codeFocus.source}: es el ancla del cambio.`);
+    flow.push(`Empeza por ${codeFocus.source}: es el ancla del cambio.`);
   }
 
   if (relatedTests[0]) {
-    flow.push(`Validá con ${relatedTests[0].source}: confirma el comportamiento esperado.`);
+    flow.push(`Valida con ${relatedTests[0].source}: confirma el comportamiento esperado.`);
   }
 
   if (historicalMemory[0]) {
     const memoryType = historicalMemory[0].memoryType ?? "memory";
     flow.push(
-      `Usá ${historicalMemory[0].source} como contexto histórico (${memoryType}), no como reemplazo del código actual.`
+      `Usa ${historicalMemory[0].source} como contexto historico (${memoryType}), no como reemplazo del codigo actual.`
     );
   }
 

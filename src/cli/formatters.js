@@ -1,4 +1,4 @@
-// @ts-check
+﻿// @ts-check
 
 function originFromSource(source = "") {
   return String(source).startsWith("engram://") ? "engram" : "workspace";
@@ -110,7 +110,8 @@ export function formatLearningPacketAsText(packet, options = {}) {
     `- Queries tried: ${packet.memoryRecall?.queriesTried?.join(" | ") || "none"}`,
     `- Matched queries: ${packet.memoryRecall?.matchedQueries?.join(" | ") || "none"}`,
     `- Project: ${packet.memoryRecall?.project || "none"}`,
-    `- Recovered chunks: ${packet.memoryRecall?.recoveredChunks ?? 0}`
+    `- Recovered chunks: ${packet.memoryRecall?.recoveredChunks ?? 0}`,
+    `- Degraded: ${packet.memoryRecall?.degraded ? "yes" : "no"}`
   ];
 
   if (packet.memoryRecall?.error) {
@@ -155,12 +156,12 @@ export function formatLearningPacketAsText(packet, options = {}) {
 
   lines.push("");
   lines.push("Teaching map:");
-  lines.push(`- Código principal: ${packet.teachingSections?.codeFocus ? `${packet.teachingSections.codeFocus.source}` : "none"}`);
+  lines.push(`- Codigo principal: ${packet.teachingSections?.codeFocus ? `${packet.teachingSections.codeFocus.source}` : "none"}`);
   lines.push(
     `- Test relacionado: ${packet.teachingSections?.relatedTests?.[0] ? `${packet.teachingSections.relatedTests[0].source}` : "none"}`
   );
   lines.push(
-    `- Memoria histórica útil: ${packet.teachingSections?.historicalMemory?.[0] ? `${packet.teachingSections.historicalMemory[0].source}${packet.teachingSections.historicalMemory[0].memoryType ? ` (${packet.teachingSections.historicalMemory[0].memoryType})` : ""}` : "none"}`
+    `- Memoria historica util: ${packet.teachingSections?.historicalMemory?.[0] ? `${packet.teachingSections.historicalMemory[0].source}${packet.teachingSections.historicalMemory[0].memoryType ? ` (${packet.teachingSections.historicalMemory[0].memoryType})` : ""}` : "none"}`
   );
   lines.push(
     `- Soporte principal: ${packet.teachingSections?.supportingContext?.[0] ? `${packet.teachingSections.supportingContext[0].source}` : "none"}`
@@ -177,7 +178,7 @@ export function formatLearningPacketAsText(packet, options = {}) {
 
   lines.push("");
   lines.push("Pedagogical sections:");
-  lines.push("Código principal:");
+  lines.push("Codigo principal:");
   lines.push(formatSectionChunk(packet.teachingSections?.codeFocus));
   lines.push("Test relacionado:");
 
@@ -189,7 +190,7 @@ export function formatLearningPacketAsText(packet, options = {}) {
     }
   }
 
-  lines.push("Memoria histórica útil:");
+  lines.push("Memoria historica util:");
 
   if (!packet.teachingSections?.historicalMemory?.length) {
     lines.push("- none");
@@ -253,7 +254,10 @@ export function formatLearningPacketAsText(packet, options = {}) {
  *   scope?: string,
  *   limit?: number | null,
  *   stdout?: string,
- *   dataDir?: string
+ *   dataDir?: string,
+ *   degraded?: boolean,
+ *   warning?: string,
+ *   error?: string
  * }} result
  * @param {{ debug?: boolean }} [options]
  */
@@ -267,24 +271,28 @@ export function formatMemoryRecallAsText(result, options = {}) {
     `Scope: ${result.scope || "none"}`,
     `Limit: ${result.limit ?? "default"}`,
     `Data dir: ${result.dataDir || "unknown"}`,
+    `Degraded: ${result.degraded ? "yes" : "no"}`,
     "",
     "Recovered memory:"
   ];
 
   lines.push(result.stdout || "- none");
 
+  if (result.warning) {
+    lines.push("");
+    lines.push(`Warning: ${result.warning}`);
+  }
+
+  if (result.error) {
+    lines.push(`Error: ${result.error}`);
+  }
+
   if (debug) {
     lines.push("");
     lines.push("Recall debug:");
-    lines.push(
-      `- Query provided: ${result.query ? "yes" : "no"}`
-    );
-    lines.push(
-      `- Scope filter active: ${result.scope ? "yes" : "no"}`
-    );
-    lines.push(
-      `- Type filter active: ${result.type ? "yes" : "no"}`
-    );
+    lines.push(`- Query provided: ${result.query ? "yes" : "no"}`);
+    lines.push(`- Scope filter active: ${result.scope ? "yes" : "no"}`);
+    lines.push(`- Type filter active: ${result.type ? "yes" : "no"}`);
   }
 
   return lines.join("\n");
@@ -322,21 +330,23 @@ export function formatMemoryWriteAsText(result, heading) {
 export function usageText() {
   return [
     "Usage:",
-    "  node src/cli.js select (--input <file> | --workspace <dir>) --focus <text> [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
-    "  node src/cli.js teach (--input <file> | --workspace <dir>) --task <text> --objective <text> [--changed-files a,b] [--project <name>] [--recall-query <text>] [--memory-limit 3] [--memory-type <name>] [--memory-scope <name>] [--no-recall] [--strict-recall] [--engram-bin <file>] [--engram-data-dir <dir>] [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
-    "  node src/cli.js readme [--workspace <dir>] [--input <file>] [--focus <text>] [--task <text>] [--objective <text>] [--title <text>] [--output <file>] [--format json|text]",
-    "  node src/cli.js recall [--project <name>] [--query <text>] [--type <name>] [--scope <name>] [--limit 5] [--engram-bin <file>] [--engram-data-dir <dir>] [--debug] [--format json|text]",
-    "  node src/cli.js remember --title <text> (--content <text> | --message <text>) [--project <name>] [--type <name>] [--scope <name>] [--topic <key>] [--engram-bin <file>] [--engram-data-dir <dir>] [--format json|text]",
-    "  node src/cli.js close --summary <text> [--learned <text>] [--next <text>] [--title <text>] [--project <name>] [--type <name>] [--scope <name>] [--engram-bin <file>] [--engram-data-dir <dir>] [--format json|text]",
+    "  node src/cli.js select [--config <file>] (--input <file> | --workspace <dir>) --focus <text> [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
+    "  node src/cli.js teach [--config <file>] (--input <file> | --workspace <dir>) --task <text> --objective <text> [--changed-files a,b] [--project <name>] [--recall-query <text>] [--memory-limit 3] [--memory-type <name>] [--memory-scope <name>] [--no-recall] [--strict-recall true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
+    "  node src/cli.js readme [--config <file>] [--workspace <dir>] [--input <file>] [--focus <text>] [--task <text>] [--objective <text>] [--title <text>] [--output <file>] [--format json|text]",
+    "  node src/cli.js recall [--config <file>] [--project <name>] [--query <text>] [--type <name>] [--scope <name>] [--limit 5] [--degraded-recall true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--debug] [--format json|text]",
+    "  node src/cli.js remember [--config <file>] --title <text> (--content <text> | --message <text>) [--project <name>] [--type <name>] [--scope <name>] [--topic <key>] [--engram-bin <file>] [--engram-data-dir <dir>] [--format json|text]",
+    "  node src/cli.js close [--config <file>] --summary <text> [--learned <text>] [--next <text>] [--title <text>] [--project <name>] [--type <name>] [--scope <name>] [--engram-bin <file>] [--engram-data-dir <dir>] [--format json|text]",
     "",
     "Input file format:",
     '  { "chunks": [ { "id": "x", "source": "src/file.ts", "kind": "code", "content": "..." } ] }',
     "",
     "Notes:",
     "  --workspace scans the local repository and builds chunks automatically.",
+    "  learning-context.config.json is loaded automatically when present.",
     "  readme defaults to --workspace . when no input source is provided.",
     "  teach recalls Engram memories automatically unless you pass --no-recall.",
     "  teach now tries multiple smarter recall queries before giving up.",
+    "  recall can return a degraded empty result when Engram is unavailable and degraded mode is enabled.",
     "  --debug exposes score signals, suppression reasons, and recall details for playground debugging.",
     "  recall without --query asks Engram for recent context.",
     "  remember and close write durable memories into Engram."

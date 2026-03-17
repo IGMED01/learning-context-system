@@ -186,7 +186,9 @@ export function searchOutputToChunks(raw, options = {}) {
   }
 
   return blocks.map((block, index) => {
-    const headerMatch = block.header.match(/^\[(\d+)\]\s+#([^\s]+)\s+\(([^)]+)\)\s+[—-]\s+(.+)$/u);
+    const headerMatch =
+      block.header.match(/^\[(\d+)\]\s+#([^\s]+)\s+\(([^)]+)\)\s+[-]\s+(.+)$/u) ??
+      block.header.match(/^\[(\d+)\]\s+#([^\s]+)\s+\(([^)]+)\)\s+.+?\s+(.+)$/u);
     const rank = headerMatch?.[1] ?? String(index + 1);
     const observationId = headerMatch?.[2] ?? `unknown-${index + 1}`;
     const type = headerMatch?.[3] ?? "memory";
