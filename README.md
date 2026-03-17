@@ -1,12 +1,32 @@
 # Learning Context System
 
-This workspace bootstraps a system that teaches while it codes and reduces noise before information reaches a model context window.
+Learning Context System is an experimental CLI for **coding with teaching, memory, and context control at the same time**.
+
+It does three things together:
+
+1. selects useful context
+2. teaches from that context
+3. remembers durable decisions through Engram
+
+## Status
+
+This repository is **experimental but serious**.
+
+It is already usable as:
+
+- a local research CLI
+- a context-selection prototype
+- a teaching-oriented coding assistant scaffold
+- a durable-memory playground backed by Engram
+
+It is **not** yet a mature framework.
 
 ## What this project is trying to solve
 
 - Generate code and explanations in the same loop.
 - Adapt the teaching style to the active language through skills.
 - Preserve useful probability mass inside the context window by filtering noise, duplicates, and stale material.
+- Keep memory and prompt context separate but cooperative.
 
 ## External repo decision
 
@@ -31,11 +51,13 @@ Full analysis lives in `docs/repo-analysis.md`.
 - `AGENTS.md`: operating contract for future agents
 - `benchmark/recall-benchmark.json`: fixed benchmark cases for durable-memory recall quality
 - `benchmark/selector-benchmark.json`: fixed benchmark cases for context selection quality
+- `CONTRIBUTING.md`: contributor rules and local validation checklist
 - `docs/context-noise-cancellation.md`: design of the context filtering system
 - `docs/benchmark.md`: benchmark method and metrics
 - `docs/typescript-backend-vertical.md`: end-to-end TypeScript backend demo flow
 - `docs/usage.md`: CLI usage and input contract
 - `examples/typescript-backend/`: realistic TypeScript middleware workspace
+- `ROADMAP.md`: next priorities
 - `src/analysis/readme-generator.js`: generated learning README builder
 - `src/context/noise-canceler.js`: prototype signal-over-noise selector
 - `src/learning/mentor-loop.js`: learning packet builder
@@ -43,14 +65,31 @@ Full analysis lives in `docs/repo-analysis.md`.
 - `src/cli.js`: local CLI entrypoint
 - `skills/`: language-specific and workflow-specific teaching skills
 
-## Run
+## Quick start
 
 ```bash
-node test/run-tests.js
+npm test
 npm run benchmark
 npm run benchmark:recall
-npm run vertical:ts:teach
+npm run benchmark:vertical
 ```
+
+## Best demo right now
+
+The strongest current demo is the TypeScript backend middleware vertical:
+
+```bash
+npm run vertical:ts:teach
+npm run vertical:ts:seed-memory
+npm run vertical:ts:teach:memory
+```
+
+That flow shows:
+
+- changed code and related tests
+- controlled noise suppression
+- pedagogical teaching sections
+- durable memory entering the final packet
 
 ## Example usage
 
@@ -62,6 +101,16 @@ node src/cli.js recall --project learning-context-system --query "auth middlewar
 node src/cli.js remember --title "JWT order" --content "Validation runs before route handlers." --project learning-context-system --type decision --topic architecture/auth-order --format text
 node src/cli.js close --summary "Integrated recall and remember commands." --learned "Context retrieval and durable memory are different layers." --next "Connect recall to the teaching flow." --project learning-context-system --format text
 ```
+
+## Benchmark coverage
+
+This repo now has three benchmark layers:
+
+- selector benchmark
+- recall benchmark
+- vertical benchmark
+
+The goal is not only to say “it feels better”, but to show when behavior improves or regresses.
 
 ## Initial direction
 

@@ -1,0 +1,91 @@
+{
+  "cases": [
+    {
+      "name": "vertical deterministic flow keeps code and test while excluding noise",
+      "input": {
+        "workspace": "examples/typescript-backend",
+        "task": "Harden auth middleware",
+        "objective": "Teach request-boundary validation in a TypeScript server",
+        "changedFiles": ["src/auth/middleware.ts", "test/auth/middleware.test.ts"],
+        "project": "typescript-backend-vertical",
+        "noRecall": true,
+        "tokenBudget": 350,
+        "maxChunks": 4
+      },
+      "expectations": {
+        "codeFocus": "src/auth/middleware.ts",
+        "relatedTest": "test/auth/middleware.test.ts",
+        "excludedSources": ["logs/server.log", "chat/history.md"],
+        "memoryRecallStatus": "disabled",
+        "selectedMemoryChunks": 0,
+        "suppressedMemoryChunks": 0
+      }
+    },
+    {
+      "name": "vertical memory-backed flow selects historical memory with enough budget",
+      "input": {
+        "workspace": "examples/typescript-backend",
+        "task": "Harden auth middleware",
+        "objective": "Teach request-boundary validation in a TypeScript server",
+        "changedFiles": ["src/auth/middleware.ts", "test/auth/middleware.test.ts"],
+        "project": "typescript-backend-vertical",
+        "recallQuery": "auth validation order",
+        "tokenBudget": 520,
+        "maxChunks": 6
+      },
+      "provider": {
+        "memories": [
+          {
+            "query": "auth validation order",
+            "observationId": "900",
+            "type": "decision",
+            "title": "Auth validation order",
+            "body": "Authenticate before route handlers so expired sessions fail at the boundary and handlers receive a stable auth context.",
+            "timestamp": "2026-03-17 19:30:00"
+          }
+        ]
+      },
+      "expectations": {
+        "codeFocus": "src/auth/middleware.ts",
+        "relatedTest": "test/auth/middleware.test.ts",
+        "excludedSources": ["logs/server.log", "chat/history.md"],
+        "memoryRecallStatus": "recalled",
+        "selectedMemoryChunks": 1,
+        "suppressedMemoryChunks": 0
+      }
+    },
+    {
+      "name": "vertical memory-backed flow can recover memory but suppress it under tight chunk limits",
+      "input": {
+        "workspace": "examples/typescript-backend",
+        "task": "Harden auth middleware",
+        "objective": "Teach request-boundary validation in a TypeScript server",
+        "changedFiles": ["src/auth/middleware.ts", "test/auth/middleware.test.ts"],
+        "project": "typescript-backend-vertical",
+        "recallQuery": "auth validation order",
+        "tokenBudget": 520,
+        "maxChunks": 5
+      },
+      "provider": {
+        "memories": [
+          {
+            "query": "auth validation order",
+            "observationId": "901",
+            "type": "decision",
+            "title": "Auth validation order",
+            "body": "Authenticate before route handlers so expired sessions fail at the boundary and handlers receive a stable auth context.",
+            "timestamp": "2026-03-17 19:30:00"
+          }
+        ]
+      },
+      "expectations": {
+        "codeFocus": "src/auth/middleware.ts",
+        "relatedTest": "test/auth/middleware.test.ts",
+        "excludedSources": ["logs/server.log", "chat/history.md"],
+        "memoryRecallStatus": "recalled",
+        "selectedMemoryChunks": 0,
+        "suppressedMemoryChunks": 1
+      }
+    }
+  ]
+}

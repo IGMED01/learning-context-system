@@ -6,6 +6,7 @@ Este proyecto ahora tiene dos benchmarks formales:
 
 1. **selector benchmark**: mide si entra el contexto correcto
 2. **recall benchmark**: mide si la estrategia de memoria encuentra recuerdos útiles sin duplicarlos
+3. **vertical benchmark**: mide el flujo integrado del vertical TypeScript en variantes comparables
 
 No mide “si se siente bien”. Mide comportamiento repetible.
 
@@ -13,12 +14,14 @@ No mide “si se siente bien”. Mide comportamiento repetible.
 
 - `benchmark/selector-benchmark.json`
 - `benchmark/recall-benchmark.json`
+- `benchmark/vertical-benchmark.json`
 
 ## Runners
 
 ```bash
 npm run benchmark
 npm run benchmark:recall
+npm run benchmark:vertical
 ```
 
 ## Qué mide el selector benchmark
@@ -35,6 +38,13 @@ npm run benchmark:recall
 - `queryLimitPass`: valida que la estrategia no desperdicie demasiados intentos
 - `firstMatchPass`: valida que el primer acierto ocurra dentro del rango esperado
 - `exactChunkPass`: valida que la deduplicación no meta memorias repetidas
+
+## Qué mide el vertical benchmark
+
+- `codeFocusPass`: valida que el código principal siga siendo el archivo esperado
+- `relatedTestPass`: valida que el test relacionado siga apareciendo como segundo eje
+- `noiseExclusionPass`: valida que logs/chat sigan fuera
+- `memoryBehaviorPass`: compara variantes sin memoria, con memoria seleccionada y con memoria suprimida por presupuesto
 
 ## Cómo usarlo
 
