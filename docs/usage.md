@@ -53,6 +53,7 @@ Recommended scripts:
 - `cmd /c npm.cmd run playground:teach:memory:debug`
 - `cmd /c npm.cmd run playground:readme`
 - `cmd /c npm.cmd run ingest-security:example`
+- `cmd /c npm.cmd run security:pipeline:example`
 - `cmd /c npm.cmd run playground:recall`
 - `cmd /c npm.cmd run playground:recall:debug`
 - `cmd /c npm.cmd run vertical:ts:teach`
@@ -139,6 +140,17 @@ What happens internally:
 4. it maps each finding into a chunk compatible with `select`, `teach`, and `readme`
 5. it writes `{ "chunks": [...] }` JSON when `--output` is provided
 6. it applies secret redaction to imported finding text to avoid carrying accidental tokens into context
+
+## Command 0d: Run reproducible security pipeline (ingest -> teach)
+
+```bash
+node scripts/run-security-pipeline.js --input examples/prowler-findings.sample.json --output-dir test-output/security-pipeline --status-filter non-pass
+```
+
+Outputs:
+
+- `security-chunks.json` (ingested chunks)
+- `security-teach.json` (teaching packet from those chunks)
 
 ## Incremental typecheck vs build
 

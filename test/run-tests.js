@@ -1293,6 +1293,183 @@ run("cli ingest-security emits a stable JSON contract and writes chunk output", 
   }
 });
 
+run("ingest-security output feeds teach and prioritizes higher severity findings", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-security-e2e-"));
+  const findingsPath = path.join(tempRoot, "findings.json");
+  const chunksPath = path.join(tempRoot, "chunks.json");
+
+  try {
+    await writeFile(
+      findingsPath,
+      JSON.stringify(
+        [
+          {
+            metadata: {
+              Provider: "aws",
+              CheckID: "critical_control",
+              CheckTitle: "Critical control",
+              Severity: {
+                value: "critical"
+              },
+              Risk: "Control failure impacts confidentiality."
+            },
+            status: {
+              value: "FAIL"
+            },
+            resource_uid: "res-critical"
+          },
+          {
+            metadata: {
+              Provider: "aws",
+              CheckID: "medium_control",
+              CheckTitle: "Medium control",
+              Severity: {
+                value: "medium"
+              },
+              Risk: "Control failure impacts integrity."
+            },
+            status: {
+              value: "FAIL"
+            },
+            resource_uid: "res-medium"
+          },
+          {
+            metadata: {
+              Provider: "aws",
+              CheckID: "low_control",
+              CheckTitle: "Low control",
+              Severity: {
+                value: "low"
+              },
+              Risk: "Control failure impacts hygiene."
+            },
+            status: {
+              value: "FAIL"
+            },
+            resource_uid: "res-low"
+          }
+        ],
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const ingestResult = await runCli([
+      "ingest-security",
+      "--input",
+      findingsPath,
+      "--status-filter",
+      "fail",
+      "--output",
+      chunksPath,
+      "--format",
+      "json"
+    ]);
+
+    const ingestParsed = JSON.parse(ingestResult.stdout);
+    assert.equal(ingestResult.exitCode, 0);
+    assert.equal(ingestParsed.includedFindings, 3);
+
+    const teachResult = await runCli([
+      "teach",
+      "--input",
+      chunksPath,
+      "--task",
+      "Prioritize cloud findings",
+      "--objective",
+      "Teach severity-first remediation planning",
+      "--no-recall",
+      "--format",
+      "json"
+    ]);
+
+    const teachParsed = JSON.parse(teachResult.stdout);
+    assert.equal(teachResult.exitCode, 0);
+    const selectedSecurityChunks = teachParsed.selectedContext.filter(
+      (chunk) =>
+        String(chunk.source).startsWith("security://prowler/") ||
+        String(chunk.id).startsWith("prowler-")
+    );
+    const suppressedSecurityChunks = teachParsed.suppressedContext.filter((chunk) =>
+      String(chunk.id).startsWith("prowler-")
+    );
+
+    assert.equal(selectedSecurityChunks.length + suppressedSecurityChunks.length, 3);
+
+    const allSecurityChunks = [...selectedSecurityChunks, ...suppressedSecurityChunks];
+    const critical = allSecurityChunks.find((chunk) =>
+      String(chunk.id).includes("critical-control")
+    );
+    const medium = allSecurityChunks.find((chunk) =>
+      String(chunk.id).includes("medium-control")
+    );
+    const low = allSecurityChunks.find((chunk) => String(chunk.id).includes("low-control"));
+
+    assert.equal(Boolean(critical && medium && low), true);
+    assert.equal((critical?.score ?? 0) >= (medium?.score ?? 0), true);
+    assert.equal((medium?.score ?? 0) >= (low?.score ?? 0), true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("security pipeline script produces chunk and teach outputs", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-security-pipeline-"));
+  const findingsPath = path.join(tempRoot, "findings.json");
+  const outputDir = path.join(tempRoot, "pipeline-output");
+  const chunksPath = path.join(outputDir, "security-chunks.json");
+  const teachPath = path.join(outputDir, "security-teach.json");
+
+  try {
+    await writeFile(
+      findingsPath,
+      JSON.stringify(
+        [
+          {
+            metadata: {
+              Provider: "aws",
+              CheckID: "critical_control",
+              CheckTitle: "Critical control",
+              Severity: {
+                value: "critical"
+              },
+              Risk: "Control failure impacts confidentiality."
+            },
+            status: {
+              value: "FAIL"
+            },
+            resource_uid: "res-critical"
+          }
+        ],
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const result = await execFile(process.execPath, [
+      "scripts/run-security-pipeline.js",
+      "--input",
+      findingsPath,
+      "--output-dir",
+      outputDir,
+      "--status-filter",
+      "fail"
+    ]);
+
+    assert.match(result.stdout, /Pipeline completed/);
+
+    const chunks = JSON.parse(await readFile(chunksPath, "utf8"));
+    const teach = JSON.parse(await readFile(teachPath, "utf8"));
+    assert.equal(Array.isArray(chunks.chunks), true);
+    assert.equal(chunks.chunks.length, 1);
+    assert.equal(teach.command, "teach");
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 run("readme generator infers concepts and reading order", async () => {
   const workspace = await loadWorkspaceChunks(".");
   const result = await buildLearningReadme({
