@@ -6,6 +6,11 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -57,6 +62,86 @@ jobs:
             test-output/security-pipeline/security-chunks.json
             test-output/security-pipeline/security-teach.json
           if-no-files-found: warn
+
+      - name: Comment security pipeline summary on PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && matrix.node-version == 20
+        uses: actions/github-script@v7
+        env:
+          NODE_VERSION: ${{ matrix.node-version }}
+        with:
+          script: |
+            const fs = require("node:fs");
+            const path = require("node:path");
+
+            const marker = "<!-- security-pipeline-summary -->";
+            const chunksPath = path.join(process.cwd(), "test-output", "security-pipeline", "security-chunks.json");
+            const teachPath = path.join(process.cwd(), "test-output", "security-pipeline", "security-teach.json");
+
+            if (!fs.existsSync(chunksPath) || !fs.existsSync(teachPath)) {
+              core.warning("Security pipeline files are missing; skipping PR summary comment.");
+              return;
+            }
+
+            const chunksPayload = JSON.parse(fs.readFileSync(chunksPath, "utf8"));
+            const teachPayload = JSON.parse(fs.readFileSync(teachPath, "utf8"));
+            const chunks = Array.isArray(chunksPayload.chunks) ? chunksPayload.chunks : [];
+            const selectedTeachChunks = Array.isArray(teachPayload.selectedContext)
+              ? teachPayload.selectedContext.length
+              : 0;
+            const priorities = chunks
+              .map((chunk) => (typeof chunk.priority === "number" ? chunk.priority : 0))
+              .filter((value) => Number.isFinite(value));
+            const maxPriority = priorities.length ? Math.max(...priorities) : 0;
+            const qualityPassed =
+              chunks.length >= 1 &&
+              selectedTeachChunks >= 1 &&
+              maxPriority >= 0.84;
+            const qualityStatus = qualityPassed ? "PASS ✅" : "FAIL ❌";
+
+            const topFindings = chunks
+              .slice(0, 3)
+              .map((chunk) => `  - ${chunk.id} (priority=${(typeof chunk.priority === "number" ? chunk.priority : 0).toFixed(3)})`)
+              .join("\n") || "  - none";
+
+            const body = [
+              marker,
+              "## Security pipeline summary",
+              `- Node: ${process.env.NODE_VERSION}`,
+              `- Included findings: ${chunks.length}`,
+              `- Selected teach chunks: ${selectedTeachChunks}`,
+              `- Max finding priority: ${maxPriority.toFixed(3)}`,
+              `- Quality gate: ${qualityStatus} (minIncluded=1, minSelected=1, minPriority=0.84)`,
+              "- Top findings:",
+              topFindings
+            ].join("\n");
+
+            const issue_number = context.issue.number;
+            const { owner, repo } = context.repo;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+            const existing = comments.find(
+              (comment) => comment.user?.type === "Bot" && comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+            }
 
       - name: Run selector benchmark
         run: npm run benchmark
