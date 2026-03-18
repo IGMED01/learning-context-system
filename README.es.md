@@ -252,6 +252,8 @@ Migraciones reales actuales a `.ts` dentro de `src/`:
 - `src/io/config-file.ts`
 - `src/io/workspace-chunks.ts`
 - `src/system/project-ops.ts`
+- `src/cli/arg-parser.ts`
+- `src/contracts/cli-contracts.ts`
 
 Nota de compatibilidad:
 

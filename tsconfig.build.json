@@ -15,7 +15,9 @@
     "src/types/**/*.d.ts"
   ],
   "exclude": [
+    "src/cli/arg-parser.js",
     "src/contracts/config-contracts.js",
+    "src/contracts/cli-contracts.js",
     "src/io/config-file.js",
     "src/io/text-file.js",
     "src/io/workspace-chunks.js",

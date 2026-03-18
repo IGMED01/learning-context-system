@@ -16,9 +16,9 @@
   "include": [
     "src/analysis/readme-generator.js",
     "src/cli/app.js",
-    "src/cli/arg-parser.js",
+    "src/cli/arg-parser.ts",
     "src/cli/formatters.js",
-    "src/contracts/cli-contracts.js",
+    "src/contracts/cli-contracts.ts",
     "src/contracts/config-contracts.js",
     "src/contracts/config-contracts.ts",
     "src/context/noise-canceler.js",

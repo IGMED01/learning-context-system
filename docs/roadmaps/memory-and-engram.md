@@ -17,26 +17,32 @@ Use Engram as a durable memory layer while keeping this project responsible for 
 - recall, remember, and close exist
 - `teach` already consumes recalled memory automatically
 - degraded mode exists when Engram fails
+- initial skill contract exists at `skills/engram-auto-orchestrator/SKILL.md` to standardize automatic recall/save behavior
 
 ## Milestones
 
-### Milestone 1 — Better memory contracts
+### Milestone 1 - Better memory contracts
 
 - stop depending on human-shaped parsing where a structured path exists
 - tighten memory result shapes
 - reduce ambiguity between technical memory and narrative memory
 
-### Milestone 2 — Better historical pedagogy
+### Milestone 2 - Better historical pedagogy
 
 - distinguish architecture / decision / pattern / bugfix in output
 - surface memory intent more clearly in `teach`
 - show why a memory was selected
 
-### Milestone 3 — Recovery and lifecycle
+### Milestone 3 - Recovery and lifecycle
 
 - stronger session semantics
 - clearer recovery after compacted context
 - better operator guidance when Engram is unavailable or stale
+
+### Milestone 4 - Skill-driven automation
+
+- wire skill rules to operational commands/scripts so automatic Engram usage is consistent
+- add tests that assert auto recall/save guardrails from the skill contract
 
 ## Done means
 
