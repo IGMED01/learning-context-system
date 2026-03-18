@@ -1,10 +1,25 @@
 // @ts-check
 
+import {
+  redactSensitiveContent,
+  resolveSecurityPolicy,
+  shouldIgnoreSensitiveFile
+} from "../security/secret-redaction.js";
 import { resolveTeachRecall } from "./teach-recall.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
 /** @typedef {import("../types/core-contracts.d.ts").TeachRecallResolution} TeachRecallResolution */
 /** @typedef {import("../types/core-contracts.d.ts").MemoryRecallState} MemoryRecallState */
+
+/**
+ * @typedef {{
+ *   ignoreSensitiveFiles?: boolean,
+ *   redactSensitiveContent?: boolean,
+ *   ignoreGeneratedFiles?: boolean,
+ *   allowSensitivePaths?: string[],
+ *   extraSensitivePathFragments?: string[]
+ * }} AutoMemorySecurityOptions
+ */
 
 /**
  * @typedef {{
@@ -15,9 +30,58 @@ import { resolveTeachRecall } from "./teach-recall.js";
  *   project?: string,
  *   recallState: MemoryRecallState,
  *   memoryType?: string,
- *   memoryScope?: string
+ *   memoryScope?: string,
+ *   security?: AutoMemorySecurityOptions
  * }} AutoRememberPayloadInput
  */
+
+/**
+ * @typedef {{
+ *   redacted: boolean,
+ *   redactionCount: number,
+ *   sensitivePathCount: number
+ * }} AutoMemorySecurityMeta
+ */
+
+/**
+ * @typedef {{
+ *   title: string,
+ *   content: string,
+ *   type: string,
+ *   scope: string,
+ *   project?: string,
+ *   security: AutoMemorySecurityMeta
+ * }} AutoRememberPayload
+ */
+
+/**
+ * @param {string[]} values
+ * @param {ReturnType<typeof resolveSecurityPolicy>} securityPolicy
+ */
+function sanitizePathList(values, securityPolicy) {
+  /** @type {string[]} */
+  const sanitized = [];
+  let sensitivePathCount = 0;
+
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+
+    if (shouldIgnoreSensitiveFile(value, securityPolicy)) {
+      sensitivePathCount += 1;
+      sanitized.push("[redacted-sensitive-path]");
+      continue;
+    }
+
+    sanitized.push(value);
+  }
+
+  return {
+    values: sanitized,
+    sensitivePathCount
+  };
+}
 
 /**
  * @param {{
@@ -68,38 +132,51 @@ export async function resolveAutoTeachRecall(input) {
  */
 function compactText(value, maxLength) {
   const compacted = value.trim().replace(/\s+/g, " ");
-  return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 1)}…` : compacted;
+  return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 3)}...` : compacted;
 }
 
 /**
  * @param {AutoRememberPayloadInput} input
+ * @returns {AutoRememberPayload}
  */
 export function buildTeachAutoRememberPayload(input) {
   const title = `Teach loop - ${compactText(input.task || "learning", 52)}`;
   const scope = input.memoryScope || "project";
   const type = input.memoryType || "learning";
-  const topSources = input.selectedSources.slice(0, 4).join(", ") || "none";
-  const changedFiles = input.changedFiles.join(", ") || "none";
   const recall = input.recallState;
+  const securityPolicy = resolveSecurityPolicy({
+    ...(input.security ?? {}),
+    ignoreSensitiveFiles: true,
+    redactSensitiveContent: true
+  });
+  const changedFiles = sanitizePathList(input.changedFiles, securityPolicy);
+  const topSources = sanitizePathList(input.selectedSources.slice(0, 4), securityPolicy);
+  const sensitivePathCount = changedFiles.sensitivePathCount + topSources.sensitivePathCount;
 
-  const content = [
+  const rawContent = [
     "## Teach Auto Memory",
     "",
     `- Task: ${input.task}`,
     `- Objective: ${input.objective}`,
-    `- Changed files: ${changedFiles}`,
+    `- Changed files: ${changedFiles.values.join(", ") || "none"}`,
     `- Recall status: ${recall.status}`,
     `- Recall query: ${recall.query || "none"}`,
     `- Recovered chunks: ${recall.recoveredChunks}`,
     `- Selected recalled chunks: ${recall.selectedChunks}`,
-    `- Top selected context sources: ${topSources}`
+    `- Top selected context sources: ${topSources.values.join(", ") || "none"}`
   ].join("\n");
+  const redaction = redactSensitiveContent(rawContent, securityPolicy);
 
   return {
     title,
-    content,
+    content: redaction.content,
     type,
     scope,
-    project: input.project
+    project: input.project,
+    security: {
+      redacted: redaction.redacted,
+      redactionCount: redaction.redactionCount,
+      sensitivePathCount
+    }
   };
 }

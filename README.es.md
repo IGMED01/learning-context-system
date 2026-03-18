@@ -190,6 +190,8 @@ Ese archivo es el lugar oficial para definir:
 
 Si pasás flags en CLI, esos flags pisan el valor del config.
 
+Nota de seguridad: cuando `teach` usa auto-remember, el contenido se sanea antes de guardar en Engram (rutas sensibles enmascaradas y valores tipo secreto redactados).
+
 Para revisar si la instalacion local esta bien:
 
 ```bash

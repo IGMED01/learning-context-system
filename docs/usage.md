@@ -84,6 +84,10 @@ Use that file for stable defaults such as:
 - Engram paths
 - scan safety policy
 
+Security note:
+
+- automatic teach memory (`autoRemember`) is sanitized before saving: sensitive paths are masked and secret-like fragments are redacted
+
 Concept:
 
 - **config file** = default behavior for the project

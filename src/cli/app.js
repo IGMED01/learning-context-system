@@ -95,7 +95,9 @@ import {
  *     rememberAttempted: boolean,
  *     rememberSaved: boolean,
  *     rememberTitle: string,
- *     rememberError: string
+ *     rememberError: string,
+ *     rememberRedactionCount: number,
+ *     rememberSensitivePathCount: number
  *   },
  *   debug?: {
  *     selectedOrigins: Record<string, number>,
@@ -809,7 +811,9 @@ export async function runCli(argv, dependencies = {}) {
     rememberAttempted: false,
     rememberSaved: false,
     rememberTitle: "",
-    rememberError: ""
+    rememberError: "",
+    rememberRedactionCount: 0,
+    rememberSensitivePathCount: 0
   };
 
   if (autoRemember) {
@@ -824,9 +828,19 @@ export async function runCli(argv, dependencies = {}) {
         project: options.project,
         recallState: packetWithMemory.memoryRecall,
         memoryType,
-        memoryScope
+        memoryScope,
+        security: loadedConfig.config.security
       });
-      await engram.saveMemory(rememberInput);
+      packetWithMemory.autoMemory.rememberRedactionCount = rememberInput.security.redactionCount;
+      packetWithMemory.autoMemory.rememberSensitivePathCount =
+        rememberInput.security.sensitivePathCount;
+      await engram.saveMemory({
+        title: rememberInput.title,
+        content: rememberInput.content,
+        type: rememberInput.type,
+        scope: rememberInput.scope,
+        project: rememberInput.project
+      });
       packetWithMemory.autoMemory.rememberSaved = true;
       packetWithMemory.autoMemory.rememberTitle = rememberInput.title;
     } catch (error) {
@@ -858,6 +872,18 @@ export async function runCli(argv, dependencies = {}) {
 
             if (packetWithMemory.autoMemory?.rememberError) {
               warnings.push(`Auto remember failed: ${packetWithMemory.autoMemory.rememberError}`);
+            }
+
+            if ((packetWithMemory.autoMemory?.rememberRedactionCount ?? 0) > 0) {
+              warnings.push(
+                `Auto remember redacted ${packetWithMemory.autoMemory.rememberRedactionCount} secret fragment(s).`
+              );
+            }
+
+            if ((packetWithMemory.autoMemory?.rememberSensitivePathCount ?? 0) > 0) {
+              warnings.push(
+                `Auto remember sanitized ${packetWithMemory.autoMemory.rememberSensitivePathCount} sensitive path(s).`
+              );
             }
 
             return serializeCommandResult(

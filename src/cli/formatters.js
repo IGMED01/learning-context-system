@@ -31,7 +31,9 @@
  *     rememberAttempted: boolean,
  *     rememberSaved: boolean,
  *     rememberTitle: string,
- *     rememberError: string
+ *     rememberError: string,
+ *     rememberRedactionCount: number,
+ *     rememberSensitivePathCount: number
  *   }
  * }} LearningPacketRenderResult
  */
@@ -215,6 +217,8 @@ export function formatLearningPacketAsText(packet, options = {}) {
   lines.push(`- Auto remember enabled: ${packet.autoMemory?.autoRememberEnabled ? "yes" : "no"}`);
   lines.push(`- Remember attempted: ${packet.autoMemory?.rememberAttempted ? "yes" : "no"}`);
   lines.push(`- Remember saved: ${packet.autoMemory?.rememberSaved ? "yes" : "no"}`);
+  lines.push(`- Remember redactions: ${packet.autoMemory?.rememberRedactionCount ?? 0}`);
+  lines.push(`- Sensitive paths sanitized: ${packet.autoMemory?.rememberSensitivePathCount ?? 0}`);
 
   if (packet.autoMemory?.rememberTitle) {
     lines.push(`- Remember title: ${packet.autoMemory.rememberTitle}`);
@@ -530,6 +534,7 @@ export function usageText() {
     "  teach recalls Engram memories automatically unless you pass --no-recall.",
     "  auto recall can be disabled globally with memory.autoRecall or per command with --auto-recall false.",
     "  auto remember can be enabled with --auto-remember true or memory.autoRemember=true.",
+    "  auto remember always sanitizes sensitive paths and redacts secret-like fragments before save.",
     "  teach now tries multiple smarter recall queries before giving up.",
     "  recall can return a degraded empty result when Engram is unavailable and degraded mode is enabled.",
     "  --debug exposes score signals, suppression reasons, and recall details for playground debugging.",

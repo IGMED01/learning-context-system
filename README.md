@@ -220,6 +220,8 @@ That file is the official place for:
 
 CLI flags still win over config values when both are present.
 
+Security note: when auto-remember is enabled for `teach`, saved memory content is sanitized (sensitive paths masked, secret-like values redacted) before writing to Engram.
+
 To inspect the local setup:
 
 ```bash

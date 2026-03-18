@@ -1551,7 +1551,7 @@ run("cli teach consumes recalled Engram memory automatically", async () => {
 });
 
 run("cli teach can persist an automatic memory summary when enabled", async () => {
-  /** @type {Array<unknown>} */
+  /** @type {Array<{ content: string, title: string, type?: string, scope?: string, project?: string }>} */
   const saveCalls = [];
   const fakeClient = {
     async recallContext() {
@@ -1587,9 +1587,9 @@ run("cli teach can persist an automatic memory summary when enabled", async () =
       "--task",
       "Improve auth middleware",
       "--objective",
-      "Teach why validation runs before route handlers",
+      "Teach why validation runs before route handlers and never leak password='secret123'",
       "--changed-files",
-      "src/auth/middleware.ts,test/auth/middleware.test.ts",
+      ".env,src/auth/middleware.ts,test/auth/middleware.test.ts",
       "--project",
       "learning-context-system",
       "--auto-remember",
@@ -1608,7 +1608,62 @@ run("cli teach can persist an automatic memory summary when enabled", async () =
   assert.equal(parsed.autoMemory.autoRememberEnabled, true);
   assert.equal(parsed.autoMemory.rememberAttempted, true);
   assert.equal(parsed.autoMemory.rememberSaved, true);
+  assert.equal(parsed.autoMemory.rememberSensitivePathCount >= 1, true);
+  assert.equal(parsed.autoMemory.rememberRedactionCount >= 1, true);
   assert.match(parsed.autoMemory.rememberTitle, /Teach loop/);
+  assert.match(saveCalls[0].content, /\[redacted-sensitive-path\]/i);
+  assert.match(saveCalls[0].content, /\[REDACTED\]/);
+  assert.equal(parsed.warnings.some((entry) => /redacted/i.test(entry)), true);
+});
+
+run("cli teach reports degraded output when auto remember write fails", async () => {
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async searchMemories(query, options) {
+      return {
+        mode: "search",
+        project: options?.project ?? "",
+        query,
+        stdout: "No memories found for that query.",
+        dataDir: ".engram"
+      };
+    },
+    async saveMemory() {
+      throw new Error("sqlite is locked");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  const result = await runCli(
+    [
+      "teach",
+      "--input",
+      "examples/auth-context.json",
+      "--task",
+      "Improve auth middleware",
+      "--objective",
+      "Teach validation order",
+      "--auto-remember",
+      "true",
+      "--format",
+      "json"
+    ],
+    {
+      engramClient: fakeClient
+    }
+  );
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.equal(parsed.degraded, true);
+  assert.equal(parsed.autoMemory.rememberSaved, false);
+  assert.equal(parsed.autoMemory.rememberAttempted, true);
+  assert.match(parsed.autoMemory.rememberError, /sqlite is locked/);
+  assert.equal(parsed.warnings.some((entry) => /Auto remember failed/i.test(entry)), true);
 });
 
 run("cli teach respects config memory.autoRecall=false without requiring --no-recall", async () => {

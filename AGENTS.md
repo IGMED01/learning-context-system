@@ -37,6 +37,17 @@ Current implementation note: in this repository, Engram is used only for durable
 4. Suppress duplicated snippets, verbose logs, and stale discussion.
 5. When teaching, move from concept to code to exercise.
 6. End substantial tasks with a brief "what you learned" recap.
+7. Before and after each substantial change, verify repo integrity (`git status`, current commit, and CI result when available).
+8. Treat data and metadata preservation as critical: never drop files, contracts, or memory metadata silently.
+
+## Data + Metadata Integrity (Critical)
+
+For every relevant change:
+
+1. confirm local branch and remote branch are synchronized
+2. confirm file tree consistency with remote before closing the task
+3. keep JSON contracts backward-compatible unless explicitly versioned
+4. if a behavior writes memory, include explicit status metadata in outputs
 
 ## Teaching Loop
 
