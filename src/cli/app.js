@@ -13,6 +13,8 @@ import {
   recordCommandMetric
 } from "../observability/metrics-store.js";
 import {
+  DEFAULT_PROWLER_MAX_FINDINGS,
+  DEFAULT_PROWLER_STATUS_FILTER,
   ingestProwlerFile,
   normalizeProwlerStatusFilter
 } from "../security/prowler-ingest.js";
@@ -634,9 +636,11 @@ export async function runCli(argv, dependencies = {}) {
     options.format === "json" ? "json" : options.format === "text" ? "text" : defaultFormat;
 
   if (command === "ingest-security") {
-    const statusFilter = normalizeProwlerStatusFilter(options["status-filter"] ?? "non-pass");
+    const statusFilter = normalizeProwlerStatusFilter(
+      options["status-filter"] ?? DEFAULT_PROWLER_STATUS_FILTER
+    );
     const maxFindings = assertNumberRules(
-      numberOption(options, "max-findings", 200),
+      numberOption(options, "max-findings", DEFAULT_PROWLER_MAX_FINDINGS),
       "max-findings",
       {
         min: 1,
@@ -668,7 +672,10 @@ export async function runCli(argv, dependencies = {}) {
       maxFindings: ingest.maxFindings,
       totalFindings: ingest.totalFindings,
       includedFindings: ingest.includedFindings,
+      discardedFindings: ingest.discardedFindings,
       skippedFindings: ingest.skippedFindings,
+      redactedFindings: ingest.redactedFindings,
+      redactionCountTotal: ingest.redactionCountTotal,
       chunkFile,
       observability: buildObservabilityEvent(metric)
     };

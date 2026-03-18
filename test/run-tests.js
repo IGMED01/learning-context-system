@@ -1164,10 +1164,45 @@ run("prowler findings converter maps fail findings to chunk format", () => {
 
   assert.equal(converted.totalFindings, 2);
   assert.equal(converted.includedFindings, 1);
+  assert.equal(converted.discardedFindings, 0);
   assert.equal(converted.skippedFindings, 1);
+  assert.equal(converted.redactedFindings, 0);
+  assert.equal(converted.redactionCountTotal, 0);
   assert.equal(converted.chunks[0].kind, "spec");
   assert.match(converted.chunks[0].content, /Remediation:/);
   assert.match(converted.chunks[0].source, /security:\/\/prowler\//);
+});
+
+run("prowler findings converter redacts inline secrets and discards empty records", () => {
+  const converted = prowlerFindingsToChunkFile(
+    [
+      {
+        metadata: {
+          Provider: "aws",
+          CheckID: "exposed_token",
+          CheckTitle: "Token exposed in note",
+          Severity: {
+            value: "high"
+          },
+          Risk: "authorization='Bearer ghp_1234567890ABCDEFGHIJK' in notes."
+        },
+        status: {
+          value: "FAIL"
+        }
+      },
+      42
+    ],
+    {
+      statusFilter: "all"
+    }
+  );
+
+  assert.equal(converted.totalFindings, 2);
+  assert.equal(converted.includedFindings, 1);
+  assert.equal(converted.discardedFindings, 1);
+  assert.equal(converted.redactedFindings, 1);
+  assert.equal(converted.redactionCountTotal >= 1, true);
+  assert.match(converted.chunks[0].content, /\[REDACTED\]|\[REDACTED_TOKEN\]/);
 });
 
 run("cli ingest-security emits a stable JSON contract and writes chunk output", async () => {
@@ -1241,7 +1276,10 @@ run("cli ingest-security emits a stable JSON contract and writes chunk output", 
     assert.equal(parsed.status, "ok");
     assert.equal(parsed.totalFindings, 2);
     assert.equal(parsed.includedFindings, 1);
+    assert.equal(parsed.discardedFindings, 0);
     assert.equal(parsed.skippedFindings, 1);
+    assert.equal(parsed.redactedFindings, 0);
+    assert.equal(parsed.redactionCountTotal, 0);
     assert.equal(parsed.chunkFile.chunks.length, 1);
     assert.match(parsed.chunkFile.chunks[0].content, /Risk:/);
     assert.match(parsed.output, /security-chunks\.json/);

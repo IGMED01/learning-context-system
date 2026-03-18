@@ -2,9 +2,11 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { redactSensitiveContent } from "./secret-redaction.js";
 
-const DEFAULT_STATUS_FILTER = "non-pass";
-const DEFAULT_MAX_FINDINGS = 200;
+export const DEFAULT_PROWLER_STATUS_FILTER = "non-pass";
+export const DEFAULT_PROWLER_MAX_FINDINGS = 200;
+const DEFAULT_CHUNK_CONTENT_MAX_CHARS = 1200;
 
 const PASS_PATTERNS = [/^pass$/u, /^passed$/u, /^compliant$/u, /^ok$/u];
 const FAIL_PATTERNS = [
@@ -154,7 +156,9 @@ function clamp(value, min = 0, max = 1) {
  * @returns {ProwlerStatusFilter}
  */
 export function normalizeProwlerStatusFilter(value) {
-  const normalized = cleanText(typeof value === "string" ? value : DEFAULT_STATUS_FILTER).toLowerCase();
+  const normalized = cleanText(
+    typeof value === "string" ? value : DEFAULT_PROWLER_STATUS_FILTER
+  ).toLowerCase();
 
   if (normalized === "all" || normalized === "non-pass" || normalized === "fail") {
     return /** @type {ProwlerStatusFilter} */ (normalized);
@@ -475,6 +479,39 @@ function cutText(text, maxLength = 280) {
 }
 
 /**
+ * @param {string} text
+ * @param {number} maxLength
+ */
+function cutTextHard(text, maxLength) {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+/**
+ * @param {Record<string, unknown>} finding
+ */
+function isMeaningfulFinding(finding) {
+  const rawTitle = pickFirstString(finding, [
+    "metadata.CheckTitle",
+    "check_title",
+    "Title",
+    "title",
+    "finding_title"
+  ]);
+
+  return Boolean(
+    detectCheckId(finding) ||
+      rawTitle ||
+      detectRisk(finding) ||
+      detectRemediation(finding) ||
+      detectResource(finding)
+  );
+}
+
+/**
  * @param {Record<string, unknown>} finding
  * @param {number} index
  */
@@ -517,15 +554,21 @@ function findingToChunk(finding, index) {
     lines.push(`Compliance: ${cutText(compliance)}`);
   }
 
+  const rawContent = cutTextHard(lines.join(". "), DEFAULT_CHUNK_CONTENT_MAX_CHARS);
+  const redaction = redactSensitiveContent(rawContent);
+
   return {
-    id: `prowler-${safeProvider}-${safeCheck}-${index + 1}`,
-    source: `security://prowler/${safeProvider}/${safeCheck}`,
-    kind: "spec",
-    content: lines.join(". "),
-    certainty: checkId ? 0.92 : 0.78,
-    recency: recencyFromTimestamp(timestamp),
-    teachingValue: clamp(0.35 + severity.score * 0.65),
-    priority: clamp(0.3 + severity.score * 0.7)
+    chunk: {
+      id: `prowler-${safeProvider}-${safeCheck}-${index + 1}`,
+      source: `security://prowler/${safeProvider}/${safeCheck}`,
+      kind: "spec",
+      content: redaction.content,
+      certainty: checkId ? 0.92 : 0.78,
+      recency: recencyFromTimestamp(timestamp),
+      teachingValue: clamp(0.35 + severity.score * 0.65),
+      priority: clamp(0.3 + severity.score * 0.7)
+    },
+    redactionCount: redaction.redactionCount
   };
 }
 
@@ -573,17 +616,28 @@ function extractFindings(payload) {
  * @param {ProwlerIngestOptions} [options]
  */
 export function prowlerFindingsToChunkFile(payload, options = {}) {
-  const statusFilter = normalizeProwlerStatusFilter(options.statusFilter ?? DEFAULT_STATUS_FILTER);
+  const statusFilter = normalizeProwlerStatusFilter(
+    options.statusFilter ?? DEFAULT_PROWLER_STATUS_FILTER
+  );
   const maxFindings = Number.isInteger(options.maxFindings)
     ? Math.max(1, /** @type {number} */ (options.maxFindings))
-    : DEFAULT_MAX_FINDINGS;
+    : DEFAULT_PROWLER_MAX_FINDINGS;
   const extracted = extractFindings(payload);
   const limited = extracted.findings.slice(0, maxFindings);
   const chunks = [];
   let skippedFindings = 0;
+  let discardedFindings = 0;
+  let redactedFindings = 0;
+  let redactionCountTotal = 0;
 
   for (const [index, item] of limited.entries()) {
     const finding = asRecord(item);
+
+    if (!isMeaningfulFinding(finding)) {
+      discardedFindings += 1;
+      continue;
+    }
+
     const status = classifyStatus(detectStatus(finding));
 
     if (!shouldIncludeStatus(status.className, statusFilter)) {
@@ -591,7 +645,13 @@ export function prowlerFindingsToChunkFile(payload, options = {}) {
       continue;
     }
 
-    chunks.push(findingToChunk(finding, index));
+    const mapped = findingToChunk(finding, index);
+    chunks.push(mapped.chunk);
+    redactionCountTotal += mapped.redactionCount;
+
+    if (mapped.redactionCount > 0) {
+      redactedFindings += 1;
+    }
   }
 
   return {
@@ -600,7 +660,10 @@ export function prowlerFindingsToChunkFile(payload, options = {}) {
     maxFindings,
     totalFindings: extracted.findings.length,
     includedFindings: chunks.length,
+    discardedFindings,
     skippedFindings: skippedFindings + Math.max(0, extracted.findings.length - limited.length),
+    redactedFindings,
+    redactionCountTotal,
     chunks
   };
 }

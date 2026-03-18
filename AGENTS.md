@@ -40,6 +40,16 @@ Current implementation note: in this repository, Engram is used only for durable
 7. Before and after each substantial change, verify repo integrity (`git status`, current commit, and CI result when available).
 8. Treat data and metadata preservation as critical: never drop files, contracts, or memory metadata silently.
 
+## Lean Engineering Rule (No "more for the sake of more")
+
+For each change, apply this filter in order:
+
+1. **Need first**: if it does not improve reliability, security, operability, or learning value, skip it.
+2. **Smallest valid change**: prefer minimal deltas over broad rewrites.
+3. **Delete before adding**: remove duplication/dead branches before introducing new abstractions.
+4. **Measure impact**: every meaningful change must be validated by tests/typecheck/build and, when relevant, CI.
+5. **Stop condition**: once DoD is met, do not keep polishing aesthetic details.
+
 ## Data + Metadata Integrity (Critical)
 
 For every relevant change:
