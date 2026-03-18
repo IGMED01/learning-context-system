@@ -506,10 +506,39 @@ export function formatInitResultAsText(result) {
   return lines.join("\n");
 }
 
+/**
+ * @param {{
+ *   input: string,
+ *   output?: string,
+ *   detectedFormat: string,
+ *   statusFilter: string,
+ *   maxFindings: number,
+ *   totalFindings: number,
+ *   includedFindings: number,
+ *   skippedFindings: number
+ * }} result
+ */
+export function formatSecurityIngestAsText(result) {
+  const lines = [
+    "Security ingest summary:",
+    `- input: ${result.input}`,
+    `- output: ${result.output || "(stdout json only)"}`,
+    `- detected format: ${result.detectedFormat}`,
+    `- status filter: ${result.statusFilter}`,
+    `- max findings: ${result.maxFindings}`,
+    `- total findings: ${result.totalFindings}`,
+    `- included findings: ${result.includedFindings}`,
+    `- skipped findings: ${result.skippedFindings}`
+  ];
+
+  return lines.join("\n");
+}
+
 export function usageText() {
   const commandCatalog = [
     "  doctor   -> checks runtime, config, workspace, and Engram health",
     "  init     -> creates learning-context.config.json with safe defaults",
+    "  ingest-security -> converts Prowler findings JSON into LCS chunk JSON",
     "  select   -> ranks and selects high-value context chunks",
     "  teach    -> builds a teaching packet (with automatic recall by default)",
     "  readme   -> generates a learning README from selected context",
@@ -525,6 +554,7 @@ export function usageText() {
     "Usage:",
     "  node src/cli.js doctor [--config <file>] [--format json|text]",
     "  node src/cli.js init [--config <file>] [--force true|false] [--format json|text]",
+    "  node src/cli.js ingest-security --input <prowler.json> [--status-filter all|non-pass|fail] [--max-findings 200] [--output <file>] [--format json|text]",
     "  node src/cli.js select [--config <file>] (--input <file> | --workspace <dir>) --focus <text> [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
     "  node src/cli.js teach [--config <file>] (--input <file> | --workspace <dir>) --task <text> --objective <text> [--changed-files a,b] [--project <name>] [--recall-query <text>] [--memory-limit 3] [--memory-type <name>] [--memory-scope <name>] [--auto-recall true|false] [--no-recall] [--strict-recall true|false] [--auto-remember true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
     "  node src/cli.js readme [--config <file>] [--workspace <dir>] [--input <file>] [--focus <text>] [--task <text>] [--objective <text>] [--title <text>] [--output <file>] [--format json|text]",
@@ -538,6 +568,7 @@ export function usageText() {
     "Notes:",
     "  doctor validates Node.js, Git, config, workspace, and Engram availability.",
     "  init creates learning-context.config.json with stable defaults for this repo.",
+    "  ingest-security converts Prowler report JSON into chunk JSON compatible with select/teach/readme input.",
     "  --workspace scans the local repository and builds chunks automatically.",
     "  learning-context.config.json is loaded automatically when present.",
     "  readme defaults to --workspace . when no input source is provided.",

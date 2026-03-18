@@ -138,6 +138,7 @@ Si es hoy:
 - `src/learning/mentor-loop.js`: paquete pedagogico
 - `src/memory/engram-client.js`: adaptador local a Engram
 - `src/observability/metrics-store.js`: almacenamiento local de metricas de comandos y reporte agregado
+- `src/security/prowler-ingest.js`: convertidor de findings JSON de Prowler a JSON de chunks compatible con la CLI
 - `examples/typescript-backend/`: vertical real de TypeScript backend
 
 ## Prerrequisitos de instalacion

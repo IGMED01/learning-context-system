@@ -1,0 +1,35 @@
+[
+  {
+    "metadata": {
+      "Provider": "aws",
+      "CheckID": "iam_root_mfa_enabled",
+      "CheckTitle": "Root account should use MFA",
+      "Severity": {
+        "value": "critical"
+      },
+      "Risk": "Root credentials without MFA increase takeover risk.",
+      "Remediation": {
+        "Recommendation": {
+          "Text": "Enable MFA for the AWS root account."
+        }
+      }
+    },
+    "status": {
+      "value": "FAIL"
+    },
+    "resource_uid": "arn:aws:iam::123456789012:root"
+  },
+  {
+    "metadata": {
+      "Provider": "aws",
+      "CheckID": "cloudtrail_enabled",
+      "CheckTitle": "CloudTrail enabled",
+      "Severity": {
+        "value": "low"
+      }
+    },
+    "status": {
+      "value": "PASS"
+    }
+  }
+]

@@ -12,12 +12,17 @@ import {
   getObservabilityReport,
   recordCommandMetric
 } from "../observability/metrics-store.js";
+import {
+  ingestProwlerFile,
+  normalizeProwlerStatusFilter
+} from "../security/prowler-ingest.js";
 import { initProjectConfig, runProjectDoctor } from "../system/project-ops.js";
 import {
   formatDoctorResultAsText,
   formatInitResultAsText,
   formatMemoryRecallAsText,
   formatMemoryWriteAsText,
+  formatSecurityIngestAsText,
   formatSelectionAsText,
   usageText
 } from "./formatters.js";
@@ -73,7 +78,7 @@ import {
  */
 
 /**
- * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "init"} CliCommand
+ * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "init" | "ingest-security"} CliCommand
  */
 
 /**
@@ -364,7 +369,8 @@ function isSupportedCommand(command) {
     command === "remember" ||
     command === "close" ||
     command === "doctor" ||
-    command === "init"
+    command === "init" ||
+    command === "ingest-security"
   );
 }
 
@@ -620,11 +626,67 @@ export async function runCli(argv, dependencies = {}) {
     command === "readme" ||
     command === "recall" ||
     command === "remember" ||
-    command === "close"
+    command === "close" ||
+    command === "ingest-security"
       ? "text"
       : "json";
   const format =
     options.format === "json" ? "json" : options.format === "text" ? "text" : defaultFormat;
+
+  if (command === "ingest-security") {
+    const statusFilter = normalizeProwlerStatusFilter(options["status-filter"] ?? "non-pass");
+    const maxFindings = assertNumberRules(
+      numberOption(options, "max-findings", 200),
+      "max-findings",
+      {
+        min: 1,
+        integer: true
+      }
+    );
+    const ingest = await ingestProwlerFile(requireOption(options, "input"), {
+      statusFilter,
+      maxFindings
+    });
+    const chunkFile = {
+      chunks: ingest.chunks
+    };
+    const outputPath = options.output
+      ? await writeTextFile(options.output, `${serialize(chunkFile)}\n`)
+      : "";
+    const metric = buildCommandMetric("ingest-security", startedAt, {
+      selection: {
+        selectedCount: ingest.includedFindings,
+        suppressedCount: ingest.skippedFindings
+      }
+    });
+    await safeRecordCommandMetric(metric);
+    const payload = {
+      input: ingest.inputPath,
+      output: outputPath,
+      detectedFormat: ingest.detectedFormat,
+      statusFilter: ingest.statusFilter,
+      maxFindings: ingest.maxFindings,
+      totalFindings: ingest.totalFindings,
+      includedFindings: ingest.includedFindings,
+      skippedFindings: ingest.skippedFindings,
+      chunkFile,
+      observability: buildObservabilityEvent(metric)
+    };
+
+    return {
+      exitCode: 0,
+      stdout:
+        format === "text"
+          ? formatSecurityIngestAsText(payload)
+          : serializeCommandResult(
+              "ingest-security",
+              payload,
+              format,
+              loadedConfig,
+              buildRuntimeMeta(startedAt)
+            )
+    };
+  }
 
   if (command === "recall") {
     const engram = getEngramClient(options, dependencies);

@@ -28,6 +28,10 @@ import {
   redactSensitiveContent,
   shouldIgnoreSensitiveFile
 } from "../src/security/secret-redaction.js";
+import {
+  normalizeProwlerStatusFilter,
+  prowlerFindingsToChunkFile
+} from "../src/security/prowler-ingest.js";
 
 const tests = [];
 const execFile = promisify(execFileCallback);
@@ -123,7 +127,7 @@ function assertValueType(value, expectedType) {
 }
 
 /**
- * @param {"doctor" | "teach"} name
+ * @param {"doctor" | "teach" | "ingest-security"} name
  */
 async function loadContractFixture(name) {
   const fixturePath = path.join(
@@ -968,13 +972,14 @@ run("project config parses security policy overrides", () => {
   assert.deepEqual(parsed.scan.ignoreDirs, [".cache", "vendor-cache"]);
 });
 
-run("cli help documents all supported commands including doctor and init", async () => {
+run("cli help documents all supported commands including doctor init and ingest-security", async () => {
   const result = await runCli(["help"]);
 
   assert.equal(result.exitCode, 0);
   for (const command of [
     "doctor",
     "init",
+    "ingest-security",
     "select",
     "teach",
     "readme",
@@ -988,6 +993,10 @@ run("cli help documents all supported commands including doctor and init", async
   assert.match(
     result.stdout,
     /init\s+-> creates learning-context\.config\.json with safe defaults/
+  );
+  assert.match(
+    result.stdout,
+    /ingest-security\s+-> converts Prowler findings JSON into LCS chunk JSON/
   );
 });
 
@@ -1105,6 +1114,145 @@ run("cli doctor emits runtime metadata in json mode", async () => {
   assert.equal(parsed.observability.schemaVersion, "1.0.0");
   assert.equal(typeof parsed.observability.recall.hitRate, "number");
   assert.ok(parsed.checks.length >= 1);
+});
+
+run("prowler status filter validator rejects unsupported values", () => {
+  assert.throws(() => normalizeProwlerStatusFilter("maybe"), /must be one of/);
+});
+
+run("prowler findings converter maps fail findings to chunk format", () => {
+  const converted = prowlerFindingsToChunkFile(
+    [
+      {
+        metadata: {
+          Provider: "aws",
+          CheckID: "s3_bucket_public_access_block",
+          CheckTitle: "S3 bucket public access must be blocked",
+          Severity: {
+            value: "high"
+          },
+          Risk: "Public access could leak data.",
+          Remediation: {
+            Recommendation: {
+              Text: "Enable S3 block public access."
+            }
+          }
+        },
+        resource_uid: "arn:aws:s3:::prod-bucket",
+        status: {
+          value: "FAIL"
+        }
+      },
+      {
+        metadata: {
+          Provider: "aws",
+          CheckID: "cloudtrail_enabled",
+          CheckTitle: "CloudTrail should be enabled",
+          Severity: {
+            value: "low"
+          }
+        },
+        status: {
+          value: "PASS"
+        }
+      }
+    ],
+    {
+      statusFilter: "non-pass"
+    }
+  );
+
+  assert.equal(converted.totalFindings, 2);
+  assert.equal(converted.includedFindings, 1);
+  assert.equal(converted.skippedFindings, 1);
+  assert.equal(converted.chunks[0].kind, "spec");
+  assert.match(converted.chunks[0].content, /Remediation:/);
+  assert.match(converted.chunks[0].source, /security:\/\/prowler\//);
+});
+
+run("cli ingest-security emits a stable JSON contract and writes chunk output", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-prowler-ingest-"));
+  const inputPath = path.join(tempRoot, "prowler-findings.json");
+  const outputPath = path.join(tempRoot, "security-chunks.json");
+
+  try {
+    await writeFile(
+      inputPath,
+      JSON.stringify(
+        [
+          {
+            metadata: {
+              Provider: "aws",
+              CheckID: "iam_root_mfa_enabled",
+              CheckTitle: "Root account should use MFA",
+              Severity: {
+                value: "critical"
+              },
+              Risk: "Root credentials without MFA increase takeover risk.",
+              Remediation: {
+                Recommendation: {
+                  Text: "Enable MFA for the AWS root account."
+                }
+              }
+            },
+            status: {
+              value: "FAIL"
+            },
+            resource_uid: "arn:aws:iam::123456789012:root"
+          },
+          {
+            metadata: {
+              Provider: "aws",
+              CheckID: "cloudtrail_enabled",
+              CheckTitle: "CloudTrail enabled",
+              Severity: {
+                value: "low"
+              }
+            },
+            status: {
+              value: "PASS"
+            }
+          }
+        ],
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const result = await runCli([
+      "ingest-security",
+      "--input",
+      inputPath,
+      "--status-filter",
+      "non-pass",
+      "--output",
+      outputPath,
+      "--format",
+      "json"
+    ]);
+
+    const parsed = JSON.parse(result.stdout);
+    const fixture = await loadContractFixture("ingest-security");
+    assert.equal(result.exitCode, 0);
+    assertContractCompatibility(parsed, fixture, "ingest-security.v1");
+    assert.equal(parsed.schemaVersion, "1.0.0");
+    assert.equal(parsed.command, "ingest-security");
+    assert.equal(parsed.status, "ok");
+    assert.equal(parsed.totalFindings, 2);
+    assert.equal(parsed.includedFindings, 1);
+    assert.equal(parsed.skippedFindings, 1);
+    assert.equal(parsed.chunkFile.chunks.length, 1);
+    assert.match(parsed.chunkFile.chunks[0].content, /Risk:/);
+    assert.match(parsed.output, /security-chunks\.json/);
+    assert.equal(parsed.observability.event.command, "ingest-security");
+
+    const written = JSON.parse(await readFile(outputPath, "utf8"));
+    assert.equal(Array.isArray(written.chunks), true);
+    assert.equal(written.chunks.length, 1);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 });
 
 run("readme generator infers concepts and reading order", async () => {
