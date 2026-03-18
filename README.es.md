@@ -166,6 +166,7 @@ npm run build
 npm run benchmark
 npm run benchmark:recall
 npm run benchmark:vertical
+npm run security:pipeline:example
 ```
 
 ## Demo principal hoy
