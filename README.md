@@ -177,6 +177,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `src/learning/mentor-loop.js`: learning packet builder
 - `src/memory/engram-client.js`: local Engram adapter for recall and durable memory writes
 - `src/observability/metrics-store.js`: local command metrics store and aggregated observability report
+- `src/security/prowler-ingest.js`: converter from Prowler findings JSON to LCS-compatible chunk JSON
 - `src/cli.js`: local CLI entrypoint
 - `skills/`: language-specific and workflow-specific teaching skills
 
@@ -362,6 +363,7 @@ That flow shows:
 ```bash
 node src/cli.js select --input examples/auth-context.json --focus "jwt middleware expired session validation" --min-score 0.25 --format text
 node src/cli.js teach --input examples/auth-context.json --task "Improve auth middleware" --objective "Teach why validation runs before route handlers" --changed-files "src/auth/middleware.ts,test/auth/middleware.test.ts" --project learning-context-system --min-score 0.25 --format text
+node src/cli.js ingest-security --input examples/prowler-findings.sample.json --status-filter non-pass --output ./security-chunks.json --format text
 node src/cli.js readme --workspace . --focus "learning context cli noise cancellation" --output README.LEARN.md --format text
 node src/cli.js recall --project learning-context-system --query "auth middleware" --type decision --scope project --limit 5 --format text
 node src/cli.js remember --title "JWT order" --content "Validation runs before route handlers." --project learning-context-system --type decision --topic architecture/auth-order --format text

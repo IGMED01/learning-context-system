@@ -7,6 +7,7 @@ The project now exposes a local CLI that reads a JSON file of context chunks and
 - a filtered context window
 - a teaching-oriented packet built on top of that filtered window
 - a generated learning README for humans
+- a security-ingest bridge from Prowler findings JSON into chunk JSON
 - a memory recall flow backed by Engram
 - a durable memory write flow backed by Engram
 
@@ -22,8 +23,9 @@ With the CLI, the workflow becomes:
 4. inspect the chosen context
 5. run the teaching packet builder
 6. generate a README that tells a teammate what to learn first
-7. recall recent or historical memory from Engram
-8. save durable learnings back into Engram
+7. optionally ingest Prowler findings into chunk format for security-focused teaching
+8. recall recent or historical memory from Engram
+9. save durable learnings back into Engram
 
 You can now skip manual JSON for many tasks by using `--workspace .`, which scans the repository and builds chunks from local files automatically.
 
@@ -50,6 +52,7 @@ Recommended scripts:
 - `cmd /c npm.cmd run playground:teach:memory`
 - `cmd /c npm.cmd run playground:teach:memory:debug`
 - `cmd /c npm.cmd run playground:readme`
+- `cmd /c npm.cmd run ingest-security:example`
 - `cmd /c npm.cmd run playground:recall`
 - `cmd /c npm.cmd run playground:recall:debug`
 - `cmd /c npm.cmd run vertical:ts:teach`
@@ -121,6 +124,20 @@ What happens internally:
 2. it derives a stable project id from `package.json` when available
 3. it writes official defaults for selection and memory
 4. it also writes the default scan-safety policy
+
+## Command 0c: Convert Prowler findings into chunk input
+
+```bash
+node src/cli.js ingest-security --input examples/prowler-findings.sample.json --status-filter non-pass --output ./security-chunks.json --format text
+```
+
+What happens internally:
+
+1. the CLI loads a Prowler findings JSON report
+2. it detects the findings shape (`[]`, `findings[]`, `Findings[]`, or `items[]`)
+3. it filters findings by status (`all`, `non-pass`, or `fail`)
+4. it maps each finding into a chunk compatible with `select`, `teach`, and `readme`
+5. it writes `{ "chunks": [...] }` JSON when `--output` is provided
 
 ## Incremental typecheck vs build
 
@@ -437,7 +454,7 @@ When you pass `--format json`, the CLI now emits a versioned contract that inclu
 
 Compatibility policy now enforced in tests:
 
-- required v1 paths for `doctor` and `teach` live in `test/fixtures/contracts/v1/`
+- required v1 paths for `doctor`, `teach`, and `ingest-security` live in `test/fixtures/contracts/v1/`
 - `npm test` validates that those required paths and types still exist
 - adding new optional fields is allowed
 - removing/renaming required fields requires a schema-version bump and fixture update
