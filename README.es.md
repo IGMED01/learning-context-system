@@ -137,6 +137,7 @@ Si es hoy:
 - `src/context/noise-canceler.js`: selector de contexto
 - `src/learning/mentor-loop.js`: paquete pedagogico
 - `src/memory/engram-client.js`: adaptador local a Engram
+- `src/observability/metrics-store.js`: almacenamiento local de metricas de comandos y reporte agregado
 - `examples/typescript-backend/`: vertical real de TypeScript backend
 
 ## Prerrequisitos de instalacion

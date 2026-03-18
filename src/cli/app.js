@@ -7,7 +7,11 @@ import { loadProjectConfig } from "../io/config-file.js";
 import { loadChunkFile } from "../io/json-file.js";
 import { writeTextFile } from "../io/text-file.js";
 import { loadWorkspaceChunks } from "../io/workspace-chunks.js";
-import { createEngramClient } from "../memory/engram-client.js";
+import { createEngramClient, searchOutputToChunks } from "../memory/engram-client.js";
+import {
+  getObservabilityReport,
+  recordCommandMetric
+} from "../observability/metrics-store.js";
 import { initProjectConfig, runProjectDoctor } from "../system/project-ops.js";
 import {
   formatDoctorResultAsText,
@@ -160,6 +164,69 @@ function buildRuntimeMeta(startedAt, options = {}) {
     debug: options.debug === true,
     scanStats: options.scanStats ?? null
   };
+}
+
+/**
+ * @param {string} command
+ * @param {number} startedAt
+ * @param {{
+ *   degraded?: boolean,
+ *   selection?: { selectedCount?: number, suppressedCount?: number },
+ *   recall?: {
+ *     attempted?: boolean,
+ *     status?: string,
+ *     recoveredChunks?: number,
+ *     selectedChunks?: number,
+ *     suppressedChunks?: number,
+ *     hit?: boolean
+ *   }
+ * }} [extras]
+ */
+function buildCommandMetric(command, startedAt, extras = {}) {
+  return {
+    command,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    degraded: extras.degraded === true,
+    selection: extras.selection ?? undefined,
+    recall: extras.recall ?? undefined
+  };
+}
+
+/**
+ * @param {ReturnType<typeof buildCommandMetric>} metric
+ */
+function buildObservabilityEvent(metric) {
+  return {
+    metricsVersion: "1.0.0",
+    event: {
+      command: metric.command,
+      durationMs: metric.durationMs,
+      degraded: metric.degraded === true
+    },
+    selection: {
+      selectedCount: metric.selection?.selectedCount ?? 0,
+      suppressedCount: metric.selection?.suppressedCount ?? 0
+    },
+    recall: {
+      attempted: metric.recall?.attempted === true,
+      status: metric.recall?.status ?? "",
+      recoveredChunks: metric.recall?.recoveredChunks ?? 0,
+      selectedChunks: metric.recall?.selectedChunks ?? 0,
+      suppressedChunks: metric.recall?.suppressedChunks ?? 0,
+      hit: metric.recall?.hit === true
+    }
+  };
+}
+
+/**
+ * @param {ReturnType<typeof buildCommandMetric>} metric
+ */
+async function safeRecordCommandMetric(metric) {
+  try {
+    await recordCommandMetric(metric);
+  } catch {
+    // observability must never break command execution
+  }
 }
 
 /**
@@ -495,13 +562,22 @@ export async function runCli(argv, dependencies = {}) {
       force: rawOptions.force === "true"
     });
     const format = rawOptions.format === "json" ? "json" : "text";
+    const metric = buildCommandMetric("init", startedAt);
+    await safeRecordCommandMetric(metric);
 
     return {
       exitCode: 0,
       stdout:
         format === "json"
           ? serialize(
-              buildCliJsonContract("init", result, buildRuntimeMeta(startedAt))
+              buildCliJsonContract(
+                "init",
+                {
+                  ...result,
+                  observability: buildObservabilityEvent(metric)
+                },
+                buildRuntimeMeta(startedAt)
+              )
             )
           : formatInitResultAsText(result)
     };
@@ -516,13 +592,18 @@ export async function runCli(argv, dependencies = {}) {
       configError: configLoadError
     });
     const format = rawOptions.format === "json" ? "json" : "text";
+    const metric = buildCommandMetric("doctor", startedAt, {
+      degraded: result.summary.fail > 0
+    });
+    await safeRecordCommandMetric(metric);
+    const observabilityReport = await getObservabilityReport();
 
     return {
       exitCode: result.summary.fail ? 1 : 0,
       stdout:
         format === "json"
           ? serialize(
-              buildCliJsonContract("doctor", result, {
+              buildCliJsonContract("doctor", { ...result, observability: observabilityReport }, {
                 status: result.summary.fail ? "error" : "ok",
                 configFound: loadedConfig.found,
                 configPath: loadedConfig.path,
@@ -599,16 +680,49 @@ export async function runCli(argv, dependencies = {}) {
       }
     }
 
+    const recoveredChunks =
+      query && result.stdout
+        ? searchOutputToChunks(result.stdout, { query, project }).length
+        : 0;
+    const recallStatus = degraded
+      ? "failed-degraded"
+      : query
+        ? recoveredChunks > 0
+          ? "recalled"
+          : "empty"
+        : "context";
+    const metric = buildCommandMetric("recall", startedAt, {
+      degraded,
+      recall: {
+        attempted: true,
+        status: recallStatus,
+        recoveredChunks,
+        selectedChunks: 0,
+        suppressedChunks: 0,
+        hit: query ? recoveredChunks > 0 : Boolean(result.stdout?.trim())
+      }
+    });
+    await safeRecordCommandMetric(metric);
+
     return {
       exitCode: 0,
       stdout:
         format === "text"
           ? formatMemoryRecallAsText(result, { debug: debugEnabled })
-          : serializeCommandResult("recall", result, format, loadedConfig, {
-              degraded,
-              warnings,
-              ...buildRuntimeMeta(startedAt, { debug: debugEnabled })
-            })
+          : serializeCommandResult(
+              "recall",
+              {
+                ...result,
+                observability: buildObservabilityEvent(metric)
+              },
+              format,
+              loadedConfig,
+              {
+                degraded,
+                warnings,
+                ...buildRuntimeMeta(startedAt, { debug: debugEnabled })
+              }
+            )
     };
   }
 
@@ -622,13 +736,24 @@ export async function runCli(argv, dependencies = {}) {
       scope: options.scope ?? "project",
       topic: options.topic
     });
+    const metric = buildCommandMetric("remember", startedAt);
+    await safeRecordCommandMetric(metric);
 
     return {
       exitCode: 0,
       stdout:
         format === "text"
           ? formatMemoryWriteAsText(result, "Memory saved")
-          : serializeCommandResult("remember", result, format, loadedConfig, buildRuntimeMeta(startedAt))
+          : serializeCommandResult(
+              "remember",
+              {
+                ...result,
+                observability: buildObservabilityEvent(metric)
+              },
+              format,
+              loadedConfig,
+              buildRuntimeMeta(startedAt)
+            )
     };
   }
 
@@ -643,13 +768,24 @@ export async function runCli(argv, dependencies = {}) {
       scope: options.scope ?? "project",
       type: options.type ?? "learning"
     });
+    const metric = buildCommandMetric("close", startedAt);
+    await safeRecordCommandMetric(metric);
 
     return {
       exitCode: 0,
       stdout:
         format === "text"
           ? formatMemoryWriteAsText(result, "Session close note saved")
-          : serializeCommandResult("close", result, format, loadedConfig, buildRuntimeMeta(startedAt))
+          : serializeCommandResult(
+              "close",
+              {
+                ...result,
+                observability: buildObservabilityEvent(metric)
+              },
+              format,
+              loadedConfig,
+              buildRuntimeMeta(startedAt)
+            )
     };
   }
 
@@ -670,6 +806,13 @@ export async function runCli(argv, dependencies = {}) {
       ...result,
       ...(stats ? { scanStats: stats } : {})
     };
+    const metric = buildCommandMetric("select", startedAt, {
+      selection: {
+        selectedCount: result.summary.selectedCount,
+        suppressedCount: result.summary.suppressedCount
+      }
+    });
+    await safeRecordCommandMetric(metric);
 
     return {
       exitCode: 0,
@@ -680,6 +823,7 @@ export async function runCli(argv, dependencies = {}) {
               "select",
               {
                 input: path,
+                observability: buildObservabilityEvent(metric),
                 ...selectionResult
               },
               format,
@@ -707,6 +851,13 @@ export async function runCli(argv, dependencies = {}) {
       minScore: numeric.minScore,
       sentenceBudget: numeric.sentenceBudget
     });
+    const metric = buildCommandMetric("readme", startedAt, {
+      selection: {
+        selectedCount: result.packet?.diagnostics?.summary?.selectedCount ?? 0,
+        suppressedCount: result.packet?.diagnostics?.summary?.suppressedCount ?? 0
+      }
+    });
+    await safeRecordCommandMetric(metric);
 
     if (options.output) {
       const writtenPath = await writeTextFile(options.output, result.markdown);
@@ -720,6 +871,7 @@ export async function runCli(argv, dependencies = {}) {
                   input: path,
                   output: writtenPath,
                   scanStats: stats ?? null,
+                  observability: buildObservabilityEvent(metric),
                   ...result
                 },
                 format,
@@ -735,13 +887,14 @@ export async function runCli(argv, dependencies = {}) {
       stdout:
         format === "json"
           ? serializeCommandResult(
-              "readme",
-              {
-                input: path,
-                scanStats: stats ?? null,
-                ...result
-              },
-              format,
+            "readme",
+            {
+              input: path,
+              scanStats: stats ?? null,
+              observability: buildObservabilityEvent(metric),
+              ...result
+            },
+            format,
               loadedConfig,
               buildRuntimeMeta(startedAt, { scanStats: stats ?? null })
             )
@@ -749,7 +902,7 @@ export async function runCli(argv, dependencies = {}) {
     };
   }
 
-  return runTeachCommand({
+  const teachResult = await runTeachCommand({
     options,
     loadedConfig,
     source: {
@@ -765,4 +918,12 @@ export async function runCli(argv, dependencies = {}) {
     serializeCommandResult,
     buildRuntimeMeta
   });
+
+  const teachMetric = buildCommandMetric("teach", startedAt, teachResult.metrics ?? {});
+  await safeRecordCommandMetric(teachMetric);
+
+  return {
+    exitCode: teachResult.exitCode,
+    stdout: teachResult.stdout
+  };
 }

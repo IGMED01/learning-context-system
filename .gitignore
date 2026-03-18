@@ -1,5 +1,6 @@
 ﻿# Local runtime and generated artifacts
 .engram/
+.lcs/
 test-output/
 README.LEARN.md
 
