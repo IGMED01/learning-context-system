@@ -14,7 +14,7 @@ El repositorio esta en estado **operativo serio** para uso open source:
 
 ## Que ya esta cerrado
 
-1. Contratos JSON estables (`schemaVersion: 1.0.0`) + tests de compatibilidad para toda la superficie JSON (`version`, `doctor`, `init`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`).
+1. Contratos JSON estables (`schemaVersion: 1.0.0`) + tests de compatibilidad para toda la superficie JSON (`version`, `doctor`, `init`, `sync-knowledge`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`).
 2. Ingesta de findings de seguridad (`ingest-security`) con gate de calidad en pipeline.
 3. Resumen automatico de pipeline de seguridad en PR con delta contra comentario previo.
 4. Logica del resumen extraida a modulo testeable (`src/ci/security-pr-summary.js`) + golden fixtures.

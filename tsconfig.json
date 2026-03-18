@@ -25,6 +25,7 @@
     "src/contracts/config-contracts.js",
     "src/contracts/config-contracts.ts",
     "src/context/noise-canceler.js",
+    "src/integrations/notion-sync.js",
     "src/io/config-file.js",
     "src/io/config-file.ts",
     "src/io/text-file.ts",

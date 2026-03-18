@@ -543,11 +543,38 @@ export function formatSecurityIngestAsText(result) {
   return lines.join("\n");
 }
 
+/**
+ * @param {{
+ *   action: string,
+ *   title: string,
+ *   project?: string,
+ *   source?: string,
+ *   tags?: string[],
+ *   parentPageId?: string,
+ *   appendedBlocks?: number,
+ *   createdAt?: string
+ * }} result
+ */
+export function formatNotionSyncAsText(result) {
+  return [
+    "Notion sync summary:",
+    `- action: ${result.action}`,
+    `- title: ${result.title}`,
+    `- project: ${result.project || "none"}`,
+    `- source: ${result.source || "lcs-cli"}`,
+    `- tags: ${(result.tags || []).join(", ") || "none"}`,
+    `- parent page id: ${result.parentPageId || "none"}`,
+    `- appended blocks: ${result.appendedBlocks ?? 0}`,
+    `- created at: ${result.createdAt || "unknown"}`
+  ].join("\n");
+}
+
 export function usageText() {
   const commandCatalog = [
     "  version  -> prints CLI version",
     "  doctor   -> checks runtime, config, workspace, and Engram health",
     "  init     -> creates learning-context.config.json with safe defaults",
+    "  sync-knowledge -> appends a durable learning note into a Notion page",
     "  ingest-security -> converts Prowler findings JSON into LCS chunk JSON",
     "  select   -> ranks and selects high-value context chunks",
     "  teach    -> builds a teaching packet (with automatic recall by default)",
@@ -565,6 +592,7 @@ export function usageText() {
     "  node src/cli.js version [--format json|text]",
     "  node src/cli.js doctor [--config <file>] [--format json|text]",
     "  node src/cli.js init [--config <file>] [--force true|false] [--format json|text]",
+    "  node src/cli.js sync-knowledge [--config <file>] --title <text> (--content <text> | --message <text>) [--project <name>] [--source <text>] [--tags a,b] [--notion-token <token>] [--notion-page-id <id>] [--format json|text]",
     "  node src/cli.js ingest-security --input <prowler.json> [--status-filter all|non-pass|fail] [--max-findings 200] [--output <file>] [--format json|text]",
     "  node src/cli.js select [--config <file>] (--input <file> | --workspace <dir>) --focus <text> [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
     "  node src/cli.js teach [--config <file>] (--input <file> | --workspace <dir>) --task <text> --objective <text> [--changed-files a,b] [--project <name>] [--recall-query <text>] [--memory-limit 3] [--memory-type <name>] [--memory-scope <name>] [--auto-recall true|false] [--no-recall] [--strict-recall true|false] [--auto-remember true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
@@ -580,6 +608,8 @@ export function usageText() {
     "  --version and -v also print the CLI version.",
     "  doctor validates Node.js, Git, config, workspace, and Engram availability.",
     "  init creates learning-context.config.json with stable defaults for this repo.",
+    "  sync-knowledge appends a heading + metadata + content paragraphs into your configured Notion page.",
+    "  sync-knowledge can read NOTION_TOKEN / NOTION_API_KEY and NOTION_PARENT_PAGE_ID from env if flags are omitted.",
     "  ingest-security converts Prowler report JSON into chunk JSON compatible with select/teach/readme input.",
     "  --workspace scans the local repository and builds chunks automatically.",
     "  learning-context.config.json is loaded automatically when present.",

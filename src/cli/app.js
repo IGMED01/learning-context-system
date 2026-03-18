@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { buildCliJsonContract } from "../contracts/cli-contracts.js";
 import { defaultProjectConfig } from "../contracts/config-contracts.js";
 import { selectContextWindow } from "../context/noise-canceler.js";
+import { createNotionSyncClient } from "../integrations/notion-sync.js";
 import { loadProjectConfig } from "../io/config-file.js";
 import { loadChunkFile } from "../io/json-file.js";
 import { writeTextFile } from "../io/text-file.js";
@@ -25,6 +26,7 @@ import {
   formatInitResultAsText,
   formatMemoryRecallAsText,
   formatMemoryWriteAsText,
+  formatNotionSyncAsText,
   formatSecurityIngestAsText,
   formatSelectionAsText,
   usageText
@@ -32,6 +34,7 @@ import {
 import { runTeachCommand } from "./teach-command.js";
 import {
   assertNumberRules,
+  listOption,
   numberOption,
   parseArgv,
   requireOption
@@ -76,12 +79,13 @@ import {
 
 /**
  * @typedef {{
- *   engramClient?: ReturnType<typeof createEngramClient>
+ *   engramClient?: ReturnType<typeof createEngramClient>,
+ *   notionClient?: ReturnType<typeof createNotionSyncClient>
  * }} AppDependencies
  */
 
 /**
- * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "init" | "ingest-security" | "version"} CliCommand
+ * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "init" | "sync-knowledge" | "ingest-security" | "version"} CliCommand
  */
 
 /**
@@ -362,6 +366,22 @@ function getEngramClient(options, dependencies) {
 
 /**
  * @param {CliOptions} options
+ * @param {AppDependencies} dependencies
+ */
+function getNotionClient(options, dependencies) {
+  if (dependencies.notionClient) {
+    return dependencies.notionClient;
+  }
+
+  return createNotionSyncClient({
+    token: options["notion-token"],
+    parentPageId: options["notion-page-id"],
+    apiBaseUrl: options["notion-api-base-url"]
+  });
+}
+
+/**
+ * @param {CliOptions} options
  * @param {string} key
  * @param {boolean} [fallback]
  */
@@ -393,6 +413,7 @@ function isSupportedCommand(command) {
     command === "close" ||
     command === "doctor" ||
     command === "init" ||
+    command === "sync-knowledge" ||
     command === "ingest-security" ||
     command === "version"
   );
@@ -680,11 +701,43 @@ export async function runCli(argv, dependencies = {}) {
     command === "recall" ||
     command === "remember" ||
     command === "close" ||
+    command === "sync-knowledge" ||
     command === "ingest-security"
       ? "text"
       : "json";
   const format =
     options.format === "json" ? "json" : options.format === "text" ? "text" : defaultFormat;
+
+  if (command === "sync-knowledge") {
+    const notion = getNotionClient(options, dependencies);
+    const result = await notion.appendKnowledgeEntry({
+      title: requireOption(options, "title"),
+      content: getContentOption(options),
+      project: options.project,
+      source: options.source,
+      tags: listOption(options, "tags")
+    });
+    const metric = buildCommandMetric("sync-knowledge", startedAt);
+    await safeRecordCommandMetric(metric);
+    const payload = {
+      ...result,
+      observability: buildObservabilityEvent(metric)
+    };
+
+    return {
+      exitCode: 0,
+      stdout:
+        format === "text"
+          ? formatNotionSyncAsText(payload)
+          : serializeCommandResult(
+              "sync-knowledge",
+              payload,
+              format,
+              loadedConfig,
+              buildRuntimeMeta(startedAt)
+            )
+    };
+  }
 
   if (command === "ingest-security") {
     const statusFilter = normalizeProwlerStatusFilter(

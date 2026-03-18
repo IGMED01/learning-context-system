@@ -178,7 +178,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `src/analysis/readme-generator.js`: generated learning README builder
 - `src/context/noise-canceler.js`: prototype signal-over-noise selector
 - `src/learning/mentor-loop.js`: learning packet builder
-- `src/memory/engram-client.js`: local Engram adapter for recall and durable memory writes
+- `src/memory/engram-client.js` / `src/memory/engram-client.ts`: local Engram adapter for recall and durable memory writes (JS runtime + TS build track)
 - `src/observability/metrics-store.js`: local command metrics store and aggregated observability report
 - `src/security/prowler-ingest.js`: converter from Prowler findings JSON to LCS-compatible chunk JSON
 - `src/cli.js`: local CLI entrypoint
@@ -301,6 +301,9 @@ Current real `.ts` migrations in `src/`:
 - `src/contracts/cli-contracts.ts`
 - `src/cli/teach-command.ts`
 - `src/memory/recall-queries.ts`
+- `src/memory/teach-recall.ts`
+- `src/memory/engram-auto-orchestrator.ts`
+- `src/memory/engram-client.ts`
 
 Compatibility note:
 
@@ -379,6 +382,7 @@ node src/cli.js readme --workspace . --focus "learning context cli noise cancell
 node src/cli.js recall --project learning-context-system --query "auth middleware" --type decision --scope project --limit 5 --format text
 node src/cli.js remember --title "JWT order" --content "Validation runs before route handlers." --project learning-context-system --type decision --topic architecture/auth-order --format text
 node src/cli.js close --summary "Integrated recall and remember commands." --learned "Context retrieval and durable memory are different layers." --next "Connect recall to the teaching flow." --project learning-context-system --format text
+node src/cli.js sync-knowledge --title "PR #39 learnings" --content "Migrated Engram adapter to TS build track." --project learning-context-system --source "pr-39" --tags "typescript,memory,engram" --notion-page-id "<page-id>" --notion-token "<token>" --format text
 ```
 
 ## Stable JSON contract
