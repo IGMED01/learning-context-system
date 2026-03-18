@@ -1012,6 +1012,23 @@ run("cli help documents all supported commands including doctor init and ingest-
   );
 });
 
+run("cli help accepts --help and -h aliases", async () => {
+  const longResult = await runCli(["--help"]);
+  const shortResult = await runCli(["-h"]);
+
+  assert.equal(longResult.exitCode, 0);
+  assert.equal(shortResult.exitCode, 0);
+  assert.match(longResult.stdout, /Commands:/);
+  assert.match(shortResult.stdout, /Commands:/);
+});
+
+run("command-level -h shows usage instead of failing positional parse", async () => {
+  const result = await runCli(["teach", "-h"]);
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /node src\/cli\.js teach/);
+});
+
 run("init creates config with a stable project id from package name", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-init-"));
 
