@@ -47,6 +47,7 @@ import {
 const DEFAULT_IGNORED_DIRS = [
   ".git",
   ".codex",
+  ".lcs",
   ".tmp",
   "node_modules",
   "dist",

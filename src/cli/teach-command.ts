@@ -121,7 +121,65 @@ function booleanOption(options: CliOptions, key: string, fallback = false): bool
   return value === "true";
 }
 
-export async function runTeachCommand(input: RunTeachCommandInput): Promise<{ exitCode: number; stdout: string }> {
+function buildTeachObservability(
+  packet: LearningPacketWithMemory,
+  durationMs: number,
+  degraded: boolean
+): {
+  metricsVersion: string;
+  event: { command: string; durationMs: number; degraded: boolean };
+  selection: { selectedCount: number; suppressedCount: number };
+  recall: {
+    attempted: boolean;
+    status: string;
+    recoveredChunks: number;
+    selectedChunks: number;
+    suppressedChunks: number;
+    hit: boolean;
+  };
+} {
+  const selectedCount = packet.diagnostics.summary?.selectedCount ?? packet.selectedContext.length;
+  const suppressedCount =
+    packet.diagnostics.summary?.suppressedCount ?? packet.suppressedContext.length;
+
+  return {
+    metricsVersion: "1.0.0",
+    event: {
+      command: "teach",
+      durationMs: Math.max(0, durationMs),
+      degraded
+    },
+    selection: {
+      selectedCount,
+      suppressedCount
+    },
+    recall: {
+      attempted: packet.memoryRecall.enabled === true,
+      status: packet.memoryRecall.status,
+      recoveredChunks: packet.memoryRecall.recoveredChunks,
+      selectedChunks: packet.memoryRecall.selectedChunks,
+      suppressedChunks: packet.memoryRecall.suppressedChunks,
+      hit: packet.memoryRecall.recoveredChunks > 0
+    }
+  };
+}
+
+export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
+  exitCode: number;
+  stdout: string;
+  metrics: {
+    degraded: boolean;
+    selection: { selectedCount: number; suppressedCount: number };
+    recall: {
+      attempted: boolean;
+      status: string;
+      recoveredChunks: number;
+      selectedChunks: number;
+      suppressedChunks: number;
+      hit: boolean;
+    };
+  };
+}> {
   const { options, loadedConfig, source, numeric, format, debugEnabled, startedAt } = input;
   const { payload, path, stats } = source;
   const dependencies = input.dependencies ?? {};
@@ -250,50 +308,57 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{ ex
     };
   }
 
+  const warnings: string[] = [];
+
+  if (packetWithMemory.memoryRecall.degraded && packetWithMemory.memoryRecall.error) {
+    warnings.push(packetWithMemory.memoryRecall.error);
+  }
+
+  if (packetWithMemory.autoMemory?.rememberError) {
+    warnings.push(`Auto remember failed: ${packetWithMemory.autoMemory.rememberError}`);
+  }
+
+  if ((packetWithMemory.autoMemory?.rememberRedactionCount ?? 0) > 0) {
+    warnings.push(
+      `Auto remember redacted ${packetWithMemory.autoMemory.rememberRedactionCount} secret fragment(s).`
+    );
+  }
+
+  if ((packetWithMemory.autoMemory?.rememberSensitivePathCount ?? 0) > 0) {
+    warnings.push(
+      `Auto remember sanitized ${packetWithMemory.autoMemory.rememberSensitivePathCount} sensitive path(s).`
+    );
+  }
+
+  const degraded =
+    packetWithMemory.memoryRecall.degraded === true ||
+    Boolean(packetWithMemory.autoMemory?.rememberError);
+  const observability = buildTeachObservability(packetWithMemory, Date.now() - startedAt, degraded);
+
   return {
     exitCode: 0,
     stdout:
       format === "text"
         ? formatLearningPacketAsText(packetWithMemory, { debug: debugEnabled })
-        : (() => {
-            const warnings: string[] = [];
-
-            if (packetWithMemory.memoryRecall.degraded && packetWithMemory.memoryRecall.error) {
-              warnings.push(packetWithMemory.memoryRecall.error);
+        : input.serializeCommandResult(
+            "teach",
+            {
+              input: path,
+              observability,
+              ...packetWithMemory
+            },
+            format,
+            loadedConfig,
+            {
+              degraded,
+              warnings,
+              ...input.buildRuntimeMeta(startedAt, { debug: debugEnabled, scanStats: stats ?? null })
             }
-
-            if (packetWithMemory.autoMemory?.rememberError) {
-              warnings.push(`Auto remember failed: ${packetWithMemory.autoMemory.rememberError}`);
-            }
-
-            if ((packetWithMemory.autoMemory?.rememberRedactionCount ?? 0) > 0) {
-              warnings.push(
-                `Auto remember redacted ${packetWithMemory.autoMemory.rememberRedactionCount} secret fragment(s).`
-              );
-            }
-
-            if ((packetWithMemory.autoMemory?.rememberSensitivePathCount ?? 0) > 0) {
-              warnings.push(
-                `Auto remember sanitized ${packetWithMemory.autoMemory.rememberSensitivePathCount} sensitive path(s).`
-              );
-            }
-
-            return input.serializeCommandResult(
-              "teach",
-              {
-                input: path,
-                ...packetWithMemory
-              },
-              format,
-              loadedConfig,
-              {
-                degraded:
-                  packetWithMemory.memoryRecall.degraded === true ||
-                  Boolean(packetWithMemory.autoMemory?.rememberError),
-                warnings,
-                ...input.buildRuntimeMeta(startedAt, { debug: debugEnabled, scanStats: stats ?? null })
-              }
-            );
-          })()
+          ),
+    metrics: {
+      degraded,
+      selection: observability.selection,
+      recall: observability.recall
+    }
   };
 }

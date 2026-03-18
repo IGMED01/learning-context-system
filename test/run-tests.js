@@ -13,6 +13,10 @@ import { loadWorkspaceChunks } from "../src/io/workspace-chunks.js";
 import { buildLearningPacket } from "../src/learning/mentor-loop.js";
 import { initProjectConfig, runProjectDoctor } from "../src/system/project-ops.js";
 import {
+  getObservabilityReport,
+  recordCommandMetric
+} from "../src/observability/metrics-store.js";
+import {
   buildCloseSummaryContent,
   createEngramClient,
   searchOutputToChunks
@@ -625,6 +629,8 @@ run("cli select workspace json exposes scan stats metadata", async () => {
   assert.equal(typeof parsed.meta.durationMs, "number");
   assert.equal(parsed.meta.scanStats.includedFiles > 0, true);
   assert.equal(parsed.meta.scanStats.discoveredFiles >= parsed.meta.scanStats.includedFiles, true);
+  assert.equal(parsed.observability.event.command, "select");
+  assert.equal(parsed.observability.selection.selectedCount >= 0, true);
 });
 
 run("cli teach returns a teaching packet summary", async () => {
@@ -1096,6 +1102,8 @@ run("cli doctor emits runtime metadata in json mode", async () => {
   assert.equal(parsed.meta.durationMs >= 0, true);
   assert.equal(typeof parsed.meta.cwd, "string");
   assert.equal(parsed.meta.cwd.length > 0, true);
+  assert.equal(parsed.observability.schemaVersion, "1.0.0");
+  assert.equal(typeof parsed.observability.recall.hitRate, "number");
   assert.ok(parsed.checks.length >= 1);
 });
 
@@ -1294,6 +1302,62 @@ run("close summary builder captures summary, learning, and next step", () => {
   assert.match(content, /Integrated Engram into the CLI/);
   assert.match(content, /durable memory are different layers/);
   assert.match(content, /Wire recall output into the teaching flow/);
+});
+
+run("observability store aggregates degraded runs and recall hit rate", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-observability-"));
+
+  try {
+    await recordCommandMetric(
+      {
+        command: "recall",
+        durationMs: 42,
+        degraded: true,
+        recall: {
+          attempted: true,
+          status: "failed-degraded",
+          recoveredChunks: 0,
+          hit: false
+        }
+      },
+      { cwd: tempRoot }
+    );
+
+    await recordCommandMetric(
+      {
+        command: "teach",
+        durationMs: 30,
+        degraded: false,
+        selection: {
+          selectedCount: 4,
+          suppressedCount: 12
+        },
+        recall: {
+          attempted: true,
+          status: "recalled",
+          recoveredChunks: 2,
+          selectedChunks: 1,
+          suppressedChunks: 0,
+          hit: true
+        }
+      },
+      { cwd: tempRoot }
+    );
+
+    const report = await getObservabilityReport({ cwd: tempRoot });
+
+    assert.equal(report.found, true);
+    assert.equal(report.totals.runs, 2);
+    assert.equal(report.totals.degradedRuns, 1);
+    assert.equal(report.recall.attempts, 2);
+    assert.equal(report.recall.hits, 1);
+    assert.equal(report.recall.hitRate, 0.5);
+    assert.equal(report.selection.selectedTotal, 4);
+    assert.equal(report.selection.suppressedTotal, 12);
+    assert.equal(report.commands.some((entry) => entry.command === "teach"), true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 });
 
 run("engram search output is converted into memory chunks", () => {
@@ -1574,6 +1638,9 @@ run("cli recall uses config defaults and emits a stable JSON contract", async ()
   assert.equal(typeof parsed.meta.durationMs, "number");
   assert.equal(typeof parsed.meta.cwd, "string");
   assert.equal(parsed.meta.cwd.length > 0, true);
+  assert.equal(parsed.observability.event.command, "recall");
+  assert.equal(typeof parsed.observability.event.durationMs, "number");
+  assert.equal(typeof parsed.observability.recall.hit, "boolean");
   assert.equal(parsed.project, "configured-project");
   assert.equal(seen.query, "auth middleware");
   assert.equal(seen.options?.project, "configured-project");
@@ -2150,6 +2217,8 @@ run("cli teach emits a stable JSON contract and marks degraded recall", async ()
   assert.equal(parsed.degraded, true);
   assert.equal(typeof parsed.meta.durationMs, "number");
   assert.equal(parsed.meta.scanStats, null);
+  assert.equal(parsed.observability.event.command, "teach");
+  assert.equal(typeof parsed.observability.recall.hit, "boolean");
   assert.equal(parsed.memoryRecall.status, "failed");
   assert.equal(parsed.memoryRecall.degraded, true);
   assert.equal(parsed.warnings.length, 1);

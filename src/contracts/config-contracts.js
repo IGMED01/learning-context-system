@@ -222,7 +222,7 @@ export function defaultProjectConfig() {
       extraSensitivePathFragments: []
     },
     scan: {
-      ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out"]
+      ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
     }
   };
 }

@@ -176,6 +176,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `src/context/noise-canceler.js`: prototype signal-over-noise selector
 - `src/learning/mentor-loop.js`: learning packet builder
 - `src/memory/engram-client.js`: local Engram adapter for recall and durable memory writes
+- `src/observability/metrics-store.js`: local command metrics store and aggregated observability report
 - `src/cli.js`: local CLI entrypoint
 - `skills/`: language-specific and workflow-specific teaching skills
 

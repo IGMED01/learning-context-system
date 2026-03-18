@@ -221,7 +221,7 @@ Example:
     "extraSensitivePathFragments": ["internal/private-fixtures"]
   },
   "scan": {
-    "ignoreDirs": [".tmp", ".cache", "tmp", ".turbo", ".next", "out"]
+    "ignoreDirs": [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
   }
 }
 ```
@@ -433,6 +433,7 @@ When you pass `--format json`, the CLI now emits a versioned contract that inclu
 - `warnings`
 - `config`
 - `meta`
+- `observability` (command metrics event and, for `doctor`, aggregated health report)
 
 Compatibility policy now enforced in tests:
 

@@ -30,6 +30,19 @@ npm.cmd run benchmark:vertical
 
 Push only when all pass.
 
+## 2b) Observability baseline check
+
+```bash
+node src/cli.js doctor --format json
+```
+
+Verify in JSON:
+
+- `observability.totals.runs`
+- `observability.totals.degradedRate`
+- `observability.recall.hitRate`
+- `observability.commands` (per-command duration/degraded trends)
+
 ## 3) Memory safety operating rules
 
 - Keep `memory.autoRecall=true` for normal teach flows.
