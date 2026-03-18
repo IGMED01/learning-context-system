@@ -161,6 +161,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `AGENTS.md`: operating contract for future agents
 - `benchmark/recall-benchmark.json`: fixed benchmark cases for durable-memory recall quality
 - `benchmark/selector-benchmark.json`: fixed benchmark cases for context selection quality
+- `CHANGELOG.md`: release history and user-visible changes
 - `CONTRIBUTING.md`: contributor rules and local validation checklist
 - `docs/context-noise-cancellation.md`: design of the context filtering system
 - `docs/benchmark.md`: benchmark method and metrics
@@ -172,6 +173,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `examples/typescript-backend/`: realistic TypeScript middleware workspace
 - `learning-context.config.json`: tracked project defaults for selection, memory, and Engram paths
 - `ROADMAP.md`: next priorities
+- `VERSIONING.md`: package/tag/release alignment policy
 - `src/analysis/readme-generator.js`: generated learning README builder
 - `src/context/noise-canceler.js`: prototype signal-over-noise selector
 - `src/learning/mentor-loop.js`: learning packet builder
@@ -342,6 +344,8 @@ To make the repository usable by others, GitHub surfaces are now explicitly wire
   - usage question
 - Pull request template with mandatory validation checklist
 - CI workflow with typecheck/build/tests/benchmarks plus secret scan gate
+- CodeQL workflow for JavaScript/TypeScript static analysis
+- Dependabot configuration for npm and GitHub Actions updates
 - Security policy in [`SECURITY.md`](SECURITY.md)
 
 ## Best demo right now

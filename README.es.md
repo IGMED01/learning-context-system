@@ -127,6 +127,7 @@ Si es hoy:
 - `README.md`: overview en ingles
 - `README.es.md`: resumen explicito en espanol
 - `AGENTS.md`: contrato operativo del proyecto
+- `CHANGELOG.md`: historial de cambios de cada release
 - `docs/repo-analysis.md`: por que se eligio Engram como referencia principal
 - `docs/context-noise-cancellation.md`: diseno del filtro de contexto
 - `docs/security-model.md`: modelo de seguridad, redaccion y limites del escaneo
@@ -134,6 +135,7 @@ Si es hoy:
 - `docs/ops-runbook.md`: checklist operativo para validacion, modo degradado y releases
 - `docs/usage.md`: como usar la CLI
 - `learning-context.config.json`: defaults versionados del proyecto
+- `VERSIONING.md`: politica para alinear version de paquete, tags y releases
 - `src/context/noise-canceler.js`: selector de contexto
 - `src/learning/mentor-loop.js`: paquete pedagogico
 - `src/memory/engram-client.js`: adaptador local a Engram
@@ -312,6 +314,8 @@ Para que el repo sea mas usable por terceros, GitHub ya tiene:
   - usage question
 - template de Pull Request con checklist de validacion
 - pipeline de CI con typecheck/build/tests/benchmarks y escaneo de secretos
+- workflow de CodeQL para analisis estatico de JavaScript/TypeScript
+- configuracion de Dependabot para npm y GitHub Actions
 - politica de seguridad en `SECURITY.md`
 
 ## Contrato JSON estable

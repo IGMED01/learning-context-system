@@ -44,6 +44,7 @@ On Windows PowerShell, use `npm.cmd` if `npm.ps1` is blocked.
 - If you change scoring or recall behavior, update or add a benchmark case.
 - If you add a new workflow, document it in `docs/usage.md`.
 - If you add a new durable pattern, save it to Engram when working locally.
+- If user-visible behavior changes, update `CHANGELOG.md` in the same PR.
 
 ## Pull request checklist
 
@@ -52,4 +53,5 @@ On Windows PowerShell, use `npm.cmd` if `npm.ps1` is blocked.
 - [ ] recall benchmark passes
 - [ ] vertical benchmark passes
 - [ ] docs updated if CLI or workflow changed
+- [ ] changelog updated for user-visible changes
 - [ ] change explains what it teaches, not only what it does
