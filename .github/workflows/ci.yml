@@ -27,11 +27,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install gitleaks CLI
+        if: matrix.node-version == 20
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b "$RUNNER_TEMP/bin" v8.24.2
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
       - name: Secret scan
         if: matrix.node-version == 20
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gitleaks version
+          gitleaks detect --source . --redact --no-banner
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
