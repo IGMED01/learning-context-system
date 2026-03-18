@@ -515,7 +515,10 @@ export function formatInitResultAsText(result) {
  *   maxFindings: number,
  *   totalFindings: number,
  *   includedFindings: number,
- *   skippedFindings: number
+ *   discardedFindings?: number,
+ *   skippedFindings: number,
+ *   redactedFindings?: number,
+ *   redactionCountTotal?: number
  * }} result
  */
 export function formatSecurityIngestAsText(result) {
@@ -528,8 +531,14 @@ export function formatSecurityIngestAsText(result) {
     `- max findings: ${result.maxFindings}`,
     `- total findings: ${result.totalFindings}`,
     `- included findings: ${result.includedFindings}`,
+    `- discarded findings: ${result.discardedFindings ?? 0}`,
     `- skipped findings: ${result.skippedFindings}`
   ];
+
+  if ((result.redactedFindings ?? 0) > 0 || (result.redactionCountTotal ?? 0) > 0) {
+    lines.push(`- redacted findings: ${result.redactedFindings ?? 0}`);
+    lines.push(`- redaction count: ${result.redactionCountTotal ?? 0}`);
+  }
 
   return lines.join("\n");
 }

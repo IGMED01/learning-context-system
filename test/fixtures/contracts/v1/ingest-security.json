@@ -27,7 +27,10 @@
     "maxFindings",
     "totalFindings",
     "includedFindings",
+    "discardedFindings",
     "skippedFindings",
+    "redactedFindings",
+    "redactionCountTotal",
     "chunkFile",
     "chunkFile.chunks"
   ],
@@ -59,7 +62,10 @@
     "maxFindings": "number",
     "totalFindings": "number",
     "includedFindings": "number",
+    "discardedFindings": "number",
     "skippedFindings": "number",
+    "redactedFindings": "number",
+    "redactionCountTotal": "number",
     "chunkFile": "object",
     "chunkFile.chunks": "array"
   },

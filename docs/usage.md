@@ -138,6 +138,7 @@ What happens internally:
 3. it filters findings by status (`all`, `non-pass`, or `fail`)
 4. it maps each finding into a chunk compatible with `select`, `teach`, and `readme`
 5. it writes `{ "chunks": [...] }` JSON when `--output` is provided
+6. it applies secret redaction to imported finding text to avoid carrying accidental tokens into context
 
 ## Incremental typecheck vs build
 
