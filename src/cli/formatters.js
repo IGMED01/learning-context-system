@@ -545,6 +545,7 @@ export function formatSecurityIngestAsText(result) {
 
 export function usageText() {
   const commandCatalog = [
+    "  version  -> prints CLI version",
     "  doctor   -> checks runtime, config, workspace, and Engram health",
     "  init     -> creates learning-context.config.json with safe defaults",
     "  ingest-security -> converts Prowler findings JSON into LCS chunk JSON",
@@ -561,6 +562,7 @@ export function usageText() {
     ...commandCatalog,
     "",
     "Usage:",
+    "  node src/cli.js version [--format json|text]",
     "  node src/cli.js doctor [--config <file>] [--format json|text]",
     "  node src/cli.js init [--config <file>] [--force true|false] [--format json|text]",
     "  node src/cli.js ingest-security --input <prowler.json> [--status-filter all|non-pass|fail] [--max-findings 200] [--output <file>] [--format json|text]",
@@ -575,6 +577,7 @@ export function usageText() {
     '  { "chunks": [ { "id": "x", "source": "src/file.ts", "kind": "code", "content": "..." } ] }',
     "",
     "Notes:",
+    "  --version and -v also print the CLI version.",
     "  doctor validates Node.js, Git, config, workspace, and Engram availability.",
     "  init creates learning-context.config.json with stable defaults for this repo.",
     "  ingest-security converts Prowler report JSON into chunk JSON compatible with select/teach/readme input.",
