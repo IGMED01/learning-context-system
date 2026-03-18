@@ -101,7 +101,8 @@ For a stable cut:
 1. Ensure CI is green on `main`.
 2. Create annotated tag.
 3. Publish GitHub release.
-4. Record validation evidence in release notes.
+4. Update `CHANGELOG.md` and keep `package.json` version aligned with release SemVer core.
+5. Record validation evidence in release notes.
 
 ## 6) Branch safety
 
