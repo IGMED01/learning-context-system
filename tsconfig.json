@@ -18,6 +18,7 @@
     "src/cli/app.js",
     "src/cli/arg-parser.ts",
     "src/cli/formatters.js",
+    "src/cli/teach-command.ts",
     "src/contracts/cli-contracts.ts",
     "src/contracts/config-contracts.js",
     "src/contracts/config-contracts.ts",

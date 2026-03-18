@@ -287,6 +287,7 @@ Current real `.ts` migrations in `src/`:
 - `src/system/project-ops.ts`
 - `src/cli/arg-parser.ts`
 - `src/contracts/cli-contracts.ts`
+- `src/cli/teach-command.ts`
 
 Compatibility note:
 
@@ -333,6 +334,7 @@ To make the repository usable by others, GitHub surfaces are now explicitly wire
   - feature request
   - usage question
 - Pull request template with mandatory validation checklist
+- CI workflow with typecheck/build/tests/benchmarks plus secret scan gate
 - Security policy in [`SECURITY.md`](SECURITY.md)
 
 ## Best demo right now

@@ -1,0 +1,299 @@
+import { buildLearningPacket } from "../learning/mentor-loop.js";
+import { createEngramClient } from "../memory/engram-client.js";
+import {
+  buildTeachAutoRememberPayload,
+  resolveAutoTeachRecall
+} from "../memory/engram-auto-orchestrator.js";
+import { formatLearningPacketAsText } from "./formatters.js";
+import {
+  assertNumberRules,
+  listOption,
+  numberOption,
+  requireOption,
+  type CliOptions
+} from "./arg-parser.js";
+import type {
+  Chunk,
+  CliContractMeta,
+  LearningPacket,
+  MemoryRecallState,
+  RuntimeMeta,
+  ScanStats
+} from "../types/core-contracts.d.ts";
+import type { LoadedProjectConfig } from "../io/config-file.js";
+
+interface ChunkFile {
+  chunks: Chunk[];
+}
+
+interface RenderMemoryRecallState extends MemoryRecallState {
+  selectedChunkIds?: string[];
+  suppressedChunkIds?: string[];
+}
+
+interface LearningPacketWithMemory extends LearningPacket {
+  scanStats?: ScanStats;
+  memoryRecall: RenderMemoryRecallState;
+  autoMemory?: {
+    autoRecallEnabled: boolean;
+    autoRememberEnabled: boolean;
+    rememberAttempted: boolean;
+    rememberSaved: boolean;
+    rememberTitle: string;
+    rememberError: string;
+    rememberRedactionCount: number;
+    rememberSensitivePathCount: number;
+  };
+  debug?: {
+    selectedOrigins: Record<string, number>;
+    suppressedOrigins: Record<string, number>;
+    suppressionReasons: Record<string, number>;
+  };
+}
+
+interface NumericOptions {
+  tokenBudget: number;
+  maxChunks: number;
+  minScore: number;
+  sentenceBudget: number;
+}
+
+interface ChunkSourceResult {
+  path: string;
+  payload: ChunkFile;
+  stats?: ScanStats;
+}
+
+interface AppDependencies {
+  engramClient?: ReturnType<typeof createEngramClient>;
+}
+
+interface RunTeachCommandInput {
+  options: CliOptions;
+  loadedConfig: LoadedProjectConfig;
+  source: ChunkSourceResult;
+  numeric: NumericOptions;
+  format: "json" | "text";
+  debugEnabled: boolean;
+  startedAt: number;
+  dependencies?: AppDependencies;
+  serializeCommandResult: (
+    command: string,
+    payload: object | string,
+    format: "json" | "text",
+    configInfo: LoadedProjectConfig,
+    meta?: Partial<CliContractMeta>
+  ) => string;
+  buildRuntimeMeta: (
+    startedAt: number,
+    options?: {
+      debug?: boolean;
+      scanStats?: ScanStats | null;
+    }
+  ) => RuntimeMeta;
+}
+
+function getEngramClient(
+  options: CliOptions,
+  dependencies: AppDependencies = {}
+): ReturnType<typeof createEngramClient> {
+  if (dependencies.engramClient) {
+    return dependencies.engramClient;
+  }
+
+  return createEngramClient({
+    binaryPath: options["engram-bin"],
+    dataDir: options["engram-data-dir"]
+  });
+}
+
+function booleanOption(options: CliOptions, key: string, fallback = false): boolean {
+  const value = options[key];
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (value !== "true" && value !== "false") {
+    throw new Error(`Option --${key} must be true or false.`);
+  }
+
+  return value === "true";
+}
+
+export async function runTeachCommand(input: RunTeachCommandInput): Promise<{ exitCode: number; stdout: string }> {
+  const { options, loadedConfig, source, numeric, format, debugEnabled, startedAt } = input;
+  const { payload, path, stats } = source;
+  const dependencies = input.dependencies ?? {};
+  const task = requireOption(options, "task");
+  const objective = requireOption(options, "objective");
+  const changedFiles = listOption(options, "changed-files");
+  const focus = options.focus ?? `${task} ${objective}`;
+  const engram = getEngramClient(options, dependencies);
+  const memoryScope = options["memory-scope"] ?? "project";
+  const memoryType = options["memory-type"];
+  const noRecall = booleanOption(options, "no-recall", false);
+  const autoRecall = booleanOption(options, "auto-recall", loadedConfig.config.memory.autoRecall);
+  const strictRecall = booleanOption(
+    options,
+    "strict-recall",
+    loadedConfig.config.memory.strictRecall
+  );
+  const autoRemember = booleanOption(
+    options,
+    "auto-remember",
+    loadedConfig.config.memory.autoRemember
+  );
+  const memoryLimit = assertNumberRules(numberOption(options, "memory-limit", 3), "memory-limit", {
+    min: 1,
+    integer: true
+  });
+  const teachChunks = await resolveAutoTeachRecall({
+    task,
+    objective,
+    focus,
+    changedFiles,
+    project: options.project,
+    explicitQuery: options["recall-query"],
+    noRecall,
+    autoRecall,
+    limit: memoryLimit,
+    scope: memoryScope,
+    type: memoryType,
+    strictRecall,
+    baseChunks: payload.chunks,
+    searchMemories: engram.searchMemories
+  });
+  const packet = buildLearningPacket({
+    task,
+    objective,
+    focus,
+    changedFiles,
+    chunks: teachChunks.chunks,
+    tokenBudget: numeric.tokenBudget,
+    maxChunks: numeric.maxChunks,
+    sentenceBudget: numeric.sentenceBudget,
+    minScore: numeric.minScore,
+    debug: debugEnabled
+  });
+  const selectedMemoryChunkIds = packet.selectedContext
+    .filter((chunk) => chunk.source.startsWith("engram://"))
+    .map((chunk) => chunk.id);
+  const suppressedMemoryChunkIds = packet.suppressedContext
+    .filter((chunk) => String(chunk.id).startsWith("engram-memory-"))
+    .map((chunk) => chunk.id);
+  const packetWithMemory = {
+    ...packet,
+    ...(stats ? { scanStats: stats } : {}),
+    memoryRecall: {
+      ...teachChunks.memoryRecall,
+      degraded: teachChunks.memoryRecall.degraded === true,
+      selectedChunks: selectedMemoryChunkIds.length,
+      suppressedChunks: suppressedMemoryChunkIds.length,
+      ...(debugEnabled
+        ? {
+            selectedChunkIds: selectedMemoryChunkIds,
+            suppressedChunkIds: suppressedMemoryChunkIds
+          }
+        : {})
+    }
+  } as LearningPacketWithMemory;
+  packetWithMemory.autoMemory = {
+    autoRecallEnabled: teachChunks.autoRecallEnabled === true,
+    autoRememberEnabled: autoRemember,
+    rememberAttempted: false,
+    rememberSaved: false,
+    rememberTitle: "",
+    rememberError: "",
+    rememberRedactionCount: 0,
+    rememberSensitivePathCount: 0
+  };
+
+  if (autoRemember) {
+    packetWithMemory.autoMemory.rememberAttempted = true;
+
+    try {
+      const rememberInput = buildTeachAutoRememberPayload({
+        task,
+        objective,
+        changedFiles,
+        selectedSources: packet.selectedContext.map((chunk) => chunk.source),
+        project: options.project,
+        recallState: packetWithMemory.memoryRecall,
+        memoryType,
+        memoryScope,
+        security: loadedConfig.config.security
+      });
+      packetWithMemory.autoMemory.rememberRedactionCount = rememberInput.security.redactionCount;
+      packetWithMemory.autoMemory.rememberSensitivePathCount =
+        rememberInput.security.sensitivePathCount;
+      await engram.saveMemory({
+        title: rememberInput.title,
+        content: rememberInput.content,
+        type: rememberInput.type,
+        scope: rememberInput.scope,
+        project: rememberInput.project
+      });
+      packetWithMemory.autoMemory.rememberSaved = true;
+      packetWithMemory.autoMemory.rememberTitle = rememberInput.title;
+    } catch (error) {
+      packetWithMemory.autoMemory.rememberError =
+        error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  if (debugEnabled) {
+    packetWithMemory.debug = {
+      selectedOrigins: packet.diagnostics.summary?.selectedOrigins ?? {},
+      suppressedOrigins: packet.diagnostics.summary?.suppressedOrigins ?? {},
+      suppressionReasons: packet.diagnostics.summary?.suppressionReasons ?? {}
+    };
+  }
+
+  return {
+    exitCode: 0,
+    stdout:
+      format === "text"
+        ? formatLearningPacketAsText(packetWithMemory, { debug: debugEnabled })
+        : (() => {
+            const warnings: string[] = [];
+
+            if (packetWithMemory.memoryRecall.degraded && packetWithMemory.memoryRecall.error) {
+              warnings.push(packetWithMemory.memoryRecall.error);
+            }
+
+            if (packetWithMemory.autoMemory?.rememberError) {
+              warnings.push(`Auto remember failed: ${packetWithMemory.autoMemory.rememberError}`);
+            }
+
+            if ((packetWithMemory.autoMemory?.rememberRedactionCount ?? 0) > 0) {
+              warnings.push(
+                `Auto remember redacted ${packetWithMemory.autoMemory.rememberRedactionCount} secret fragment(s).`
+              );
+            }
+
+            if ((packetWithMemory.autoMemory?.rememberSensitivePathCount ?? 0) > 0) {
+              warnings.push(
+                `Auto remember sanitized ${packetWithMemory.autoMemory.rememberSensitivePathCount} sensitive path(s).`
+              );
+            }
+
+            return input.serializeCommandResult(
+              "teach",
+              {
+                input: path,
+                ...packetWithMemory
+              },
+              format,
+              loadedConfig,
+              {
+                degraded:
+                  packetWithMemory.memoryRecall.degraded === true ||
+                  Boolean(packetWithMemory.autoMemory?.rememberError),
+                warnings,
+                ...input.buildRuntimeMeta(startedAt, { debug: debugEnabled, scanStats: stats ?? null })
+              }
+            );
+          })()
+  };
+}

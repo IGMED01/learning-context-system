@@ -257,6 +257,7 @@ Migraciones reales actuales a `.ts` dentro de `src/`:
 - `src/system/project-ops.ts`
 - `src/cli/arg-parser.ts`
 - `src/contracts/cli-contracts.ts`
+- `src/cli/teach-command.ts`
 
 Nota de compatibilidad:
 
@@ -303,6 +304,7 @@ Para que el repo sea mas usable por terceros, GitHub ya tiene:
   - feature request
   - usage question
 - template de Pull Request con checklist de validacion
+- pipeline de CI con typecheck/build/tests/benchmarks y escaneo de secretos
 - politica de seguridad en `SECURITY.md`
 
 ## Contrato JSON estable

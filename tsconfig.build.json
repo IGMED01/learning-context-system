@@ -16,6 +16,7 @@
   ],
   "exclude": [
     "src/cli/arg-parser.js",
+    "src/cli/teach-command.js",
     "src/contracts/config-contracts.js",
     "src/contracts/cli-contracts.js",
     "src/io/config-file.js",
