@@ -989,6 +989,7 @@ run("cli help documents all supported commands including doctor init and ingest-
 
   assert.equal(result.exitCode, 0);
   for (const command of [
+    "version",
     "doctor",
     "init",
     "ingest-security",
@@ -1010,6 +1011,7 @@ run("cli help documents all supported commands including doctor init and ingest-
     result.stdout,
     /ingest-security\s+-> converts Prowler findings JSON into LCS chunk JSON/
   );
+  assert.match(result.stdout, /version\s+-> prints CLI version/);
 });
 
 run("cli help accepts --help and -h aliases", async () => {
@@ -1027,6 +1029,35 @@ run("command-level -h shows usage instead of failing positional parse", async ()
 
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout, /node src\/cli\.js teach/);
+});
+
+run("cli version command and aliases return the package version", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  const expectedVersion = packageJson.version;
+
+  const commandResult = await runCli(["version"]);
+  const longAliasResult = await runCli(["--version"]);
+  const shortAliasResult = await runCli(["-v"]);
+
+  assert.equal(commandResult.exitCode, 0);
+  assert.equal(longAliasResult.exitCode, 0);
+  assert.equal(shortAliasResult.exitCode, 0);
+  assert.equal(commandResult.stdout, `learning-context-system ${expectedVersion}`);
+  assert.equal(longAliasResult.stdout, `learning-context-system ${expectedVersion}`);
+  assert.equal(shortAliasResult.stdout, `learning-context-system ${expectedVersion}`);
+});
+
+run("cli version supports json format", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  const expectedVersion = packageJson.version;
+  const result = await runCli(["version", "--format", "json"]);
+  const parsed = JSON.parse(result.stdout);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(parsed.command, "version");
+  assert.equal(parsed.status, "ok");
+  assert.equal(parsed.version, expectedVersion);
+  assert.equal(parsed.degraded, false);
 });
 
 run("init creates config with a stable project id from package name", async () => {

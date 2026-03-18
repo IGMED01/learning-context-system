@@ -1,5 +1,6 @@
 ﻿// @ts-check
 
+import { readFileSync } from "node:fs";
 import { buildCliJsonContract } from "../contracts/cli-contracts.js";
 import { defaultProjectConfig } from "../contracts/config-contracts.js";
 import { selectContextWindow } from "../context/noise-canceler.js";
@@ -80,7 +81,7 @@ import {
  */
 
 /**
- * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "init" | "ingest-security"} CliCommand
+ * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "init" | "ingest-security" | "version"} CliCommand
  */
 
 /**
@@ -150,6 +151,26 @@ import {
  *   sentenceBudget: number
  * }} NumericOptions
  */
+
+/**
+ * @returns {string}
+ */
+function readCliVersion() {
+  try {
+    const raw = readFileSync(new URL("../../package.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw);
+
+    if (parsed && typeof parsed.version === "string" && parsed.version) {
+      return parsed.version;
+    }
+  } catch {
+    // no-op: unknown version fallback
+  }
+
+  return "unknown";
+}
+
+const CLI_VERSION = readCliVersion();
 
 /**
  * @param {unknown} result
@@ -372,7 +393,8 @@ function isSupportedCommand(command) {
     command === "close" ||
     command === "doctor" ||
     command === "init" ||
-    command === "ingest-security"
+    command === "ingest-security" ||
+    command === "version"
   );
 }
 
@@ -559,6 +581,29 @@ export async function runCli(argv, dependencies = {}) {
     return {
       exitCode: 0,
       stdout: usageText()
+    };
+  }
+
+  if (command === "version" || command === "--version" || command === "-v") {
+    const format = rawOptions.format === "json" ? "json" : "text";
+    const metric = buildCommandMetric("version", startedAt);
+    await safeRecordCommandMetric(metric);
+
+    return {
+      exitCode: 0,
+      stdout:
+        format === "json"
+          ? serialize(
+              buildCliJsonContract(
+                "version",
+                {
+                  version: CLI_VERSION,
+                  observability: buildObservabilityEvent(metric)
+                },
+                buildRuntimeMeta(startedAt)
+              )
+            )
+          : `learning-context-system ${CLI_VERSION}`
     };
   }
 
