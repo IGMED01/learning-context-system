@@ -501,7 +501,7 @@ function buildDegradedRecallResult(engram, input, error) {
     ? "binary-missing"
     : /etimedout|timed out|timeout|killed|sigterm/i.test(normalized)
       ? "timeout"
-      : /malformed|parse|unexpected output|invalid format/i.test(normalized)
+      : /malformed|parse|unexpected output|unexpected token|invalid format/i.test(normalized)
         ? "malformed-output"
         : "unknown";
   const fixHint =

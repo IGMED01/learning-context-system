@@ -27,6 +27,10 @@ El repositorio esta en estado **operativo serio** para uso open source:
    - checks requeridos en `main`: `validate (20)`, `validate (22)`, `CodeQL`
    - runtime Node24 forzado para acciones JS
    - gitleaks action reemplazada por gitleaks CLI
+7. Confiabilidad Engram cerrada para baseline de produccion:
+   - clasificacion degradada validada para `binary-missing`, `timeout` y `malformed-output`
+   - retry/backoff deterministico en `teach` cubierto por tests
+   - matriz de recuperacion documentada en `docs/ops-runbook.md`
 
 ## Snapshot final de hoy
 
@@ -35,6 +39,7 @@ El repositorio esta en estado **operativo serio** para uso open source:
 - Sin issues abiertas.
 - Pipeline en verde en `main`.
 - Metadatos de portada actualizados (homepage + topics).
+- Matriz de readiness actualizada: bloqueantes base cerrados para reclamo inicial de produccion OSS.
 
 ## Checklist de manana (arranque rapido)
 

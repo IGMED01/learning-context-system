@@ -2547,6 +2547,47 @@ run("cli recall degraded mode classifies timeout failures", async () => {
   assert.match(parsed.fixHint, /retry/i);
 });
 
+run("cli recall degraded mode classifies malformed provider output", async () => {
+  const fakeClient = {
+    config: {
+      dataDir: ".engram"
+    },
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async searchMemories() {
+      throw new Error("Unexpected token } in JSON at position 12");
+    },
+    async saveMemory() {
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  const result = await runCli(
+    [
+      "recall",
+      "--query",
+      "auth middleware",
+      "--degraded-recall",
+      "true",
+      "--format",
+      "json"
+    ],
+    {
+      engramClient: fakeClient
+    }
+  );
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.equal(parsed.degraded, true);
+  assert.equal(parsed.failureKind, "malformed-output");
+  assert.match(parsed.fixHint, /doctor/i);
+});
+
 run("cli recall degraded mode classifies missing binary in real subprocess path", async () => {
   const result = await runCli([
     "recall",

@@ -8,6 +8,7 @@ Move the project from "strong demo" to "production-grade open-source CLI" with e
 
 1. **Stable contract policy (JSON + CLI)**
    - Problem: outputs can still drift between iterations.
+   - Status (2026-03-18): **done** (v1 fixtures + compatibility tests for all JSON commands, versioning policy, changelog contracts section)
    - Done when:
      - every command contract has versioned schema tests
      - compatibility policy is documented (`major/minor/patch` impact)
@@ -15,7 +16,7 @@ Move the project from "strong demo" to "production-grade open-source CLI" with e
 
 2. **Real Engram E2E reliability (happy path + failures)**
    - Problem: production depends on Engram availability and degraded behavior quality.
-   - Status (2026-03-18): **in progress** (failure matrix + degraded tests + deterministic teach retry/backoff added)
+   - Status (2026-03-18): **done** (failure matrix + degraded classifications for `binary-missing`/`timeout`/`malformed-output` + deterministic teach retry/backoff + strict recall behavior tests)
    - Done when:
      - E2E tests cover binary missing, timeout, malformed output, degraded recall fallback
      - retry/backoff behavior is deterministic and tested
@@ -23,6 +24,7 @@ Move the project from "strong demo" to "production-grade open-source CLI" with e
 
 3. **Workspace scan hardening by policy**
    - Problem: local noise can pollute ranking if not excluded by default.
+   - Status (2026-03-18): **done** (default ignored dirs, configurable scan policy, regression tests for noisy folders)
    - Done when:
      - default ignores include temp/cache/build artifacts
      - ignore/include policy is configurable and validated
@@ -30,6 +32,7 @@ Move the project from "strong demo" to "production-grade open-source CLI" with e
 
 4. **Observability baseline**
    - Problem: no operational SLO visibility yet.
+   - Status (2026-03-18): **done** (metrics store + doctor JSON health report + tests for degraded/hit-rate aggregation)
    - Done when:
      - run-time metrics are emitted (duration, selected/suppressed, degraded mode usage, recall hit rate)
      - metrics are documented and stable
@@ -37,7 +40,7 @@ Move the project from "strong demo" to "production-grade open-source CLI" with e
 
 5. **Release discipline and governance**
    - Problem: repo is stable but process is not fully hardened.
-   - Status (2026-03-18): **in progress** (CI release-discipline gate + policy docs + branch protection active)
+   - Status (2026-03-18): **done (baseline)** (CI `release:check`, release checklist in `VERSIONING.md`, branch protection with required review/checks)
    - Done when:
      - semantic versioning + changelog gate in CI
      - release checklist is mandatory and versioned

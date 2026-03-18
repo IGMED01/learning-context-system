@@ -93,6 +93,7 @@ If Engram is unavailable:
 Validation notes:
 
 - CI tests now assert contract-safe degraded behavior for missing binary and timeout classification.
+- CI tests now also assert degraded `malformed-output` classification for parse/format failures.
 - CI tests assert deterministic retry/backoff behavior for transient `teach` recall failures.
 - CI tests also assert strict recall throws instead of silently degrading.
 
