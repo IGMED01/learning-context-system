@@ -56,6 +56,11 @@ Expected:
 - in CI, artifacts are uploaded per Node version:
   - `security-chunks.json`
   - `security-teach.json`
+- on pull requests (Node 20 lane), CI updates a PR comment summary with:
+  - included findings
+  - selected teach chunks
+  - max finding priority
+  - gate status (`PASS`/`FAIL`)
 
 ## 3) Memory safety operating rules
 
