@@ -278,6 +278,8 @@ Current real `.ts` migrations in `src/`:
 
 - `src/security/secret-redaction.ts`
 - `src/io/text-file.ts`
+- `src/contracts/config-contracts.ts`
+- `src/io/config-file.ts`
 
 Compatibility note:
 
