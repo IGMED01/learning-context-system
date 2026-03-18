@@ -9,6 +9,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Contracts
 - Added v1 compatibility fixtures/tests for all JSON CLI commands (`version`, `doctor`, `init`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`).
+- Added degraded recall contract coverage for `malformed-output` classification in `recall --format json`.
 - No breaking JSON contract change.
 
 ## [0.2.1] - 2026-03-18
