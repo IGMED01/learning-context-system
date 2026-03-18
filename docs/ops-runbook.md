@@ -60,6 +60,7 @@ Expected:
   - included findings
   - selected teach chunks
   - max finding priority
+  - delta vs previous CI comment (same PR)
   - gate status (`PASS`/`FAIL`)
 
 ## 3) Memory safety operating rules
