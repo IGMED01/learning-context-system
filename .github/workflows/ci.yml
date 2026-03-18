@@ -37,9 +37,24 @@ jobs:
 
       - name: Secret scan
         if: matrix.node-version == 20
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PUSH_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           gitleaks version
-          gitleaks detect --source . --redact --no-banner
+          if [[ "$EVENT_NAME" == "pull_request" && -n "$PR_BASE_SHA" && -n "$PR_HEAD_SHA" ]]; then
+            RANGE="$PR_BASE_SHA..$PR_HEAD_SHA"
+          elif [[ -n "$BEFORE_SHA" && "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+            RANGE="$BEFORE_SHA..$PUSH_SHA"
+          else
+            RANGE="$PUSH_SHA"
+          fi
+
+          echo "Scanning git range: $RANGE"
+          gitleaks git --log-opts="$RANGE" --redact --no-banner
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
