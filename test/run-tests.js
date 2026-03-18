@@ -23,6 +23,11 @@ import {
 } from "../src/memory/engram-client.js";
 import { buildTeachRecallQueries } from "../src/memory/recall-queries.js";
 import { resolveTeachRecall } from "../src/memory/teach-recall.js";
+import {
+  buildKnowledgeBlocks,
+  createNotionSyncClient,
+  resolveNotionConfig
+} from "../src/integrations/notion-sync.js";
 import { compressContent, selectContextWindow } from "../src/context/noise-canceler.js";
 import {
   redactSensitiveContent,
@@ -228,6 +233,7 @@ const JSON_CONTRACT_COMMANDS = [
   "version",
   "doctor",
   "init",
+  "sync-knowledge",
   "ingest-security",
   "select",
   "teach",
@@ -1015,7 +1021,7 @@ run("v1 contract fixture exists for every JSON CLI command", async () => {
   }
 });
 
-run("cli help documents all supported commands including doctor init and ingest-security", async () => {
+run("cli help documents all supported commands including doctor init sync-knowledge and ingest-security", async () => {
   const result = await runCli(["help"]);
 
   assert.equal(result.exitCode, 0);
@@ -1023,6 +1029,7 @@ run("cli help documents all supported commands including doctor init and ingest-
     "version",
     "doctor",
     "init",
+    "sync-knowledge",
     "ingest-security",
     "select",
     "teach",
@@ -1037,6 +1044,10 @@ run("cli help documents all supported commands including doctor init and ingest-
   assert.match(
     result.stdout,
     /init\s+-> creates learning-context\.config\.json with safe defaults/
+  );
+  assert.match(
+    result.stdout,
+    /sync-knowledge\s+-> appends a durable learning note into a Notion page/
   );
   assert.match(
     result.stdout,
@@ -2056,6 +2067,83 @@ run("close summary builder captures summary, learning, and next step", () => {
   assert.match(content, /Wire recall output into the teaching flow/);
 });
 
+run("notion config resolver uses explicit options over env defaults", () => {
+  const config = resolveNotionConfig({
+    token: "test-token",
+    parentPageId: "page-123",
+    apiBaseUrl: "https://api.notion.com/v1/"
+  });
+
+  assert.equal(config.token, "test-token");
+  assert.equal(config.parentPageId, "page-123");
+  assert.equal(config.apiBaseUrl, "https://api.notion.com/v1");
+});
+
+run("knowledge block builder includes metadata summary and tags", () => {
+  const built = buildKnowledgeBlocks(
+    "CLI rollout",
+    {
+      project: "learning-context-system",
+      source: "pr-39",
+      tags: ["memory", "notion"]
+    },
+    "2026-03-18T21:00:00.000Z"
+  );
+
+  assert.equal(Array.isArray(built.blocks), true);
+  assert.equal(built.blocks.length >= 2, true);
+  assert.deepEqual(built.tags, ["memory", "notion"]);
+});
+
+run("notion client appends a knowledge entry through block children API", async () => {
+  /** @type {Array<{ url: string, init: RequestInit | undefined }>} */
+  const calls = [];
+  const client = createNotionSyncClient({
+    token: "token-123",
+    parentPageId: "page-abc",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async text() {
+          return JSON.stringify({ object: "list", results: [] });
+        }
+      };
+    }
+  });
+  const result = await client.appendKnowledgeEntry({
+    title: "PR learnings",
+    content: "We stabilized the release gate and aligned changelog semantics.",
+    project: "learning-context-system",
+    source: "manual-test",
+    tags: ["release", "governance"]
+  });
+
+  assert.equal(result.action, "append");
+  assert.equal(result.parentPageId, "page-abc");
+  assert.equal(result.appendedBlocks >= 3, true);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/blocks\/page-abc\/children$/);
+});
+
+run("notion client fails fast when required config is missing", async () => {
+  const client = createNotionSyncClient({
+    token: "",
+    parentPageId: ""
+  });
+
+  await assert.rejects(
+    () =>
+      client.appendKnowledgeEntry({
+        title: "x",
+        content: "y"
+      }),
+    /Notion token is missing/i
+  );
+});
+
 run("observability store aggregates degraded runs and recall hit rate", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-observability-"));
 
@@ -2884,6 +2972,103 @@ run("cli close emits a stable JSON contract", async () => {
   assert.equal(result.exitCode, 0);
   assertContractCompatibility(parsed, fixture, "close.v1");
   assert.equal(parsed.command, "close");
+});
+
+run("cli sync-knowledge appends a Notion entry in text mode", async () => {
+  /** @type {Array<unknown>} */
+  const calls = [];
+  const fakeNotionClient = {
+    async appendKnowledgeEntry(input) {
+      calls.push(input);
+      return {
+        action: "append",
+        title: input.title,
+        project: input.project ?? "",
+        source: input.source ?? "lcs-cli",
+        tags: input.tags ?? [],
+        parentPageId: "page-123",
+        appendedBlocks: 4,
+        createdAt: "2026-03-18T21:00:00.000Z"
+      };
+    }
+  };
+
+  const result = await runCli(
+    [
+      "sync-knowledge",
+      "--title",
+      "PR #39 learnings",
+      "--content",
+      "Migrated Engram adapter to TS build track.",
+      "--project",
+      "learning-context-system",
+      "--source",
+      "pr-39",
+      "--tags",
+      "typescript,memory,engram",
+      "--format",
+      "text"
+    ],
+    {
+      notionClient: fakeNotionClient
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(calls[0], {
+    title: "PR #39 learnings",
+    content: "Migrated Engram adapter to TS build track.",
+    project: "learning-context-system",
+    source: "pr-39",
+    tags: ["typescript", "memory", "engram"]
+  });
+  assert.match(result.stdout, /Notion sync summary/);
+  assert.match(result.stdout, /appended blocks: 4/);
+});
+
+run("cli sync-knowledge emits a stable JSON contract", async () => {
+  const fakeNotionClient = {
+    async appendKnowledgeEntry(input) {
+      return {
+        action: "append",
+        title: input.title,
+        project: input.project ?? "",
+        source: input.source ?? "lcs-cli",
+        tags: input.tags ?? [],
+        parentPageId: "page-abc",
+        appendedBlocks: 3,
+        createdAt: "2026-03-18T21:05:00.000Z"
+      };
+    }
+  };
+
+  const result = await runCli(
+    [
+      "sync-knowledge",
+      "--title",
+      "Weekly learnings",
+      "--content",
+      "Context quality and memory reliability improved.",
+      "--project",
+      "learning-context-system",
+      "--tags",
+      "weekly,learning",
+      "--format",
+      "json"
+    ],
+    {
+      notionClient: fakeNotionClient
+    }
+  );
+
+  const parsed = JSON.parse(result.stdout);
+  const fixture = await loadContractFixture("sync-knowledge");
+  assert.equal(result.exitCode, 0);
+  assertContractCompatibility(parsed, fixture, "sync-knowledge.v1");
+  assert.equal(parsed.command, "sync-knowledge");
+  assert.equal(parsed.action, "append");
+  assert.equal(parsed.parentPageId, "page-abc");
+  assert.equal(parsed.observability.event.command, "sync-knowledge");
 });
 
 run("cli teach consumes recalled Engram memory automatically", async () => {

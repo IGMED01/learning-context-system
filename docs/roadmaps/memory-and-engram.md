@@ -21,6 +21,7 @@ Use Engram as a durable memory layer while keeping this project responsible for 
 - initial runtime orchestration exists through `src/memory/engram-auto-orchestrator.js` with config-driven auto recall and optional auto remember
 - TypeScript build-track sources now mirror memory orchestration logic in `src/memory/teach-recall.ts` and `src/memory/engram-auto-orchestrator.ts`
 - Engram adapter also has a `.ts` build-track source in `src/memory/engram-client.ts`
+- Notion sync command (`sync-knowledge`) now allows exporting selected learnings to a team page without replacing Engram durability
 - auto-remember now sanitizes sensitive paths and redacts secret-like fragments before persisting
 
 ## Milestones

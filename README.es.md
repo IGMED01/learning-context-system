@@ -139,7 +139,7 @@ Si es hoy:
 - `VERSIONING.md`: politica para alinear version de paquete, tags y releases
 - `src/context/noise-canceler.js`: selector de contexto
 - `src/learning/mentor-loop.js`: paquete pedagogico
-- `src/memory/engram-client.js`: adaptador local a Engram
+- `src/memory/engram-client.js` / `src/memory/engram-client.ts`: adaptador local a Engram (runtime JS + pista de build TS)
 - `src/observability/metrics-store.js`: almacenamiento local de metricas de comandos y reporte agregado
 - `src/security/prowler-ingest.js`: convertidor de findings JSON de Prowler a JSON de chunks compatible con la CLI
 - `examples/typescript-backend/`: vertical real de TypeScript backend
@@ -271,6 +271,9 @@ Migraciones reales actuales a `.ts` dentro de `src/`:
 - `src/contracts/cli-contracts.ts`
 - `src/cli/teach-command.ts`
 - `src/memory/recall-queries.ts`
+- `src/memory/teach-recall.ts`
+- `src/memory/engram-auto-orchestrator.ts`
+- `src/memory/engram-client.ts`
 
 Nota de compatibilidad:
 

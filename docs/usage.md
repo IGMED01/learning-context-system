@@ -10,6 +10,7 @@ The project now exposes a local CLI that reads a JSON file of context chunks and
 - a security-ingest bridge from Prowler findings JSON into chunk JSON
 - a memory recall flow backed by Engram
 - a durable memory write flow backed by Engram
+- a Notion sync flow for team knowledge notes (`sync-knowledge`)
 
 ## Why a CLI matters
 
@@ -26,6 +27,7 @@ With the CLI, the workflow becomes:
 7. optionally ingest Prowler findings into chunk format for security-focused teaching
 8. recall recent or historical memory from Engram
 9. save durable learnings back into Engram
+10. optionally append a structured knowledge note into Notion for team visibility
 
 You can now skip manual JSON for many tasks by using `--workspace .`, which scans the repository and builds chunks from local files automatically.
 
@@ -397,6 +399,24 @@ What happens internally:
 3. it saves that note through Engram
 4. this is a practical session-close note, not the full MCP session lifecycle yet
 
+## Command 8: Sync a learning note to Notion
+
+```bash
+node src/cli.js sync-knowledge --title "PR #39 learnings" --content "Migrated Engram adapter to TS build track." --project learning-context-system --source "pr-39" --tags "typescript,memory,engram" --notion-page-id "<page-id>" --notion-token "<token>" --format text
+```
+
+What happens internally:
+
+1. the CLI validates title/content and reads Notion auth/page settings (flags or env)
+2. it builds a structured block payload (heading + metadata + paragraphs)
+3. it appends the blocks to your target Notion page
+4. it returns append metadata (`parentPageId`, `appendedBlocks`, `createdAt`)
+
+Environment fallback:
+
+- `NOTION_TOKEN` or `NOTION_API_KEY`
+- `NOTION_PARENT_PAGE_ID`
+
 ## Automatic memory recall during teach
 
 By default, `teach` now does a best-effort recall from Engram.
@@ -478,7 +498,7 @@ When you pass `--format json`, the CLI now emits a versioned contract that inclu
 
 Compatibility policy now enforced in tests:
 
-- required v1 paths for all JSON commands (`version`, `doctor`, `init`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`) live in `test/fixtures/contracts/v1/`
+- required v1 paths for all JSON commands (`version`, `doctor`, `init`, `sync-knowledge`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`) live in `test/fixtures/contracts/v1/`
 - `npm test` validates that those required paths and types still exist per command
 - adding new optional fields is allowed
 - removing/renaming required fields requires a schema-version bump and fixture update
