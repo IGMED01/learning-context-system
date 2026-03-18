@@ -244,6 +244,11 @@ Una migracion se considera real solo cuando se cumplen las 3 cosas:
 
 Hoy ya quedaron forzados el punto (2) y (3) con build+smoke en CI y `bin` apuntando a `dist/cli.js`.
 
+Migraciones reales actuales a `.ts` dentro de `src/`:
+
+- `src/security/secret-redaction.ts`
+- `src/io/text-file.ts`
+
 ## Privacidad y politica de escaneo
 
 El scanner del workspace no hace un volcado ciego.

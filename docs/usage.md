@@ -151,6 +151,11 @@ That is the honest migration strategy:
 
 Package distribution now points to `dist/cli.js` as executable surface, while local development can still use `src/cli.js`.
 
+Current migrated `.ts` leaf modules:
+
+- `src/security/secret-redaction.ts`
+- `src/io/text-file.ts`
+
 ## Privacy and redaction
 
 The workspace scanner now applies a simple safety policy before chunks are built:

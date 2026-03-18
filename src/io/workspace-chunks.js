@@ -9,7 +9,7 @@ import {
   redactSensitiveContent,
   resolveSecurityPolicy,
   shouldIgnoreSensitiveFile
-} from "../security/secret-redaction.js";
+} from "../security/secret-redaction.ts";
 
 /** @typedef {import("../types/core-contracts.d.ts").ChunkKind} ChunkKind */
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */

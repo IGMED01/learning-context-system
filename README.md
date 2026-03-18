@@ -274,6 +274,11 @@ In this repo, migration is considered real only when all three happen:
 
 The project now enforces step (2) and step (3) through CI build + smoke and `bin` pointing to `dist/cli.js`.
 
+Current real `.ts` migrations in `src/`:
+
+- `src/security/secret-redaction.ts`
+- `src/io/text-file.ts`
+
 ## Privacy and scan policy
 
 The workspace scanner is not a blind dump.

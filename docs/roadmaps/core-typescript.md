@@ -56,7 +56,7 @@ Move the core from "disciplined JavaScript" to "strictly typed and safer to refa
 
 ### Milestone 3 - Real `.ts` migration
 
-- move selected core files to `.ts`
+- [x] start real `.ts` migration with leaf modules (`src/security/secret-redaction.ts`, `src/io/text-file.ts`)
 - [x] add build output strategy for publishable CLI use
 - preserve current command behavior and benchmark outputs
 

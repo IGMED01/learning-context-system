@@ -6,6 +6,7 @@
     "noCheck": true,
     "outDir": "dist",
     "rootDir": "src",
+    "rewriteRelativeImportExtensions": true,
     "sourceMap": true
   },
   "include": [

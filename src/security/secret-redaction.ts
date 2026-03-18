@@ -1,27 +1,24 @@
-// @ts-check
+import type {
+  SecretRedactionBreakdown,
+  SecretRedactionResult,
+  SecurityScanStats
+} from "../types/core-contracts.d.ts";
 
-/** @typedef {import("../types/core-contracts.d.ts").SecurityScanStats} SecurityScanStats */
-/** @typedef {import("../types/core-contracts.d.ts").SecretRedactionBreakdown} SecretRedactionBreakdown */
-/** @typedef {import("../types/core-contracts.d.ts").SecretRedactionResult} SecretRedactionResult */
-/**
- * @typedef {{
- *   ignoreSensitiveFiles?: boolean,
- *   redactSensitiveContent?: boolean,
- *   ignoreGeneratedFiles?: boolean,
- *   allowSensitivePaths?: string[],
- *   extraSensitivePathFragments?: string[]
- * }} SecurityPolicyInput
- */
+export interface SecurityPolicyInput {
+  ignoreSensitiveFiles?: boolean;
+  redactSensitiveContent?: boolean;
+  ignoreGeneratedFiles?: boolean;
+  allowSensitivePaths?: string[];
+  extraSensitivePathFragments?: string[];
+}
 
-/**
- * @typedef {{
- *   ignoreSensitiveFiles: boolean,
- *   redactSensitiveContent: boolean,
- *   ignoreGeneratedFiles: boolean,
- *   allowSensitivePaths: string[],
- *   extraSensitivePathFragments: string[]
- * }} SecurityPolicy
- */
+export interface SecurityPolicy {
+  ignoreSensitiveFiles: boolean;
+  redactSensitiveContent: boolean;
+  ignoreGeneratedFiles: boolean;
+  allowSensitivePaths: string[];
+  extraSensitivePathFragments: string[];
+}
 
 const SENSITIVE_EXACT_FILENAMES = new Set([
   ".env",
@@ -86,7 +83,7 @@ const TOKEN_PATTERNS = [
 
 const JWT_LIKE_PATTERN = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._-]{10,}\.[A-Za-z0-9._-]{10,}\b/gu;
 
-const DEFAULT_SECURITY_POLICY = Object.freeze({
+const DEFAULT_SECURITY_POLICY: Readonly<SecurityPolicy> = Object.freeze({
   ignoreSensitiveFiles: true,
   redactSensitiveContent: true,
   ignoreGeneratedFiles: true,
@@ -94,10 +91,7 @@ const DEFAULT_SECURITY_POLICY = Object.freeze({
   extraSensitivePathFragments: []
 });
 
-/**
- * @returns {SecurityScanStats}
- */
-export function createSecurityScanStats() {
+export function createSecurityScanStats(): SecurityScanStats {
   return {
     ignoredSensitiveFiles: 0,
     privateBlocks: 0,
@@ -108,10 +102,7 @@ export function createSecurityScanStats() {
   };
 }
 
-/**
- * @returns {SecretRedactionBreakdown}
- */
-function createBreakdown() {
+function createBreakdown(): SecretRedactionBreakdown {
   return {
     privateBlocks: 0,
     inlineSecrets: 0,
@@ -121,18 +112,11 @@ function createBreakdown() {
   };
 }
 
-/**
- * @param {string} value
- */
-function toPosixPath(value) {
+function toPosixPath(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
-/**
- * @param {SecurityPolicyInput} [policy]
- * @returns {SecurityPolicy}
- */
-export function resolveSecurityPolicy(policy = {}) {
+export function resolveSecurityPolicy(policy: SecurityPolicyInput = {}): SecurityPolicy {
   return {
     ignoreSensitiveFiles:
       policy.ignoreSensitiveFiles ?? DEFAULT_SECURITY_POLICY.ignoreSensitiveFiles,
@@ -153,11 +137,7 @@ export function resolveSecurityPolicy(policy = {}) {
   };
 }
 
-/**
- * @param {string} source
- * @param {SecurityPolicy} policy
- */
-function isAllowlistedSensitivePath(source, policy) {
+function isAllowlistedSensitivePath(source: string, policy: SecurityPolicy): boolean {
   const normalized = toPosixPath(source).toLowerCase();
 
   return policy.allowSensitivePaths.some((candidate) => {
@@ -169,28 +149,19 @@ function isAllowlistedSensitivePath(source, policy) {
   });
 }
 
-/**
- * @param {string} source
- * @param {SecurityPolicy} policy
- */
-function matchesExtraSensitivePathFragment(source, policy) {
+function matchesExtraSensitivePathFragment(source: string, policy: SecurityPolicy): boolean {
   const normalized = toPosixPath(source).toLowerCase();
   return policy.extraSensitivePathFragments.some((fragment) => normalized.includes(fragment));
 }
 
-/**
- * @param {string} source
- * @param {SecurityPolicyInput} [policy]
- */
-export function isSensitivePathAllowlisted(source, policy) {
+export function isSensitivePathAllowlisted(
+  source: string,
+  policy?: SecurityPolicyInput
+): boolean {
   return isAllowlistedSensitivePath(source, resolveSecurityPolicy(policy));
 }
 
-/**
- * @param {string} source
- * @param {SecurityPolicyInput} [policy]
- */
-export function shouldIgnoreSensitiveFile(source, policy) {
+export function shouldIgnoreSensitiveFile(source: string, policy?: SecurityPolicyInput): boolean {
   const resolvedPolicy = resolveSecurityPolicy(policy);
 
   if (!resolvedPolicy.ignoreSensitiveFiles) {
@@ -219,10 +190,10 @@ export function shouldIgnoreSensitiveFile(source, policy) {
   return SENSITIVE_PATH_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-/**
- * @param {string} content
- */
-function redactPrivateBlocks(content) {
+function redactPrivateBlocks(content: string): {
+  content: string;
+  breakdown: SecretRedactionBreakdown;
+} {
   const breakdown = createBreakdown();
   let redacted = content;
 
@@ -236,14 +207,13 @@ function redactPrivateBlocks(content) {
   return { content: redacted, breakdown };
 }
 
-/**
- * @param {string} content
- * @param {RegExp[]} patterns
- * @param {"tokenPatterns" | "jwtLike"} kind
- * @param {string} replacement
- * @param {SecretRedactionBreakdown} breakdown
- */
-function replaceWholeMatches(content, patterns, kind, replacement, breakdown) {
+function replaceWholeMatches(
+  content: string,
+  patterns: RegExp[],
+  kind: "tokenPatterns" | "jwtLike",
+  replacement: string,
+  breakdown: SecretRedactionBreakdown
+): string {
   let redacted = content;
 
   for (const pattern of patterns) {
@@ -256,17 +226,16 @@ function replaceWholeMatches(content, patterns, kind, replacement, breakdown) {
   return redacted;
 }
 
-/**
- * @param {string} content
- * @param {RegExp[]} patterns
- * @param {"inlineSecrets" | "connectionStrings"} kind
- * @param {SecretRedactionBreakdown} breakdown
- */
-function replaceQuotedAssignments(content, patterns, kind, breakdown) {
+function replaceQuotedAssignments(
+  content: string,
+  patterns: RegExp[],
+  kind: "inlineSecrets" | "connectionStrings",
+  breakdown: SecretRedactionBreakdown
+): string {
   let redacted = content;
 
   for (const pattern of patterns) {
-    redacted = redacted.replace(pattern, (_match, prefix, _value, suffix) => {
+    redacted = redacted.replace(pattern, (_match, prefix: string, _value, suffix: string) => {
       breakdown[kind] += 1;
       return `${prefix}[REDACTED]${suffix}`;
     });
@@ -275,12 +244,7 @@ function replaceQuotedAssignments(content, patterns, kind, breakdown) {
   return redacted;
 }
 
-/**
- * @param {string} raw
- * @param {SecurityPolicyInput} [policy]
- * @returns {SecretRedactionResult}
- */
-export function redactSensitiveContent(raw, policy) {
+export function redactSensitiveContent(raw: string, policy?: SecurityPolicyInput): SecretRedactionResult {
   const resolvedPolicy = resolveSecurityPolicy(policy);
 
   if (!resolvedPolicy.redactSensitiveContent) {
