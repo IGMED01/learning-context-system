@@ -549,7 +549,13 @@ export async function runCli(argv, dependencies = {}) {
   const startedAt = Date.now();
   const { command, options: rawOptions } = parseArgv(argv);
 
-  if (!command || command === "help" || rawOptions.help === "true") {
+  if (
+    !command ||
+    command === "help" ||
+    command === "--help" ||
+    command === "-h" ||
+    rawOptions.help === "true"
+  ) {
     return {
       exitCode: 0,
       stdout: usageText()

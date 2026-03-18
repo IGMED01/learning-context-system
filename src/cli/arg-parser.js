@@ -26,6 +26,14 @@
  * @returns {ParsedOption | null}
  */
 function readValue(argv, index, token) {
+  if (token === "-h") {
+    return {
+      key: "help",
+      value: "true",
+      nextIndex: index
+    };
+  }
+
   const inline = token.match(/^--([^=]+)=(.*)$/);
 
   if (inline) {

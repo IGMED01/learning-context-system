@@ -12,6 +12,14 @@ export interface ParsedArgv {
 }
 
 function readValue(argv: string[], index: number, token: string): ParsedOption | null {
+  if (token === "-h") {
+    return {
+      key: "help",
+      value: "true",
+      nextIndex: index
+    };
+  }
+
   const inline = token.match(/^--([^=]+)=(.*)$/);
 
   if (inline) {
