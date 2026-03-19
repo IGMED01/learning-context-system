@@ -555,6 +555,54 @@ function normalizeScopePath(value) {
 }
 
 /**
+ * @param {string} value
+ */
+function compactSignal(value) {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * @param {CliCommand} command
+ * @param {CliOptions} options
+ */
+function resolveWorkspaceFocusSignal(command, options) {
+  if (command === "select") {
+    const signal = compactSignal(options.focus ?? "");
+    return {
+      signal,
+      explicit: signal.length > 0
+    };
+  }
+
+  if (command === "teach") {
+    const signal = compactSignal(
+      [options.focus, options.task, options.objective].filter(Boolean).join(" ")
+    );
+
+    return {
+      signal,
+      explicit: signal.length > 0
+    };
+  }
+
+  if (command === "readme") {
+    const signal = compactSignal(
+      [options.focus, options.task, options.objective].filter(Boolean).join(" ")
+    );
+
+    return {
+      signal,
+      explicit: signal.length > 0
+    };
+  }
+
+  return {
+    signal: "",
+    explicit: false
+  };
+}
+
+/**
  * @param {string} candidatePath
  * @param {string[]} allowedScopePaths
  */
@@ -643,6 +691,46 @@ function evaluateSafetyGate(command, options, numeric, loadedConfig) {
     if (outputPath && !isPathInScope(outputPath, allowedScopePaths)) {
       details.push(`output path '${outputPath}' is outside safety.allowedScopePaths.`);
     }
+  }
+
+  const workspaceScanMode =
+    !options.input &&
+    (Boolean(options.workspace) ||
+      command === "readme" ||
+      command === "teach" ||
+      command === "select");
+  const focusSignal = resolveWorkspaceFocusSignal(command, options);
+  const minWorkspaceFocusLength = Math.max(1, Number(safety.minWorkspaceFocusLength || 1));
+  const requireExplicitFocusForWorkspaceScan =
+    safety.requireExplicitFocusForWorkspaceScan !== false;
+
+  if (
+    workspaceScanMode &&
+    (command === "select" || command === "readme" || command === "teach")
+  ) {
+    if (requireExplicitFocusForWorkspaceScan && !focusSignal.explicit) {
+      details.push(
+        "workspace scan is blocked: add explicit --focus (or --task/--objective) to avoid low-signal full-repo scans."
+      );
+    } else if (focusSignal.signal.length > 0 && focusSignal.signal.length < minWorkspaceFocusLength) {
+      details.push(
+        `workspace scan focus is too short (${focusSignal.signal.length}); require at least ${minWorkspaceFocusLength} characters for stable selection.`
+      );
+    }
+  }
+
+  const debugEnabled = options.debug === "true";
+  const debugFocusFloor = Math.max(minWorkspaceFocusLength, 30);
+
+  if (
+    debugEnabled &&
+    workspaceScanMode &&
+    safety.blockDebugWithoutStrongFocus !== false &&
+    focusSignal.signal.length < debugFocusFloor
+  ) {
+    details.push(
+      `debug run requires stronger focus (${debugFocusFloor}+ chars) to avoid high-cost noisy traces.`
+    );
   }
 
   return {

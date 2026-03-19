@@ -39,6 +39,9 @@
   "safety": {
     "requirePlanForWrite": false,
     "allowedScopePaths": [],
-    "maxTokenBudget": 700
+    "maxTokenBudget": 700,
+    "requireExplicitFocusForWorkspaceScan": true,
+    "minWorkspaceFocusLength": 24,
+    "blockDebugWithoutStrongFocus": true
   }
 }

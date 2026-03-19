@@ -233,6 +233,7 @@ That file is the official place for:
 - memory backend defaults (`memory.backend`: `resilient`, `engram-only`, `local-only`)
 - Engram binary and data directory paths
 - scan safety defaults and per-project overrides
+- execution safety for low-signal workspace scans (`safety.requireExplicitFocusForWorkspaceScan`, `safety.minWorkspaceFocusLength`, `safety.blockDebugWithoutStrongFocus`)
 
 Cost control note: `teach` can auto-skip recall for low-signal requests (very short task/objective and no changed files). Add `--changed-files` or `--recall-query` when you want recall to run.
 

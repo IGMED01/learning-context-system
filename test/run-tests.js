@@ -1009,7 +1009,10 @@ run("project config parses security policy overrides", () => {
       safety: {
         requirePlanForWrite: true,
         allowedScopePaths: ["src/auth", "docs"],
-        maxTokenBudget: 420
+        maxTokenBudget: 420,
+        requireExplicitFocusForWorkspaceScan: false,
+        minWorkspaceFocusLength: 12,
+        blockDebugWithoutStrongFocus: false
       }
     }),
     "inline"
@@ -1027,6 +1030,9 @@ run("project config parses security policy overrides", () => {
   assert.equal(parsed.safety.requirePlanForWrite, true);
   assert.deepEqual(parsed.safety.allowedScopePaths, ["src/auth", "docs"]);
   assert.equal(parsed.safety.maxTokenBudget, 420);
+  assert.equal(parsed.safety.requireExplicitFocusForWorkspaceScan, false);
+  assert.equal(parsed.safety.minWorkspaceFocusLength, 12);
+  assert.equal(parsed.safety.blockDebugWithoutStrongFocus, false);
 });
 
 run("project config rejects unsupported memory backend values", () => {
@@ -1158,6 +1164,9 @@ run("init creates config with a stable project id from package name", async () =
     assert.equal(parsed.project, "example-learning-repo");
     assert.equal(parsed.workspace, ".");
     assert.equal(parsed.memory.backend, "resilient");
+    assert.equal(parsed.safety.requireExplicitFocusForWorkspaceScan, true);
+    assert.equal(parsed.safety.minWorkspaceFocusLength, 24);
+    assert.equal(parsed.safety.blockDebugWithoutStrongFocus, true);
     assert.equal(parsed.security.ignoreSensitiveFiles, true);
     assert.equal(parsed.security.redactSensitiveContent, true);
   } finally {
@@ -1214,6 +1223,7 @@ run("doctor reports missing dependencies as actionable warnings", async () => {
     const npmCheck = result.checks.find((check) => check.id === "npm");
     const scanSafetyCheck = result.checks.find((check) => check.id === "scan-safety");
     const taskSafetyCheck = result.checks.find((check) => check.id === "task-safety-gate");
+    const focusSafetyCheck = result.checks.find((check) => check.id === "focus-safety-gate");
     const memoryBackendCheck = result.checks.find((check) => check.id === "memory-backend");
 
     assert.ok(dependencyCheck);
@@ -1226,6 +1236,8 @@ run("doctor reports missing dependencies as actionable warnings", async () => {
     assert.ok(taskSafetyCheck);
     assert.equal(taskSafetyCheck.status, "warn");
     assert.match(taskSafetyCheck.fix, /requirePlanForWrite/i);
+    assert.ok(focusSafetyCheck);
+    assert.equal(focusSafetyCheck.status, "pass");
     assert.ok(memoryBackendCheck);
     assert.equal(memoryBackendCheck.status, "pass");
     assert.match(memoryBackendCheck.detail, /engram primary \+ local fallback/i);
@@ -3451,6 +3463,51 @@ run("cli teach can be blocked when token budget exceeds safety max", async () =>
   } finally {
     await rm(configPath, { force: true });
   }
+});
+
+run("cli readme can be blocked when workspace scan has no explicit focus signal", async () => {
+  const result = await runCli([
+    "readme",
+    "--workspace",
+    ".",
+    "--format",
+    "json"
+  ]);
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 1);
+  assert.equal(parsed.status, "error");
+  assert.equal(parsed.command, "readme");
+  assert.equal(parsed.action, "blocked");
+  assert.equal(parsed.reason, "safety-gate");
+  assert.equal(
+    parsed.details.some((detail) => /explicit --focus/i.test(detail)),
+    true
+  );
+});
+
+run("cli select debug can be blocked when focus signal is weak", async () => {
+  const result = await runCli([
+    "select",
+    "--workspace",
+    ".",
+    "--focus",
+    "auth",
+    "--debug",
+    "--format",
+    "json"
+  ]);
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 1);
+  assert.equal(parsed.status, "error");
+  assert.equal(parsed.command, "select");
+  assert.equal(parsed.action, "blocked");
+  assert.equal(parsed.reason, "safety-gate");
+  assert.equal(
+    parsed.details.some((detail) => /stronger focus/i.test(detail)),
+    true
+  );
 });
 
 run("cli remember saves a durable memory through Engram", async () => {

@@ -205,6 +205,7 @@ Ese archivo es el lugar oficial para definir:
 - modo de backend de memoria (`memory.backend`: `resilient`, `engram-only`, `local-only`)
 - rutas de Engram
 - defaults y overrides de seguridad del escaneo
+- seguridad de ejecucion para escaneos de workspace con baja senal (`safety.requireExplicitFocusForWorkspaceScan`, `safety.minWorkspaceFocusLength`, `safety.blockDebugWithoutStrongFocus`)
 
 Nota de costo: `teach` puede saltear el recall automatico cuando la senal es baja (task/objective muy cortos y sin `--changed-files`). Si queres forzar recall, agrega `--changed-files` o `--recall-query`.
 

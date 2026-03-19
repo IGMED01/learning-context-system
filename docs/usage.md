@@ -287,12 +287,17 @@ Example:
 - `safety.requirePlanForWrite`
 - `safety.allowedScopePaths`
 - `safety.maxTokenBudget`
+- `safety.requireExplicitFocusForWorkspaceScan`
+- `safety.minWorkspaceFocusLength`
+- `safety.blockDebugWithoutStrongFocus`
 
 When enabled, the CLI blocks risky runs before execution:
 
 1. write commands without explicit plan approval (`--plan-approved true`)
 2. changed/output paths outside allowed scope
 3. token budgets above `safety.maxTokenBudget`
+4. workspace scans without explicit signal (`--focus` or `--task/--objective`)
+5. debug traces on weak focus (to avoid noisy high-cost runs)
 
 Example:
 
@@ -301,7 +306,10 @@ Example:
   "safety": {
     "requirePlanForWrite": true,
     "allowedScopePaths": ["src", "docs"],
-    "maxTokenBudget": 500
+    "maxTokenBudget": 500,
+    "requireExplicitFocusForWorkspaceScan": true,
+    "minWorkspaceFocusLength": 24,
+    "blockDebugWithoutStrongFocus": true
   }
 }
 ```

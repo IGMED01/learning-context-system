@@ -50,6 +50,9 @@ export interface ProjectSafetyConfig {
   requirePlanForWrite: boolean;
   allowedScopePaths: string[];
   maxTokenBudget: number;
+  requireExplicitFocusForWorkspaceScan: boolean;
+  minWorkspaceFocusLength: number;
+  blockDebugWithoutStrongFocus: boolean;
 }
 
 export interface ProjectConfig {
@@ -185,7 +188,10 @@ export function defaultProjectConfig(): ProjectConfig {
     safety: {
       requirePlanForWrite: false,
       allowedScopePaths: [],
-      maxTokenBudget: 700
+      maxTokenBudget: 700,
+      requireExplicitFocusForWorkspaceScan: true,
+      minWorkspaceFocusLength: 24,
+      blockDebugWithoutStrongFocus: true
     }
   };
 }
@@ -345,7 +351,26 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
         optionalNumber(safety?.maxTokenBudget, "Project config.safety.maxTokenBudget", {
           min: 1,
           integer: true
-        }) ?? defaults.safety.maxTokenBudget
+        }) ?? defaults.safety.maxTokenBudget,
+      requireExplicitFocusForWorkspaceScan:
+        optionalBoolean(
+          safety?.requireExplicitFocusForWorkspaceScan,
+          "Project config.safety.requireExplicitFocusForWorkspaceScan"
+        ) ?? defaults.safety.requireExplicitFocusForWorkspaceScan,
+      minWorkspaceFocusLength:
+        optionalNumber(
+          safety?.minWorkspaceFocusLength,
+          "Project config.safety.minWorkspaceFocusLength",
+          {
+            min: 1,
+            integer: true
+          }
+        ) ?? defaults.safety.minWorkspaceFocusLength,
+      blockDebugWithoutStrongFocus:
+        optionalBoolean(
+          safety?.blockDebugWithoutStrongFocus,
+          "Project config.safety.blockDebugWithoutStrongFocus"
+        ) ?? defaults.safety.blockDebugWithoutStrongFocus
     }
   };
 }

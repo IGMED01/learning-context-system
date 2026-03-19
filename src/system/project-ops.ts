@@ -227,6 +227,21 @@ export async function runProjectDoctor(input: RunProjectDoctorInput): Promise<Do
       : "Set config.safety.requirePlanForWrite=true and define config.safety.allowedScopePaths for production workflows."
   });
 
+  const focusSafetyEnabled =
+    configInfo.config.safety.requireExplicitFocusForWorkspaceScan === true &&
+    configInfo.config.safety.minWorkspaceFocusLength >= 1;
+  checks.push({
+    id: "focus-safety-gate",
+    label: "Workspace focus safety gate",
+    status: focusSafetyEnabled ? "pass" : "warn",
+    detail: focusSafetyEnabled
+      ? `Explicit focus required for workspace scans (min length ${configInfo.config.safety.minWorkspaceFocusLength}).`
+      : "Workspace focus safety gate is relaxed.",
+    fix: focusSafetyEnabled
+      ? ""
+      : "Set config.safety.requireExplicitFocusForWorkspaceScan=true and config.safety.minWorkspaceFocusLength>=24."
+  });
+
   const memoryBackend = configInfo.config.memory.backend || "resilient";
   const engramEnabledByBackend = memoryBackend !== "local-only";
   checks.push({

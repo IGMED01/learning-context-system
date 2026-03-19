@@ -643,6 +643,7 @@ export function usageText() {
     "  teach now tries multiple smarter recall queries before giving up.",
     "  safety gate can enforce write-plan approval (--plan-approved true) and scope limits from config.safety.",
     "  safety gate can also block oversized token budgets above config.safety.maxTokenBudget.",
+    "  safety gate can require explicit focus for workspace scans and block weak-focus debug traces.",
     "  recall can return a degraded empty result when Engram is unavailable and degraded mode is enabled.",
     "  --debug exposes score signals, suppression reasons, and recall details for playground debugging.",
     "  recall without --query asks Engram for recent context.",
