@@ -313,6 +313,15 @@ export async function runTeachCommand(input) {
     warnings.push(packetWithMemory.memoryRecall.error);
   }
 
+  if (
+    packetWithMemory.memoryRecall.status === "skipped" &&
+    packetWithMemory.memoryRecall.reason === "low-signal-task"
+  ) {
+    warnings.push(
+      "Auto recall skipped: low-signal task. Add --changed-files or --recall-query to force memory recall."
+    );
+  }
+
   if (packetWithMemory.autoMemory?.rememberError) {
     warnings.push(`Auto remember failed: ${packetWithMemory.autoMemory.rememberError}`);
   }

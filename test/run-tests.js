@@ -3693,6 +3693,50 @@ run("cli teach respects config memory.autoRecall=false without requiring --no-re
   }
 });
 
+run("cli teach skips auto recall for low-signal tasks without changed files", async () => {
+  let called = false;
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async searchMemories() {
+      called = true;
+      throw new Error("not used");
+    },
+    async saveMemory() {
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  const result = await runCli(
+    [
+      "teach",
+      "--input",
+      "examples/auth-context.json",
+      "--task",
+      "Fix typo",
+      "--objective",
+      "Quick patch",
+      "--format",
+      "json"
+    ],
+    {
+      engramClient: fakeClient
+    }
+  );
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.equal(called, false);
+  assert.equal(parsed.memoryRecall.status, "skipped");
+  assert.equal(parsed.memoryRecall.reason, "low-signal-task");
+  assert.equal(parsed.autoMemory.autoRecallEnabled, false);
+  assert.equal(parsed.warnings.some((entry) => /low-signal task/i.test(entry)), true);
+});
+
 run("cli teach emits a stable JSON contract and marks degraded recall", async () => {
   const fakeClient = {
     async recallContext() {

@@ -476,6 +476,8 @@ By default, `teach` now does a best-effort recall from Engram.
 
 That default is useful for real workspace flows, but the synthetic auth playground should usually opt out with `--no-recall`.
 
+To reduce waste, `teach` auto-skips recall on low-signal tasks (very short task/objective and no `--changed-files`). If recall is important for a small task, pass `--changed-files` or `--recall-query`.
+
 It no longer depends on one raw sentence only. The CLI first derives shorter concept-heavy queries such as:
 
 - architecture terms from changed files

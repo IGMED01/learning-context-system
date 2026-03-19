@@ -232,6 +232,8 @@ That file is the official place for:
 - Engram binary and data directory paths
 - scan safety defaults and per-project overrides
 
+Cost control note: `teach` can auto-skip recall for low-signal requests (very short task/objective and no changed files). Add `--changed-files` or `--recall-query` when you want recall to run.
+
 CLI flags still win over config values when both are present.
 
 Security note: when auto-remember is enabled for `teach`, saved memory content is sanitized (sensitive paths masked, secret-like values redacted) before writing to Engram.

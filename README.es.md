@@ -204,6 +204,8 @@ Ese archivo es el lugar oficial para definir:
 - rutas de Engram
 - defaults y overrides de seguridad del escaneo
 
+Nota de costo: `teach` puede saltear el recall automatico cuando la senal es baja (task/objective muy cortos y sin `--changed-files`). Si queres forzar recall, agrega `--changed-files` o `--recall-query`.
+
 Si pasás flags en CLI, esos flags pisan el valor del config.
 
 Nota de seguridad: cuando `teach` usa auto-remember, el contenido se sanea antes de guardar en Engram (rutas sensibles enmascaradas y valores tipo secreto redactados).
