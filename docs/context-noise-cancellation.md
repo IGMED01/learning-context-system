@@ -52,17 +52,23 @@ Two chunks that say almost the same thing should not both consume the prompt bud
 
 ## Pipeline
 
-1. Normalize each chunk.
-2. Tokenize in a language-agnostic way.
-3. Score chunk utility.
-4. Sort by utility.
-5. Re-score against already selected chunks to penalize redundancy.
-6. Compress long chunks by preserving focus-rich sentences.
-7. Emit a final packet with:
-   - selected chunks
-   - suppressed chunks
-   - scoring diagnostics
-   - a teaching-oriented view of the same context
+1. Normalize and compress each chunk (sentence-level compression preserving focus-rich sentences).
+2. Tokenize once per chunk and cache tokens in `PreparedChunk.tokens` for reuse.
+3. Tokenize the focus query once and cache as `focusTokens`.
+4. Score all chunks using cached tokens (overlap, kind prior, certainty, recency, teaching value, source affinity, implementation fit, recall origin boost, minus penalties for redundancy, generic sources, narrative memory, and generic test runners).
+5. Sort by score and split into recall-ranked (engram origin) and workspace-ranked lists.
+6. **Two-pass selection with reserved recall budget**:
+   - Pass 1 (recall): select engram chunks within `recallReserveRatio` of the token budget.
+   - Pass 2 (workspace): fill remaining budget with workspace chunks.
+   - Pass 3 (overflow): give recall chunks that exceeded the reserve budget a second chance in the general budget.
+7. Re-score each candidate against already-selected chunks using cached tokens to penalize redundancy (Jaccard similarity ≥ 0.65 triggers suppression).
+8. **Bounded rebalance**: swap low-scoring recall chunks for higher-scoring workspace candidates when justified, limited to `maxChunks` iterations.
+9. Sort final selection by score (highest first).
+10. Emit a final packet with:
+    - selected chunks (with origin metadata: `engram` or `workspace`)
+    - suppressed chunks (with reason: `score-below-threshold`, `token-budget-exceeded`, `max-chunks-reached`, `generic-doc-noise`, `generic-test-noise`, `redundant-context`, `workspace-priority-over-recall`)
+    - scoring diagnostics
+    - a teaching-oriented view of the same context
 
 ## Mathematical Intuition
 
@@ -74,16 +80,21 @@ We want to improve the ratio:
 
 When that ratio increases, the model receives a denser approximation of the task distribution. The expected next-token distribution becomes less influenced by irrelevant evidence, which reduces drift.
 
-## Initial Implementation Choice
+## Current Implementation
 
-The first prototype uses plain Node.js and applies:
+Plain Node.js with no external ML dependencies. Applies:
 
-- keyword overlap scoring
-- source-type priors
-- certainty and teaching-value bonuses
-- Jaccard-style redundancy penalties
-- sentence-level compression
+- keyword overlap scoring with cached tokenization (focus tokenized once, chunk tokens cached in `PreparedChunk`)
+- source-type priors (`code > test > spec > memory > doc > chat > log`)
+- certainty, recency, and teaching-value bonuses
+- source affinity, change anchor, and implementation fit scoring
+- recall origin boost for engram-sourced chunks
+- Jaccard-style redundancy penalties (using cached tokens)
+- generic source, narrative memory, and test runner penalties
+- sentence-level compression preserving focus-rich sentences
+- two-pass selection with configurable `recallReserveRatio`
+- bounded recall↔workspace rebalance loop
 
-## Next Evolution
+## Engram Integration
 
-After this local prototype stabilizes, connect it to an `engram`-style memory layer so the selector can pull durable facts instead of depending only on the current session.
+The selector pulls durable memory from Engram when available, with resilient degraded-mode fallback to local store. Recalled chunks receive a `recallOriginBoost` during scoring and are allocated a reserved token budget via `recallReserveRatio` (default 15%). Chunk origin (`engram` or `workspace`) is always exposed in the output packet.

@@ -7,6 +7,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Performance
+- Cached `focusTokens` once per `selectContextWindow` call instead of re-tokenizing per chunk, eliminating O(n) redundant tokenizations.
+- Cached `chunkTokens` in `PreparedChunk.tokens` field and propagated through all `scoreChunk` call sites (initial ranking, incremental rescoring, rebalance) and Jaccard redundancy checks.
+- Bounded the recall↔workspace rebalance loop to `maxChunks` iterations to prevent unbounded execution.
+- Extended `Chunk` interface with optional `tokens` field and `SelectionOptions` with internal cache hints (`_cachedFocusTokens`, `_cachedChunkTokens`).
+
 ### Changed
 - Added `.ts` build-track sources for memory teach orchestration (`src/memory/teach-recall.ts`, `src/memory/engram-auto-orchestrator.ts`) and wired TypeScript configs to prefer those sources during typecheck/build.
 - Added `.ts` build-track source for Engram adapter execution/parsing (`src/memory/engram-client.ts`) and wired TypeScript configs to prefer it during typecheck/build.
