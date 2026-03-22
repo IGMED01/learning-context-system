@@ -30,6 +30,7 @@ export interface ChunkDiagnostics {
   sourcePenalty: number;
   genericRunnerPenalty: number;
   implementationFit: number;
+  recallOriginBoost: number;
   narrativePenalty: number;
   redundancy: number;
   penalty: number;

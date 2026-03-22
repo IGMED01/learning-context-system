@@ -188,6 +188,18 @@ function chunkOrigin(source = "") {
 }
 
 /**
+ * Boost for chunks that were explicitly recalled from memory.
+ * These were specifically retrieved for the task, so they deserve
+ * higher selection priority than brute-force scan discoveries.
+ *
+ * @param {string} [source]
+ * @returns {number}
+ */
+function recallBoost(source = "") {
+  return normalizeSource(source).startsWith("engram://") ? 0.12 : 0;
+}
+
+/**
  * @param {string} [source]
  * @returns {string[]}
  */
@@ -516,6 +528,7 @@ export function scoreChunk(chunk, focus, selectedChunks = [], options = {}) {
   const genericRunnerPenalty = genericTestRunnerPenalty(chunk, changedFiles);
   const narrativePenalty = narrativeMemoryPenalty(chunk);
   const implementationFit = implementationFitScore(chunk, changedFiles);
+  const recallOriginBoost = recallBoost(chunk.source);
 
   const redundancy = selectedChunks.length
     ? Math.max(
@@ -536,7 +549,8 @@ export function scoreChunk(chunk, focus, selectedChunks = [], options = {}) {
     sourceAffinity * 0.1 +
     implementationFit * 0.12 +
     changeAnchor * changeAnchorWeight +
-    relatedTestBoost * 0.04;
+    relatedTestBoost * 0.04 +
+    recallOriginBoost * 0.09;
 
   const penalty =
     redundancy * 0.22 +
@@ -562,6 +576,7 @@ export function scoreChunk(chunk, focus, selectedChunks = [], options = {}) {
       sourcePenalty,
       genericRunnerPenalty,
       implementationFit,
+      recallOriginBoost,
       narrativePenalty,
       redundancy,
       penalty
