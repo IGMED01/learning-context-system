@@ -625,6 +625,7 @@ export function selectContextWindow(chunks, options = {}) {
       score: scoreChunk(chunk, focus, [], { changedFiles }).total
     }))
     .sort((left, right) => right.score - left.score);
+  const preparedById = new Map(prepared.map((chunk) => [chunk.id, chunk]));
 
   const normalizedRecallReserveRatio = clamp(recallReserveRatio, 0, 0.5);
   const recallRanked = ranked.filter((entry) => entry.chunk.origin === "engram");
@@ -744,6 +745,90 @@ export function selectContextWindow(chunks, options = {}) {
 
   for (const entry of ranked) {
     evaluateEntry(entry, "general");
+  }
+
+  while (true) {
+    const selectedRecall = selected
+      .map((chunk, index) => ({ chunk, index }))
+      .filter((entry) => entry.chunk.origin === "engram")
+      .sort((left, right) => left.chunk.score - right.chunk.score);
+
+    const workspaceCandidates = suppressed
+      .map((chunk, index) => ({ chunk, index }))
+      .filter(
+        (entry) =>
+          entry.chunk.origin === "workspace" &&
+          (entry.chunk.reason === "max-chunks-reached" ||
+            entry.chunk.reason === "token-budget-exceeded")
+      )
+      .sort((left, right) => right.chunk.score - left.chunk.score);
+
+    const recallEntry = selectedRecall[0];
+
+    if (!recallEntry || !workspaceCandidates.length) {
+      break;
+    }
+
+    const selectedWithoutRecall = selected.filter((_, index) => index !== recallEntry.index);
+    const workspaceContextCount = selectedWithoutRecall.filter(
+      (chunk) => chunk.origin === "workspace"
+    ).length;
+    const tightImplementationWindow =
+      changedFiles.length > 0 &&
+      maxChunks <= 5 &&
+      workspaceContextCount >= Math.max(3, maxChunks - 1);
+    /** @type {{ chunk: SelectedChunk, suppressedIndex: number } | null} */
+    let replacement = null;
+
+    for (const workspaceCandidate of workspaceCandidates) {
+      const preparedCandidate = preparedById.get(workspaceCandidate.chunk.id);
+
+      if (!preparedCandidate) {
+        continue;
+      }
+
+      const rescored = scoreChunk(preparedCandidate, focus, selectedWithoutRecall, { changedFiles });
+      const candidate = {
+        ...preparedCandidate,
+        score: rescored.total,
+        diagnostics: rescored.detail
+      };
+
+      if (candidate.score < minScore) {
+        continue;
+      }
+
+      if (!tightImplementationWindow && candidate.score <= recallEntry.chunk.score) {
+        continue;
+      }
+
+      if (usedTokens - recallEntry.chunk.tokenCount + candidate.tokenCount > tokenBudget) {
+        continue;
+      }
+
+      replacement = {
+        chunk: candidate,
+        suppressedIndex: workspaceCandidate.index
+      };
+      break;
+    }
+
+    if (!replacement) {
+      break;
+    }
+
+    usedTokens = usedTokens - recallEntry.chunk.tokenCount + replacement.chunk.tokenCount;
+    selected[recallEntry.index] = replacement.chunk;
+    suppressed[replacement.suppressedIndex] = {
+      id: recallEntry.chunk.id,
+      source: recallEntry.chunk.source,
+      kind: recallEntry.chunk.kind,
+      origin: recallEntry.chunk.origin,
+      tokenCount: recallEntry.chunk.tokenCount,
+      reason: "workspace-priority-over-recall",
+      score: recallEntry.chunk.score,
+      diagnostics: recallEntry.chunk.diagnostics
+    };
   }
 
   selected.sort((left, right) => right.score - left.score);
