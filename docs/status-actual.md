@@ -1,61 +1,105 @@
-﻿# Estado actual del proyecto
+# Estado actual del proyecto
 
-_Ultima actualizacion: 19 de marzo de 2026_
+_Ultima actualizacion: 24 de marzo de 2026_
 
 ## Resumen ejecutivo
 
-El repositorio esta en estado **operativo serio** para uso open source:
+Este ecosistema hoy es **un solo repositorio de LCS con cinco dominios internos**, no una suite multi-repo.
 
-- CI estable en `main` (`validate (20)`, `validate (22)`)
-- CodeQL activo y requerido por proteccion de rama
-- Dependabot security updates habilitado
-- secret scanning habilitado (gitleaks CLI por rango de commits)
+El repo esta en estado **operativo serio** para uso open source:
+
+- CI estable en `main`
+- CodeQL activo
+- Dependabot habilitado
+- secret scanning habilitado
 - release publica actual: [`v0.2.1`](https://github.com/IGMED01/learning-context-system/releases/tag/v0.2.1)
+
+## Que es realmente este ecosistema
+
+Este repo combina cinco responsabilidades:
+
+1. **Core**
+   - seleccion de contexto
+   - ranking y compresion
+   - paquete pedagogico
+
+2. **Memory + Sync**
+   - recall de memoria durable
+   - fallback local
+   - sync opcional de conocimiento
+
+3. **Ops + Safety**
+   - observabilidad
+   - guardrails
+   - redaccion de secretos
+   - quality gates
+   - disciplina de release
+
+4. **Runtime**
+   - CLI
+   - configuracion
+   - ejecucion de comandos
+   - flujo operativo
+
+5. **Platform**
+   - documentacion
+   - ejemplos
+   - benchmarks
+   - skills
+
+## Foto real de madurez
+
+| Area | Madurez |
+|---|---:|
+| Sync | 35% |
+| Processing | 30% |
+| Storage | 45% |
+| LCS Core | 90% |
+| Guard | 65% |
+| Orchestration | 80% |
+| LLM Layer | 10% |
+| Evals | 70% |
+| Observability | 85% |
+| Versioning | 85% |
+| Interface | 40% |
+
+## Interpretacion correcta
+
+- el **core** ya esta fuerte
+- la **capa operativa** ya esta fuerte
+- la parte de **LLM/interface/storage/sync** todavia esta en construccion
+- el ecosistema existe y tiene sentido real, pero sigue en **fase de consolidacion**
 
 ## Que ya esta cerrado
 
-1. Contratos JSON estables (`schemaVersion: 1.0.0`) + tests de compatibilidad para toda la superficie JSON (`version`, `doctor`, `init`, `sync-knowledge`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`).
-2. Ingesta de findings de seguridad (`ingest-security`) con gate de calidad en pipeline.
-3. Resumen automatico de pipeline de seguridad en PR con delta contra comentario previo.
-4. Logica del resumen extraida a modulo testeable (`src/ci/security-pr-summary.js`) + golden fixtures.
-5. Gobernanza de release:
-   - `CHANGELOG.md`
-   - `VERSIONING.md`
-   - versionado de paquete alineado con release/tag.
-   - gate CI de disciplina de release (`npm run release:check`) con politica de contratos.
-6. Hardening CI:
-   - checks requeridos en `main`: `validate (20)`, `validate (22)`, `CodeQL`
-   - runtime Node24 forzado para acciones JS
-   - gitleaks action reemplazada por gitleaks CLI
-7. Confiabilidad Engram cerrada para baseline de produccion:
-   - clasificacion degradada validada para `binary-missing`, `timeout` y `malformed-output`
-   - retry/backoff deterministico en `teach` cubierto por tests
-   - matriz de recuperacion documentada en `docs/ops-runbook.md`
-8. Sync de conocimiento de equipo:
-   - comando `sync-knowledge` estable para Notion
-   - automatizacion `sync:pr-learnings` para convertir PR mergeadas en notas durables de equipo (modo degradado si faltan secrets)
-9. Safety North Star baseline:
-   - gate pre-ejecucion (`config.safety`) para bloquear writes sin plan aprobado, paths fuera de scope y token budget excesivo
-   - observabilidad ahora registra bloqueos y errores prevenidos por razon (`safety.byReason`)
+1. Contratos JSON estables (`schemaVersion: 1.0.0`) para la superficie CLI.
+2. Benchmarks formales de seleccion, recall y vertical integrado.
+3. Ingesta de findings de seguridad con gate de calidad.
+4. Observabilidad con metricas de recall, seleccion, bloqueos y degradado.
+5. Safety North Star baseline con bloqueos preventivos.
+6. Modo degradado y fallback local para memoria.
+7. Sync de conocimiento de equipo hacia Notion.
+8. Disciplina de release y checks de CI endurecidos.
 
-## Snapshot final de hoy
+## Decision de repositorio
 
-- Rama principal sincronizada y limpia.
-- Sin PRs abiertas.
-- Sin issues abiertas.
-- Pipeline en verde en `main`.
-- Metadatos de portada actualizados (homepage + topics).
-- Matriz de readiness actualizada: bloqueantes base cerrados para reclamo inicial de produccion OSS.
+La decision correcta hoy es:
 
-## Checklist de manana (arranque rapido)
+- **mantener un solo repo**
+- **organizarlo por dominios internos**
+- **extraer repos fisicos solo mas adelante si las fronteras se estabilizan**
 
-1. Ejecutar `npm.cmd run doctor`.
-2. Confirmar estado de CI reciente en GitHub Actions.
-3. Revisar nuevas PRs de Dependabot (si aparecen) y agrupar por riesgo.
-4. Si hay cambios visibles, actualizar `CHANGELOG.md` en la misma PR.
-5. Mantener flujo por bloques: alcance -> implementacion -> validacion -> docs -> merge.
+No conviene abrir varios repos ahora porque:
 
-## Perfil de riesgo actual
+- muchas piezas todavia cambian juntas
+- el costo de versionado y CI cruzado seria alto
+- primero conviene modularizar dentro de LCS y despues extraer
 
-- Riesgo tecnico principal: cambios futuros de dependencias/Actions (mitigado por Dependabot + checks requeridos).
-- Riesgo operativo principal: mantener disciplina de PR (DoD y changelog en cada cambio visible).
+Ver `docs/repo-split-5-repos.md`.
+
+## Snapshot operativo
+
+- `main` es la base canonica
+- el repo sigue siendo el centro del ecosistema
+- la arquitectura actual es modular, pero no fragmentada
+- el estado real no es “muchos productos”; es “un sistema con dominios claros”

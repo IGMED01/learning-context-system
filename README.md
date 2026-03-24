@@ -10,6 +10,66 @@ It does three things together:
 2. teaches from that context
 3. remembers durable decisions through Engram
 
+## What this ecosystem actually is
+
+This ecosystem is **not** a generic AI platform and **not** a multi-repo product suite yet.
+
+Right now, it is:
+
+- **one main LCS repository**
+- with **five internal domains**
+- centered on **context selection + teaching + durable memory**
+- exposed through a **Node.js CLI**
+- validated by **contracts, tests, benchmarks, and safety gates**
+
+In practical terms, this repo already behaves like a structured ecosystem, but it is still **one product repository with clear internal boundaries**, not several independent products.
+
+## What happens inside this ecosystem
+
+The repository currently coordinates five concerns:
+
+1. **Core**  
+   Selects and compresses useful context, ranks chunks, and builds teaching packets.
+
+2. **Memory + Sync**  
+   Recalls durable memory, supports local fallback storage, and syncs selected knowledge outward when needed.
+
+3. **Ops + Safety**  
+   Enforces redaction, safety gates, observability, CI checks, release discipline, and benchmark quality.
+
+4. **Runtime**  
+   Exposes the CLI, command execution, config handling, and operational flow.
+
+5. **Platform**  
+   Holds the documentation, examples, benchmark fixtures, and the integrated view of the whole system.
+
+## What this ecosystem is not
+
+It is **not**:
+
+- a browser product
+- a full LLM serving platform
+- a generic agent orchestration framework
+- a repo-per-layer architecture
+- an Engram clone
+
+## Current repository strategy
+
+The correct strategy **today** is:
+
+- keep everything in **one LCS repo**
+- keep the ecosystem **modular by internal domain**
+- extract separate repos **later only if boundaries become stable**
+
+Why this is the correct decision:
+
+- several parts still evolve together
+- `LCS CORE`, `OBSERVABILITY`, and `VERSIONING` are already strong
+- `SYNC`, `PROCESSING`, `STORAGE`, and especially `LLM LAYER` are still maturing
+- splitting into multiple repos now would add release and CI overhead without enough benefit
+
+The split rationale is documented in `docs/repo-split-5-repos.md`.
+
 ## Status
 
 This repository is actively maintained and usable for real project workflows.
@@ -21,6 +81,31 @@ Today it provides:
 - durable memory recall/write through Engram with degraded-mode fallbacks (`recall`, `remember`, `close`)
 - versioned JSON contracts for CLI automation (`--format json`)
 - CI quality gates (tests, typecheck, build, benchmarks, security checks)
+
+## Current maturity snapshot
+
+This is the current architectural picture of the ecosystem:
+
+| Area | Maturity |
+|---|---:|
+| Sync | 35% |
+| Processing | 30% |
+| Storage | 45% |
+| LCS Core | 90% |
+| Guard | 65% |
+| Orchestration | 80% |
+| LLM Layer | 10% |
+| Evals | 70% |
+| Observability | 85% |
+| Versioning | 85% |
+| Interface | 40% |
+
+Interpretation:
+
+- the **core engine is already strong**
+- the **operational quality layer is strong**
+- the **LLM/platform expansion is still early**
+- the ecosystem is real, but still in a **consolidation phase**
 
 ## What this project is trying to solve
 
@@ -163,6 +248,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `CHANGELOG.md`: release history and user-visible changes
 - `CONTRIBUTING.md`: contributor rules and local validation checklist
 - `docs/context-noise-cancellation.md`: design of the context filtering system
+- `docs/repo-split-5-repos.md`: current repository strategy: one repo now, five internal domains
 - `docs/benchmark.md`: benchmark method and metrics
 - `docs/security-model.md`: scan safety model, secret redaction policy, and limits
 - `docs/skills-governance.md`: policy to approve/block skills with risk tiers and rollback rules
@@ -184,6 +270,43 @@ These projects are credited as architectural inspiration. They are not listed as
 - `scripts/sync-pr-learnings.js`: CI helper that syncs merged PR learnings to Notion through `sync-knowledge`
 - `src/cli.js`: local CLI entrypoint
 - `skills/`: language-specific and workflow-specific teaching skills
+
+## Internal domain map
+
+### Core
+
+- `src/context/`
+- `src/learning/`
+- `src/contracts/`
+- `src/types/`
+- `src/analysis/`
+
+### Memory + Sync
+
+- `src/memory/`
+- `src/integrations/`
+
+### Ops + Safety
+
+- `src/security/`
+- `src/observability/`
+- `src/ci/`
+- `scripts/`
+
+### Runtime
+
+- `src/cli/`
+- `src/system/`
+- `src/io/`
+- `src/cli.js`
+- `src/index.js`
+
+### Platform
+
+- `docs/`
+- `examples/`
+- `benchmark/`
+- `skills/`
 
 ## Installation prerequisites
 

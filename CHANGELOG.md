@@ -7,6 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Docs
+- Clarified the repository direction: the current ecosystem is **one LCS repo with five internal domains**, not a multi-repo product suite yet.
+- Added `docs/repo-split-5-repos.md` to explain the real split strategy: modularize first, extract later.
+- Updated `README.md`, `README.es.md`, `ROADMAP.md`, and `docs/status-actual.md` so GitHub explains exactly what the ecosystem is and how mature each area is.
+
 ### Performance
 - Cached `focusTokens` once per `selectContextWindow` call instead of re-tokenizing per chunk, eliminating O(n) redundant tokenizations.
 - Cached `chunkTokens` in `PreparedChunk.tokens` field and propagated through all `scoreChunk` call sites (initial ranking, incremental rescoring, rebalance) and Jaccard redundancy checks.

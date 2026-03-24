@@ -12,6 +12,66 @@ Este repo hace tres cosas juntas:
 
 Ademas, ya puede sincronizar aprendizajes de PR mergeados hacia Notion como capa opcional de conocimiento de equipo.
 
+## Que es exactamente este ecosistema
+
+Este ecosistema **no** es una plataforma generica de IA y **todavia no** es una suite multi-repo.
+
+Hoy es:
+
+- **un solo repo principal de LCS**
+- con **cinco dominios internos**
+- centrado en **seleccion de contexto + ensenanza + memoria durable**
+- expuesto como **CLI en Node.js**
+- validado con **contratos, tests, benchmarks y safety gates**
+
+En otras palabras: ya funciona como un ecosistema estructurado, pero sigue siendo **un solo producto con boundaries internas claras**, no varios productos independientes.
+
+## Que pasa realmente dentro de este ecosistema
+
+El repo coordina hoy cinco responsabilidades:
+
+1. **Core**  
+   Selecciona y comprime contexto util, rankea chunks y arma paquetes pedagogicos.
+
+2. **Memory + Sync**  
+   Recupera memoria durable, soporta fallback local y sincroniza conocimiento cuando hace falta.
+
+3. **Ops + Safety**  
+   Aplica redaccion, safety gates, observabilidad, checks de CI, disciplina de release y calidad por benchmark.
+
+4. **Runtime**  
+   Expone la CLI, la ejecucion de comandos, la configuracion y el flujo operativo.
+
+5. **Platform**  
+   Reune documentacion, ejemplos, fixtures de benchmark y la vista integrada del sistema completo.
+
+## Que no es este ecosistema
+
+No es:
+
+- un producto web
+- una plataforma completa de serving de LLMs
+- un framework generico de orquestacion de agentes
+- una arquitectura de un repo por capa
+- un clon de Engram
+
+## Estrategia actual del repositorio
+
+Lo correcto **hoy** es:
+
+- mantener todo en **un solo repo LCS**
+- conservar el ecosistema **modular por dominio interno**
+- extraer otros repos **mas adelante solo si las fronteras se estabilizan**
+
+Esta es la decision correcta porque:
+
+- varias piezas siguen evolucionando juntas
+- `LCS CORE`, `OBSERVABILITY` y `VERSIONING` ya estan fuertes
+- `SYNC`, `PROCESSING`, `STORAGE` y especialmente `LLM LAYER` todavia estan madurando
+- separar en varios repos ahora agregaria overhead de CI y releases sin suficiente beneficio
+
+La razon completa esta documentada en `docs/repo-split-5-repos.md`.
+
 La idea central es simple:
 
 - no mandar todo al modelo
@@ -122,6 +182,31 @@ Incluye:
 - contratos JSON estables para automatizacion
 - gates de calidad en CI (tests, typecheck, build y benchmarks)
 
+## Snapshot actual de madurez
+
+Esta es la foto actual del ecosistema:
+
+| Area | Madurez |
+|---|---:|
+| Sync | 35% |
+| Processing | 30% |
+| Storage | 45% |
+| LCS Core | 90% |
+| Guard | 65% |
+| Orchestration | 80% |
+| LLM Layer | 10% |
+| Evals | 70% |
+| Observability | 85% |
+| Versioning | 85% |
+| Interface | 40% |
+
+Lectura correcta:
+
+- el **motor central ya esta fuerte**
+- la **capa operativa ya esta fuerte**
+- la expansion hacia LLM/platform todavia esta temprana
+- el ecosistema existe, pero sigue en **fase de consolidacion**
+
 ## Mapa rapido del repo
 
 - `README.md`: overview en ingles
@@ -133,6 +218,7 @@ Incluye:
 - `docs/security-model.md`: modelo de seguridad, redaccion y limites del escaneo
 - `docs/skills-governance.md`: politica para aprobar o bloquear skills con niveles de riesgo y rollback
 - `docs/ops-runbook.md`: checklist operativo para validacion, modo degradado y releases
+- `docs/repo-split-5-repos.md`: estrategia actual del repositorio: 1 repo ahora, 5 dominios internos
 - `docs/status-actual.md`: estado operativo actual y hitos cerrados
 - `docs/usage.md`: como usar la CLI
 - `learning-context.config.json`: defaults versionados del proyecto
@@ -145,6 +231,43 @@ Incluye:
 - `src/security/prowler-ingest.js`: convertidor de findings JSON de Prowler a JSON de chunks compatible con la CLI
 - `scripts/sync-pr-learnings.js`: helper de CI para sincronizar aprendizajes de PR mergeadas hacia Notion usando `sync-knowledge`
 - `examples/typescript-backend/`: vertical real de TypeScript backend
+
+## Mapa interno por dominios
+
+### Core
+
+- `src/context/`
+- `src/learning/`
+- `src/contracts/`
+- `src/types/`
+- `src/analysis/`
+
+### Memory + Sync
+
+- `src/memory/`
+- `src/integrations/`
+
+### Ops + Safety
+
+- `src/security/`
+- `src/observability/`
+- `src/ci/`
+- `scripts/`
+
+### Runtime
+
+- `src/cli/`
+- `src/system/`
+- `src/io/`
+- `src/cli.js`
+- `src/index.js`
+
+### Platform
+
+- `docs/`
+- `examples/`
+- `benchmark/`
+- `skills/`
 
 ## Prerrequisitos de instalacion
 
