@@ -58,6 +58,35 @@ function toBulletList(value) {
 }
 
 /**
+ * @param {string} line
+ */
+function resolveHeadingTitle(line) {
+  let candidate = String(line ?? "").trim();
+
+  if (!candidate || !candidate.endsWith(":")) {
+    return "";
+  }
+
+  candidate = candidate.slice(0, -1).trim();
+
+  while (candidate.startsWith("#")) {
+    candidate = candidate.slice(1).trimStart();
+  }
+
+  candidate = candidate.replace(/^\d+[.)]\s*/u, "").trim();
+
+  if (!candidate) {
+    return "";
+  }
+
+  if (!/^[\p{L}\s]+$/u.test(candidate)) {
+    return "";
+  }
+
+  return candidate;
+}
+
+/**
  * NEXUS:6 — parse LLM raw text into teaching sections.
  * @param {string} raw
  * @returns {ParsedLlmAnswer}
@@ -86,10 +115,10 @@ export function parseLlmResponse(raw) {
   let current = "";
 
   for (const line of text.split(/\r?\n/u)) {
-    const headingMatch = line.match(/^\s*(?:#+\s*)?(?:\d+[.)]\s*)?([A-Za-zÁÉÍÓÚáéíóúñÑ ]+)\s*:\s*$/u);
+    const headingTitle = resolveHeadingTitle(line);
 
-    if (headingMatch) {
-      const key = /** @type {keyof typeof sections | ""} */ (resolveSectionKey(headingMatch[1]));
+    if (headingTitle) {
+      const key = /** @type {keyof typeof sections | ""} */ (resolveSectionKey(headingTitle));
       current = key;
       continue;
     }

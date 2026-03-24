@@ -41,6 +41,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Output guard now includes functional `domain-scope` enforcement in addition to secret/policy checks.
 - Notion sync now includes paginated child listing and delta append mode.
 - Config contracts now include `llm.*` runtime/auth defaults (`provider`, `model`, `temperature`, `maxTokens`, `tokenBudget`, `maxContextChunks`, `requireAuth`, `apiKeys`).
+- `npm pack` gate file-count threshold was adjusted to match the expanded NEXUS runtime distribution size.
 - Added `.ts` build-track sources for memory teach orchestration (`src/memory/teach-recall.ts`, `src/memory/engram-auto-orchestrator.ts`) and wired TypeScript configs to prefer those sources during typecheck/build.
 - Added `.ts` build-track source for Engram adapter execution/parsing (`src/memory/engram-client.ts`) and wired TypeScript configs to prefer it during typecheck/build.
 - Added Notion team-knowledge sync command (`sync-knowledge`) that appends structured notes to a target page using token + page-id configuration.

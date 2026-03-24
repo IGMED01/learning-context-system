@@ -6,6 +6,7 @@ examples/
 skills/
 test/
 .tmp/
+.claude/
 .engram/
 test-output/
 src/
