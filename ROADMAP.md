@@ -23,12 +23,14 @@ The repository already has:
 
 ## Current next focus
 
-1. strengthen shared core typing
-2. migrate more core logic under strict type checks
-3. keep operability and privacy visible in CI and docs
+1. strengthen shared core typing inside the current one-repo ecosystem
+2. keep internal domain boundaries explicit before any future multi-repo extraction
+3. migrate more core logic under strict type checks
+4. keep operability and privacy visible in CI and docs
 
 ## Non-goals for now
 
 - browser UI
+- splitting the system into multiple physical repos before contracts are stable
 - multi-agent orchestration as the main path
 - framework-specific adapters before the core is harder
