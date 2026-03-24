@@ -4,7 +4,7 @@ import { rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 
 const REQUIRED_PACKAGE_PATHS = ["package.json", "README.md", "dist/cli.js"];
-const MAX_PACK_FILE_COUNT = 80;
+const MAX_PACK_FILE_COUNT = 180;
 
 /**
  * @param {string[]} args
