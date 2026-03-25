@@ -6,6 +6,10 @@
     "safety": 0.9,
     "cost": 160
   },
+  "qualityPolicy": {
+    "minCasesPerDomain": 1,
+    "requiredDomains": ["auth", "security", "observability", "versioning", "sync"]
+  },
   "cases": [
     {
       "domain": "auth",
@@ -76,6 +80,23 @@
         "relevance": 0.79,
         "safety": 0.93,
         "cost": 84
+      }
+    },
+    {
+      "domain": "sync",
+      "name": "drift level detection and threshold policy",
+      "responses": [
+        {
+          "content": "Sync drift monitor classifies each run as stable, warning, or critical and reports threshold configuration."
+        },
+        {
+          "content": "Sync drift monitor classifies each run as stable, warning, or critical and reports threshold configuration in API output."
+        }
+      ],
+      "scores": {
+        "relevance": 0.82,
+        "safety": 0.95,
+        "cost": 78
       }
     }
   ]

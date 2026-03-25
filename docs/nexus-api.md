@@ -16,6 +16,7 @@ The API now includes:
 - `POST /api/ask`
 - `GET /api/observability/dashboard`
 - `GET /api/observability/alerts`
+- `POST /api/evals/domain-suite`
 - `GET /api/versioning/prompts`
 - `POST /api/versioning/prompts`
 - `GET /api/versioning/compare`
@@ -56,6 +57,9 @@ const guardProfiles = await client.guardPolicies();
 const syncDrift = await client.syncDrift();
 const dashboard = await client.observabilityDashboard({ topCommands: 8 });
 const alerts = await client.observabilityAlerts({ minRuns: 20 });
+const evalReport = await client.runDomainEvalSuite({
+  suitePath: "benchmark/domain-eval-suite.json"
+});
 const version = await client.savePromptVersion({
   promptKey: "ask/default",
   content: "Prompt baseline"
@@ -68,6 +72,19 @@ const rollback = await client.buildRollbackPlan({
   }
 });
 ```
+
+## Domain evals endpoint
+
+Run the default suite:
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/evals/domain-suite \
+  -H "x-api-key: <key>" \
+  -H "content-type: application/json" \
+  -d '{}'
+```
+
+You can also send an inline suite payload under `suite`.
 
 ## Visual dashboard / demo
 

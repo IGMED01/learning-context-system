@@ -310,7 +310,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `src/versioning/rollback-policy.js`: rollback policy wrapper for API planning
 - `src/interface/`: OpenAPI builder + visual demo page
 - `src/sdk/`: NEXUS API client SDK
-- `src/api/`: auth middleware and HTTP server (`/api/ask`, `/api/guard/output`, `/api/sync`, `/api/observability/dashboard`, `/api/versioning/*`, `/api/openapi.json`, `/api/demo`)
+- `src/api/`: auth middleware and HTTP server (`/api/ask`, `/api/guard/output`, `/api/sync`, `/api/observability/dashboard`, `/api/evals/domain-suite`, `/api/versioning/*`, `/api/openapi.json`, `/api/demo`)
 - `src/security/prowler-ingest.js`: converter from Prowler findings JSON to LCS-compatible chunk JSON
 - `scripts/sync-pr-learnings.js`: CI helper that syncs merged PR learnings to Notion through `sync-knowledge`
 - `scripts/run-nexus-api.js`: local NEXUS API launcher

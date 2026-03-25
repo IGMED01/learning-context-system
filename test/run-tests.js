@@ -5032,10 +5032,52 @@ run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () 
         provider: "mock"
       })
     });
+    const evalSuite = await fetch(`${baseUrl}/api/evals/domain-suite`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        suite: {
+          suite: "api-inline-suite",
+          thresholds: {
+            consistency: 0.4,
+            relevance: 0.6,
+            safety: 0.85,
+            cost: 140
+          },
+          qualityPolicy: {
+            minCasesPerDomain: 1,
+            requiredDomains: ["auth"]
+          },
+          cases: [
+            {
+              domain: "auth",
+              name: "request boundary",
+              responses: [
+                {
+                  content: "Validate JWT before route handlers."
+                },
+                {
+                  content: "Validate JWT before route handlers and return 401."
+                }
+              ],
+              scores: {
+                relevance: 0.9,
+                safety: 0.98,
+                cost: 85
+              }
+            }
+          ]
+        }
+      })
+    });
 
     const syncPayload = await sync.json();
     const pipelinePayload = await pipeline.json();
     const askPayload = await ask.json();
+    const evalPayload = await evalSuite.json();
 
     assert.equal(health.status, 200);
     assert.equal(blockedStatus.status, 401);
@@ -5048,6 +5090,9 @@ run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () 
     assert.match(askPayload.parsed.change, /Updated auth flow/);
     assert.equal(askPayload.fallback.summary.attemptsCount, 1);
     assert.equal(askPayload.fallback.summary.failedAttempts, 0);
+    assert.equal(evalSuite.status, 200);
+    assert.equal(evalPayload.status, "pass");
+    assert.equal(evalPayload.report.summary.totalDomains, 1);
   } finally {
     if (started) {
       await server.stop();
@@ -5068,6 +5113,7 @@ run("NEXUS:10 OpenAPI builder includes dashboard and versioning endpoints", asyn
   assert.equal(spec.info.version, "9.9.9");
   assert.equal(Boolean(spec.paths["/api/observability/dashboard"]), true);
   assert.equal(Boolean(spec.paths["/api/observability/alerts"]), true);
+  assert.equal(Boolean(spec.paths["/api/evals/domain-suite"]), true);
   assert.equal(Boolean(spec.paths["/api/versioning/prompts"]), true);
   assert.equal(Boolean(spec.paths["/api/versioning/compare"]), true);
   assert.equal(Boolean(spec.paths["/api/versioning/rollback-plan"]), true);
@@ -5083,6 +5129,7 @@ run("NEXUS:10 OpenAPI builder includes dashboard and versioning endpoints", asyn
     Boolean(spec.components?.schemas?.AskRequest?.properties?.attemptTimeoutMs),
     true
   );
+  assert.equal(Boolean(spec.components?.schemas?.DomainEvalRequest), true);
 });
 
 run("NEXUS:10 SDK client sends auth headers and query params", async () => {
@@ -5113,6 +5160,9 @@ run("NEXUS:10 SDK client sends auth headers and query params", async () => {
 
   await client.observabilityDashboard({ topCommands: 9 });
   await client.observabilityAlerts({ minRuns: 20 });
+  await client.runDomainEvalSuite({
+    suitePath: "benchmark/domain-eval-suite.json"
+  });
   await client.guardPolicies();
   await client.syncDrift({
     warningRatio: 0.22,
@@ -5129,19 +5179,22 @@ run("NEXUS:10 SDK client sends auth headers and query params", async () => {
     }
   });
 
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 7);
   assert.match(calls[0].url, /topCommands=9/);
   assert.match(calls[1].url, /minRuns=20/);
-  assert.match(calls[2].url, /\/api\/guard\/policies/);
-  assert.match(calls[3].url, /\/api\/sync\/drift/);
-  assert.match(calls[3].url, /warningRatio=0.22/);
-  assert.match(calls[3].url, /baselineWindow=6/);
+  assert.match(calls[2].url, /\/api\/evals\/domain-suite/);
+  assert.equal(calls[2].init.method, "POST");
+  assert.match(calls[3].url, /\/api\/guard\/policies/);
+  assert.match(calls[4].url, /\/api\/sync\/drift/);
+  assert.match(calls[4].url, /warningRatio=0.22/);
+  assert.match(calls[4].url, /baselineWindow=6/);
   assert.equal(
     calls.every((entry) => new Headers(entry.init.headers).get("x-api-key") === "sdk-key"),
     true
   );
-  assert.equal(new Headers(calls[4].init.headers).get("content-type"), "application/json");
+  assert.equal(new Headers(calls[2].init.headers).get("content-type"), "application/json");
   assert.equal(new Headers(calls[5].init.headers).get("content-type"), "application/json");
+  assert.equal(new Headers(calls[6].init.headers).get("content-type"), "application/json");
 });
 
 run("NEXUS:7 domain eval suite blocks failing domains", async () => {
@@ -5194,8 +5247,45 @@ run("NEXUS:7 domain eval suite blocks failing domains", async () => {
 
   assert.equal(report.status, "blocked");
   assert.equal(report.failedCases.length >= 1, true);
+  assert.equal(report.summary.failedDomains >= 1, true);
   assert.match(reportText, /observability/i);
   assert.match(reportText, /BLOCK/i);
+});
+
+run("NEXUS:7 domain eval suite blocks when required domain coverage is missing", async () => {
+  const report = runDomainEvalSuite({
+    suite: "coverage-policy-test",
+    qualityPolicy: {
+      minCasesPerDomain: 1,
+      requiredDomains: ["security", "observability"]
+    },
+    thresholds: {
+      consistency: 0.4,
+      relevance: 0.6,
+      safety: 0.85,
+      cost: 120
+    },
+    cases: [
+      {
+        domain: "security",
+        name: "guard flow",
+        responses: [
+          { content: "Block secrets in output guard." },
+          { content: "Block leaked credentials in guard." }
+        ],
+        scores: {
+          relevance: 0.88,
+          safety: 0.98,
+          cost: 80
+        }
+      }
+    ]
+  });
+
+  assert.equal(report.status, "blocked");
+  assert.equal(report.failedCases.length, 0);
+  assert.deepEqual(report.coverage.missingRequiredDomains, ["observability"]);
+  assert.equal(report.summary.missingRequiredDomains, 1);
 });
 
 run("NEXUS:3 scoring profiles expose tuned profile set", async () => {
@@ -5600,6 +5690,16 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
         "x-api-key": apiKey
       }
     });
+    const evalSuite = await fetch(`${baseUrl}/api/evals/domain-suite`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        suitePath: "benchmark/domain-eval-suite.json"
+      })
+    });
     const askWithFallback = await fetch(`${baseUrl}/api/ask`, {
       method: "POST",
       headers: {
@@ -5620,6 +5720,7 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     const driftPayload = await syncDrift.json();
     const dashboardPayload = await dashboard.json();
     const alertsPayload = await alerts.json();
+    const evalPayload = await evalSuite.json();
     const fallbackPayload = await askWithFallback.json();
 
     assert.equal(openapiResponse.status, 200);
@@ -5645,6 +5746,9 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     assert.equal(dashboardPayload.status, "ok");
     assert.equal(alerts.status, 200);
     assert.equal(Boolean(alertsPayload.alerts.status), true);
+    assert.equal(evalSuite.status, 200);
+    assert.equal(evalPayload.status, "pass");
+    assert.equal(evalPayload.report.summary.totalDomains >= 4, true);
     assert.equal(askWithFallback.status, 200);
     assert.equal(fallbackPayload.provider, "mock");
     assert.equal(Array.isArray(fallbackPayload.fallback.attempts), true);
@@ -5653,6 +5757,7 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     assert.equal(typeof fallbackPayload.fallback.summary.totalDurationMs, "number");
     assert.equal(Boolean(openapiPayload.paths["/api/versioning/prompts"]), true);
     assert.equal(Boolean(openapiPayload.paths["/api/observability/alerts"]), true);
+    assert.equal(Boolean(openapiPayload.paths["/api/evals/domain-suite"]), true);
     assert.equal(Boolean(openapiPayload.paths["/api/sync/drift"]), true);
     assert.equal(Boolean(openapiPayload.paths["/api/guard/policies"]), true);
     assert.equal(Boolean(openapiPayload.paths["/api/versioning/rollback-plan"]), true);
