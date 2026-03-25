@@ -6,17 +6,24 @@ import { createAuthMiddleware } from "./auth-middleware.js";
 import { enforceOutputGuard } from "../guard/output-guard.js";
 import { checkOutputCompliance } from "../guard/compliance-checker.js";
 import { createOutputAuditor } from "../guard/output-auditor.js";
+import {
+  listDomainGuardPolicyProfiles,
+  resolveDomainGuardPolicy
+} from "../guard/domain-policy-profiles.js";
 import { buildLlmPrompt } from "../llm/prompt-builder.js";
 import { parseLlmResponse } from "../llm/response-parser.js";
 import { createLlmProviderRegistry } from "../llm/provider.js";
 import { createClaudeProvider } from "../llm/claude-provider.js";
 import { createChangeDetector } from "../sync/change-detector.js";
 import { createSyncScheduler } from "../sync/sync-scheduler.js";
+import { createSyncDriftMonitor } from "../sync/drift-monitor.js";
 import { createPipelineBuilder, buildDefaultNexusPipeline } from "../orchestration/pipeline-builder.js";
 import { createDefaultExecutors } from "../orchestration/default-executors.js";
 import { buildDashboardData } from "../observability/dashboard-data.js";
+import { evaluateObservabilityAlerts } from "../observability/alert-engine.js";
 import { getObservabilityReport, recordCommandMetric } from "../observability/metrics-store.js";
 import { createPromptVersionStore } from "../versioning/prompt-version-store.js";
+import { createRollbackPolicy } from "../versioning/rollback-policy.js";
 import { buildNexusOpenApiSpec } from "../interface/nexus-openapi.js";
 import { buildNexusDemoPage } from "../interface/nexus-demo-page.js";
 
@@ -94,7 +101,9 @@ function getRequestUrl(request) {
  *     rootPath?: string,
  *     intervalMs?: number,
  *     stateFilePath?: string,
- *     autoStart?: boolean
+ *     autoStart?: boolean,
+ *     driftFilePath?: string,
+ *     driftMaxHistory?: number
  *   },
  *   repositoryFilePath?: string,
  *   outputAuditFilePath?: string,
@@ -104,6 +113,11 @@ function getRequestUrl(request) {
  *     title?: string,
  *     version?: string,
  *     description?: string
+ *   },
+ *   rollbackPolicy?: {
+ *     minScore?: number,
+ *     preferPrevious?: boolean,
+ *     requireAtLeastVersions?: number
  *   }
  * }} [options]
  */
@@ -138,6 +152,10 @@ export function createNexusApiServer(options = {}) {
   const changeDetector = createChangeDetector({
     stateFilePath: options.sync?.stateFilePath
   });
+  const driftMonitor = createSyncDriftMonitor({
+    filePath: options.sync?.driftFilePath,
+    maxHistory: options.sync?.driftMaxHistory
+  });
 
   let lastSyncResult = {
     status: "never",
@@ -165,6 +183,7 @@ export function createNexusApiServer(options = {}) {
           finishedAt: new Date().toISOString(),
           ...result
         };
+        await driftMonitor.record(lastSyncResult);
       } catch (error) {
         lastSyncResult = {
           status: "error",
@@ -172,6 +191,7 @@ export function createNexusApiServer(options = {}) {
           finishedAt: new Date().toISOString(),
           error: error instanceof Error ? error.message : String(error)
         };
+        await driftMonitor.record(lastSyncResult);
         throw error;
       }
     }
@@ -180,6 +200,7 @@ export function createNexusApiServer(options = {}) {
   const promptVersionStore = createPromptVersionStore({
     filePath: options.promptVersionFilePath
   });
+  const rollbackPolicy = createRollbackPolicy(options.rollbackPolicy);
   const openApiSpec = buildNexusOpenApiSpec({
     title: options.openApi?.title,
     version: options.openApi?.version,
@@ -245,6 +266,15 @@ export function createNexusApiServer(options = {}) {
         return;
       }
 
+      if (method === "GET" && pathname === "/api/guard/policies") {
+        sendJson(response, 200, {
+          status: "ok",
+          profiles: listDomainGuardPolicyProfiles()
+        });
+        await recordApiMetric("api.guard.policies", requestStartedAt);
+        return;
+      }
+
       const authResult = auth.authorize({
         headers: request.headers
       });
@@ -277,6 +307,16 @@ export function createNexusApiServer(options = {}) {
         return;
       }
 
+      if (method === "GET" && pathname === "/api/sync/drift") {
+        const report = await driftMonitor.getReport();
+        sendJson(response, 200, {
+          status: "ok",
+          drift: report
+        });
+        await recordApiMetric("api.sync.drift", requestStartedAt);
+        return;
+      }
+
       if (method === "POST" && pathname === "/api/sync") {
         await scheduler.runNow();
         sendJson(response, 200, {
@@ -306,6 +346,27 @@ export function createNexusApiServer(options = {}) {
           dashboard
         });
         await recordApiMetric("api.observability.dashboard", requestStartedAt);
+        return;
+      }
+
+      if (method === "GET" && pathname === "/api/observability/alerts") {
+        const thresholds = {
+          blockedRateMax: Number(requestUrl.searchParams.get("blockedRateMax") ?? 0.25),
+          degradedRateMax: Number(requestUrl.searchParams.get("degradedRateMax") ?? 0.35),
+          recallHitRateMin: Number(requestUrl.searchParams.get("recallHitRateMin") ?? 0.15),
+          averageDurationMsMax: Number(requestUrl.searchParams.get("averageDurationMsMax") ?? 1500),
+          minRuns: Number(requestUrl.searchParams.get("minRuns") ?? 20)
+        };
+        const report = await getObservabilityReport({
+          filePath: observabilityFilePath
+        });
+        const alerts = evaluateObservabilityAlerts(report.totals ? report : {}, thresholds);
+
+        sendJson(response, 200, {
+          status: "ok",
+          alerts
+        });
+        await recordApiMetric("api.observability.alerts", requestStartedAt);
         return;
       }
 
@@ -407,13 +468,57 @@ export function createNexusApiServer(options = {}) {
         return;
       }
 
+      if (method === "POST" && pathname === "/api/versioning/rollback-plan") {
+        const body = /** @type {{ promptKey?: string, evalScoresByVersion?: Record<string, number>, minScore?: number, preferPrevious?: boolean }} */ (
+          await readJsonBody(request)
+        );
+        const promptKey = String(body.promptKey ?? "").trim();
+
+        if (!promptKey) {
+          sendJson(response, 400, {
+            status: "error",
+            error: "Missing 'promptKey' in request body."
+          });
+          await recordApiMetric("api.versioning.rollback-plan", requestStartedAt, {
+            command: "api.versioning.rollback-plan",
+            durationMs: 0,
+            degraded: true,
+            safety: {
+              blocked: true,
+              reason: "missing-prompt-key"
+            }
+          });
+          return;
+        }
+
+        const plan = await rollbackPolicy.buildPlan(promptVersionStore, {
+          promptKey,
+          evalScoresByVersion:
+            body.evalScoresByVersion && typeof body.evalScoresByVersion === "object"
+              ? body.evalScoresByVersion
+              : {},
+          minScore: body.minScore,
+          preferPrevious: body.preferPrevious
+        });
+        sendJson(response, 200, {
+          status: "ok",
+          rollback: plan
+        });
+        await recordApiMetric("api.versioning.rollback-plan", requestStartedAt);
+        return;
+      }
+
       if (method === "POST" && pathname === "/api/guard/output") {
-        const body = /** @type {{ output?: string, guard?: object, compliance?: object }} */ (
+        const body = /** @type {{ output?: string, guard?: object, compliance?: object, guardPolicyProfile?: string }} */ (
           await readJsonBody(request)
         );
         const output = String(body.output ?? "");
         const compliance = checkOutputCompliance(output, /** @type {any} */ (body.compliance ?? {}));
-        const guard = enforceOutputGuard(output, /** @type {any} */ (body.guard ?? {}));
+        const guardPolicy = resolveDomainGuardPolicy(
+          body.guardPolicyProfile,
+          /** @type {Record<string, unknown>} */ (body.guard ?? {})
+        );
+        const guard = enforceOutputGuard(output, /** @type {any} */ (guardPolicy));
 
         await outputAuditor.record({
           action: guard.action,
@@ -463,10 +568,12 @@ export function createNexusApiServer(options = {}) {
          *   objective?: string,
          *   language?: "es" | "en",
          *   provider?: string,
+         *   fallbackProviders?: string[],
          *   model?: string,
          *   chunks?: import("../types/core-contracts.d.ts").Chunk[],
          *   tokenBudget?: number,
          *   maxChunks?: number,
+         *   guardPolicyProfile?: string,
          *   guard?: object,
          *   compliance?: object
          * }} */ (await readJsonBody(request));
@@ -491,13 +598,23 @@ export function createNexusApiServer(options = {}) {
           maxChunks: body.maxChunks ?? options.llm?.maxChunks
         });
 
-        const provider = registry.get(body.provider);
-        const generated = await provider.generate(builtPrompt.prompt, {
-          model: body.model
+        const generation = await registry.generateWithFallback(builtPrompt.prompt, {
+          provider: body.provider,
+          fallbackProviders: Array.isArray(body.fallbackProviders)
+            ? body.fallbackProviders
+            : [],
+          options: {
+            model: body.model
+          }
         });
+        const generated = generation.generated;
         const parsed = parseLlmResponse(generated.content);
         const compliance = checkOutputCompliance(generated.content, /** @type {any} */ (body.compliance ?? {}));
-        const guard = enforceOutputGuard(generated.content, /** @type {any} */ (body.guard ?? {}));
+        const guardPolicy = resolveDomainGuardPolicy(
+          body.guardPolicyProfile,
+          /** @type {Record<string, unknown>} */ (body.guard ?? {})
+        );
+        const guard = enforceOutputGuard(generated.content, /** @type {any} */ (guardPolicy));
 
         await outputAuditor.record({
           action: guard.action,
@@ -505,14 +622,18 @@ export function createNexusApiServer(options = {}) {
           outputLength: guard.output.length,
           source: "api:ask",
           metadata: {
-            provider: provider.provider,
+            provider: generation.provider,
+            fallbackAttempts: generation.attempts,
             compliant: compliance.compliant
           }
         });
 
         sendJson(response, guard.allowed && compliance.compliant ? 200 : 422, {
           status: guard.allowed && compliance.compliant ? "ok" : "blocked",
-          provider: provider.provider,
+          provider: generation.provider,
+          fallback: {
+            attempts: generation.attempts
+          },
           prompt: {
             language: builtPrompt.language,
             stats: builtPrompt.context.stats,
@@ -581,6 +702,8 @@ export function createNexusApiServer(options = {}) {
     scheduler,
     registry,
     promptVersionStore,
+    driftMonitor,
+    rollbackPolicy,
     openApiSpec,
     async start() {
       await new Promise((resolve, reject) => {

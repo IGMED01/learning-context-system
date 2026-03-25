@@ -133,10 +133,18 @@ export class NexusApiClient {
     return this.request("/api/sync/status");
   }
 
+  async syncDrift() {
+    return this.request("/api/sync/drift");
+  }
+
   async syncNow() {
     return this.request("/api/sync", {
       method: "POST"
     });
+  }
+
+  async guardPolicies() {
+    return this.request("/api/guard/policies");
   }
 
   /**
@@ -179,6 +187,21 @@ export class NexusApiClient {
   }
 
   /**
+   * @param {{
+   *   blockedRateMax?: number,
+   *   degradedRateMax?: number,
+   *   recallHitRateMin?: number,
+   *   averageDurationMsMax?: number,
+   *   minRuns?: number
+   * }} [query]
+   */
+  async observabilityAlerts(query = {}) {
+    return this.request("/api/observability/alerts", {
+      query
+    });
+  }
+
+  /**
    * @param {string} promptKey
    */
   async listPromptVersions(promptKey) {
@@ -205,6 +228,16 @@ export class NexusApiClient {
   async comparePromptVersions(input) {
     return this.request("/api/versioning/compare", {
       query: input
+    });
+  }
+
+  /**
+   * @param {{ promptKey: string, evalScoresByVersion?: Record<string, number>, minScore?: number, preferPrevious?: boolean }} input
+   */
+  async buildRollbackPlan(input) {
+    return this.request("/api/versioning/rollback-plan", {
+      method: "POST",
+      body: input
     });
   }
 }

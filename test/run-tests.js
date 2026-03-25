@@ -23,7 +23,11 @@ import { checkOutputCompliance } from "../src/guard/compliance-checker.js";
 import { createChunkRepository } from "../src/storage/chunk-repository.js";
 import { createBm25Index } from "../src/storage/bm25-index.js";
 import { createHybridRetriever } from "../src/storage/hybrid-retriever.js";
-import { createLlmProviderRegistry, normalizeGenerateResult } from "../src/llm/provider.js";
+import {
+  createLlmProviderRegistry,
+  generateWithProviderFallback,
+  normalizeGenerateResult
+} from "../src/llm/provider.js";
 import { buildLlmPrompt } from "../src/llm/prompt-builder.js";
 import { parseLlmResponse } from "../src/llm/response-parser.js";
 import {
@@ -43,8 +47,18 @@ import {
   recordCommandMetric
 } from "../src/observability/metrics-store.js";
 import { buildDashboardData } from "../src/observability/dashboard-data.js";
+import {
+  evaluateObservabilityAlerts,
+  formatObservabilityAlertReport
+} from "../src/observability/alert-engine.js";
 import { createPromptVersionStore } from "../src/versioning/prompt-version-store.js";
 import { buildRollbackPlan } from "../src/versioning/rollback-engine.js";
+import { createRollbackPolicy } from "../src/versioning/rollback-policy.js";
+import { createSyncDriftMonitor } from "../src/sync/drift-monitor.js";
+import {
+  listDomainGuardPolicyProfiles,
+  resolveDomainGuardPolicy
+} from "../src/guard/domain-policy-profiles.js";
 import {
   buildCloseSummaryContent,
   createEngramClient,
@@ -889,7 +903,12 @@ run("workspace scanning ignores .tmp directories to avoid local clone noise", as
     assert.equal(result.payload.chunks.some((chunk) => chunk.source.startsWith(".tmp/")), false);
     assert.equal(result.payload.chunks.some((chunk) => chunk.source === "src/keep.js"), true);
   } finally {
-    await rm(tempRoot, { recursive: true, force: true });
+    await rm(tempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50
+    });
   }
 });
 
@@ -915,7 +934,12 @@ run("workspace scanning honors configurable ignore directories", async () => {
     assert.equal(result.payload.chunks.some((chunk) => chunk.source.includes("vendor-cache")), false);
     assert.equal(result.payload.chunks.some((chunk) => chunk.source === "src/keep.ts"), true);
   } finally {
-    await rm(tempRoot, { recursive: true, force: true });
+    await rm(tempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50
+    });
   }
 });
 
@@ -957,7 +981,12 @@ run("workspace scanning redacts inline secrets and ignores dot env files", async
     assert.equal(result.stats.security.inlineSecrets >= 2, true);
     assert.equal(result.stats.security.tokenPatterns >= 1, true);
   } finally {
-    await rm(tempRoot, { recursive: true, force: true });
+    await rm(tempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50
+    });
   }
 });
 
@@ -5036,8 +5065,12 @@ run("NEXUS:10 OpenAPI builder includes dashboard and versioning endpoints", asyn
   assert.equal(spec.info.title, "NEXUS API Test");
   assert.equal(spec.info.version, "9.9.9");
   assert.equal(Boolean(spec.paths["/api/observability/dashboard"]), true);
+  assert.equal(Boolean(spec.paths["/api/observability/alerts"]), true);
   assert.equal(Boolean(spec.paths["/api/versioning/prompts"]), true);
   assert.equal(Boolean(spec.paths["/api/versioning/compare"]), true);
+  assert.equal(Boolean(spec.paths["/api/versioning/rollback-plan"]), true);
+  assert.equal(Boolean(spec.paths["/api/sync/drift"]), true);
+  assert.equal(Boolean(spec.paths["/api/guard/policies"]), true);
 });
 
 run("NEXUS:10 SDK client sends auth headers and query params", async () => {
@@ -5067,18 +5100,31 @@ run("NEXUS:10 SDK client sends auth headers and query params", async () => {
   });
 
   await client.observabilityDashboard({ topCommands: 9 });
+  await client.observabilityAlerts({ minRuns: 20 });
+  await client.guardPolicies();
+  await client.syncDrift();
   await client.savePromptVersion({
     promptKey: "ask/default",
     content: "prompt v1"
   });
+  await client.buildRollbackPlan({
+    promptKey: "ask/default",
+    evalScoresByVersion: {
+      "ask/default@v1": 0.88
+    }
+  });
 
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 6);
   assert.match(calls[0].url, /topCommands=9/);
+  assert.match(calls[1].url, /minRuns=20/);
+  assert.match(calls[2].url, /\/api\/guard\/policies/);
+  assert.match(calls[3].url, /\/api\/sync\/drift/);
   assert.equal(
     calls.every((entry) => new Headers(entry.init.headers).get("x-api-key") === "sdk-key"),
     true
   );
-  assert.equal(new Headers(calls[1].init.headers).get("content-type"), "application/json");
+  assert.equal(new Headers(calls[4].init.headers).get("content-type"), "application/json");
+  assert.equal(new Headers(calls[5].init.headers).get("content-type"), "application/json");
 });
 
 run("NEXUS:7 domain eval suite blocks failing domains", async () => {
@@ -5170,6 +5216,191 @@ run("NEXUS:3 scoring profiles expose tuned profile set", async () => {
   assert.equal(tuned.selected[0]?.id, "code");
 });
 
+run("NEXUS:6 provider fallback recovers when primary provider fails", async () => {
+  const registry = createLlmProviderRegistry();
+  registry.register({
+    provider: "primary",
+    async generate() {
+      throw new Error("primary-down");
+    }
+  });
+  registry.register({
+    provider: "backup",
+    async generate() {
+      return {
+        content: "fallback-ok"
+      };
+    }
+  });
+  registry.setDefault("primary");
+
+  const result = await generateWithProviderFallback(
+    {
+      get(name = "") {
+        return registry.get(name);
+      }
+    },
+    "hola",
+    {
+      provider: "primary",
+      fallbackProviders: ["backup"]
+    }
+  );
+
+  assert.equal(result.provider, "backup");
+  assert.equal(result.generated.content, "fallback-ok");
+  assert.equal(result.attempts.length, 2);
+  assert.equal(result.attempts[0].ok, false);
+  assert.equal(result.attempts[1].ok, true);
+});
+
+run("NEXUS:5 pipeline retries failed step and succeeds", async () => {
+  let attempts = 0;
+  const builder = createPipelineBuilder({
+    executors: {
+      unstable: async () => {
+        attempts += 1;
+        if (attempts < 2) {
+          throw new Error("transient");
+        }
+
+        return {
+          ok: true
+        };
+      }
+    }
+  });
+
+  const result = await builder.runPipeline(
+    {
+      id: "retry-pipeline",
+      name: "retry pipeline",
+      steps: [
+        {
+          id: "unstable-step",
+          type: "unstable",
+          params: {
+            retryAttempts: 1
+          }
+        }
+      ]
+    },
+    {}
+  );
+
+  assert.equal(attempts, 2);
+  assert.equal(result.trace[0].status, "ok");
+  assert.equal(result.trace[0].attempts, 2);
+});
+
+run("NEXUS:4 guard domain policy profiles are listed and merged", async () => {
+  const profiles = listDomainGuardPolicyProfiles();
+  const policy = resolveDomainGuardPolicy("security_strict", {
+    domainScope: {
+      allowedDomains: ["security"]
+    }
+  });
+
+  assert.equal(profiles.includes("security_strict"), true);
+  assert.equal(policy.blockOnPolicyTerms.includes("internal secret"), true);
+  assert.equal(policy.domainScope.allowedDomains[0], "security");
+});
+
+run("NEXUS:0 drift monitor stores sync history and ratios", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-drift-monitor-"));
+  const monitor = createSyncDriftMonitor({
+    filePath: path.join(tempRoot, "sync-drift.json"),
+    maxHistory: 10
+  });
+
+  try {
+    await monitor.record({
+      status: "ok",
+      summary: {
+        discovered: 40,
+        created: 3,
+        changed: 2,
+        deleted: 1,
+        unchanged: 34
+      }
+    });
+    await monitor.record({
+      status: "ok",
+      summary: {
+        discovered: 40,
+        created: 1,
+        changed: 1,
+        deleted: 0,
+        unchanged: 38
+      }
+    });
+
+    const report = await monitor.getReport();
+
+    assert.equal(report.summary.samples, 2);
+    assert.equal(report.latest?.status, "ok");
+    assert.equal(report.latest?.changeRatio > 0, true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:8 observability alert engine reports failures under strict thresholds", async () => {
+  const alerts = evaluateObservabilityAlerts(
+    {
+      totals: {
+        runs: 15,
+        blockedRate: 0.31,
+        degradedRate: 0.44,
+        averageDurationMs: 2100
+      },
+      recall: {
+        hitRate: 0.1,
+        attempts: 20
+      }
+    },
+    {
+      minRuns: 20,
+      blockedRateMax: 0.2,
+      degradedRateMax: 0.3,
+      recallHitRateMin: 0.2,
+      averageDurationMsMax: 1000
+    }
+  );
+  const formatted = formatObservabilityAlertReport(alerts);
+
+  assert.equal(alerts.status, "alert");
+  assert.equal(alerts.failed.length >= 3, true);
+  assert.match(formatted, /FAIL/);
+});
+
+run("NEXUS:9 rollback policy reports insufficient history", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-rollback-policy-"));
+  const store = createPromptVersionStore({
+    filePath: path.join(tempRoot, "prompt-versions.jsonl")
+  });
+  const policy = createRollbackPolicy({
+    requireAtLeastVersions: 2
+  });
+
+  try {
+    await store.saveVersion({
+      promptKey: "ask/one",
+      content: "v1"
+    });
+
+    const result = await policy.buildPlan(store, {
+      promptKey: "ask/one",
+      evalScoresByVersion: {}
+    });
+
+    assert.equal(result.status, "insufficient-history");
+    assert.equal(result.available, 1);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-api-demo-"));
   const apiKey = "nexus-demo-key";
@@ -5183,6 +5414,12 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     llm: {
       defaultProvider: "mock",
       providers: [
+        {
+          provider: "primary-broken",
+          async generate() {
+            throw new Error("provider-down");
+          }
+        },
         {
           provider: "mock",
           async generate() {
@@ -5205,6 +5442,7 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     const baseUrl = `http://127.0.0.1:${start.port}`;
     const openapiResponse = await fetch(`${baseUrl}/api/openapi.json`);
     const demoResponse = await fetch(`${baseUrl}/api/demo`);
+    const guardPolicies = await fetch(`${baseUrl}/api/guard/policies`);
     const saveVersion = await fetch(`${baseUrl}/api/versioning/prompts`, {
       method: "POST",
       headers: {
@@ -5232,33 +5470,101 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
         }
       }
     );
+    const rollbackPlan = await fetch(`${baseUrl}/api/versioning/rollback-plan`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        promptKey: "ask/default",
+        evalScoresByVersion: {
+          [leftId]: 0.84
+        }
+      })
+    });
+    const syncNow = await fetch(`${baseUrl}/api/sync`, {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+    const syncDrift = await fetch(`${baseUrl}/api/sync/drift`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
     const dashboard = await fetch(`${baseUrl}/api/observability/dashboard?topCommands=4`, {
       headers: {
         "x-api-key": apiKey
       }
     });
+    const alerts = await fetch(`${baseUrl}/api/observability/alerts?minRuns=1`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+    const askWithFallback = await fetch(`${baseUrl}/api/ask`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        question: "resumen",
+        provider: "primary-broken",
+        fallbackProviders: ["mock"],
+        guardPolicyProfile: "security_strict"
+      })
+    });
     const openapiPayload = await openapiResponse.json();
+    const guardPoliciesPayload = await guardPolicies.json();
     const comparePayload = await compareVersions.json();
+    const rollbackPayload = await rollbackPlan.json();
+    const driftPayload = await syncDrift.json();
     const dashboardPayload = await dashboard.json();
+    const alertsPayload = await alerts.json();
+    const fallbackPayload = await askWithFallback.json();
 
     assert.equal(openapiResponse.status, 200);
     assert.equal(demoResponse.status, 200);
     assert.match(await demoResponse.text(), /NEXUS Demo Console/);
+    assert.equal(guardPolicies.status, 200);
+    assert.equal(Array.isArray(guardPoliciesPayload.profiles), true);
     assert.equal(saveVersion.status, 200);
     assert.equal(savedPayload.version.promptKey, "ask/default");
     assert.equal(listVersions.status, 200);
     assert.equal(Array.isArray(listedPayload.versions), true);
     assert.equal(compareVersions.status, 200);
     assert.equal(comparePayload.diff.changedLines, 0);
+    assert.equal(rollbackPlan.status, 200);
+    assert.equal(Boolean(rollbackPayload.rollback.status), true);
+    assert.equal(syncNow.status, 200);
+    assert.equal(syncDrift.status, 200);
+    assert.equal(Boolean(driftPayload.drift.latest), true);
     assert.equal(dashboard.status, 200);
     assert.equal(dashboardPayload.status, "ok");
+    assert.equal(alerts.status, 200);
+    assert.equal(Boolean(alertsPayload.alerts.status), true);
+    assert.equal(askWithFallback.status, 200);
+    assert.equal(fallbackPayload.provider, "mock");
+    assert.equal(Array.isArray(fallbackPayload.fallback.attempts), true);
     assert.equal(Boolean(openapiPayload.paths["/api/versioning/prompts"]), true);
+    assert.equal(Boolean(openapiPayload.paths["/api/observability/alerts"]), true);
+    assert.equal(Boolean(openapiPayload.paths["/api/sync/drift"]), true);
+    assert.equal(Boolean(openapiPayload.paths["/api/guard/policies"]), true);
+    assert.equal(Boolean(openapiPayload.paths["/api/versioning/rollback-plan"]), true);
   } finally {
     if (started) {
       await server.stop();
     }
 
-    await rm(tempRoot, { recursive: true, force: true });
+    await rm(tempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50
+    });
   }
 });
 

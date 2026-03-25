@@ -1,8 +1,21 @@
-# Learning Context System
+# Learning Context System (NEXUS)
+
+[![CI](https://img.shields.io/github/actions/workflow/status/IGMED01/learning-context-system/ci.yml?branch=main&label=CI)](https://github.com/IGMED01/learning-context-system/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/IGMED01/learning-context-system/codeql.yml?branch=main&label=CodeQL)](https://github.com/IGMED01/learning-context-system/actions/workflows/codeql.yml)
+![Node 20+](https://img.shields.io/badge/node-20%2B-339933?logo=nodedotjs&logoColor=white)
+![NEXUS](https://img.shields.io/badge/platform-NEXUS-2563eb)
 
 Learning Context System (LCS) is a CLI for **coding with teaching, memory, and context control in the same workflow**.
 
 > Spanish summary available in [README.es.md](README.es.md).
+
+## Quick links
+
+- [NEXUS plan](NEXUS-PLAN.md)
+- [Docs index](docs/README.md)
+- [NEXUS API guide](docs/nexus-api.md)
+- [Zero-to-demo](docs/zero-to-demo.md)
+- [Release checklist](docs/release-checklist.md)
 
 It does three things together:
 
@@ -90,6 +103,7 @@ Today it provides:
 - versioned JSON contracts for CLI automation (`--format json`)
 - CI quality gates (tests, typecheck, build, benchmarks, security checks)
 - NEXUS API + SDK + OpenAPI + visual demo (`/api/demo`)
+- guard policy profiles, sync drift, observability alerts, and rollback planning endpoints
 
 ## Current maturity snapshot
 
@@ -259,7 +273,10 @@ These projects are credited as architectural inspiration. They are not listed as
 - `docs/context-noise-cancellation.md`: design of the context filtering system
 - `docs/repo-split-5-repos.md`: current repository strategy: one repo now, five internal domains
 - `docs/benchmark.md`: benchmark method and metrics
+- `docs/README.md`: ordered documentation index for professional navigation
 - `docs/nexus-api.md`: API endpoints, OpenAPI export, SDK usage, and demo UI flow
+- `docs/zero-to-demo.md`: end-to-end execution from clean checkout to live demo
+- `docs/release-checklist.md`: release hardening checklist
 - `docs/security-model.md`: scan safety model, secret redaction policy, and limits
 - `docs/skills-governance.md`: policy to approve/block skills with risk tiers and rollback rules
 - `docs/ops-runbook.md`: operational checklist for validation, degraded mode, and release hygiene
@@ -285,7 +302,11 @@ These projects are credited as architectural inspiration. They are not listed as
 - `src/eval/domain-eval-suite.js`: domain-oriented eval suite runner for mandatory CI gate
 - `src/observability/metrics-store.js`: local command metrics store and aggregated observability report
 - `src/observability/dashboard-data.js`: dashboard-ready observability payload
+- `src/observability/alert-engine.js`: alert status from blocked/degraded/recall metrics
+- `src/guard/domain-policy-profiles.js`: guard policy profiles by domain
+- `src/sync/drift-monitor.js`: drift monitoring across sync runs
 - `src/versioning/`: prompt version store + rollback planner
+- `src/versioning/rollback-policy.js`: rollback policy wrapper for API planning
 - `src/interface/`: OpenAPI builder + visual demo page
 - `src/sdk/`: NEXUS API client SDK
 - `src/api/`: auth middleware and HTTP server (`/api/ask`, `/api/guard/output`, `/api/sync`, `/api/observability/dashboard`, `/api/versioning/*`, `/api/openapi.json`, `/api/demo`)
@@ -357,6 +378,7 @@ npm run typecheck
 npm run build
 npm run release:check
 npm run benchmark
+npm run benchmark:foundations
 npm run benchmark:recall
 npm run benchmark:vertical
 npm run eval:domains

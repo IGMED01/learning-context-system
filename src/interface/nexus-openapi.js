@@ -80,9 +80,16 @@ export function buildNexusOpenApiSpec(options = {}) {
               enum: ["es", "en"]
             },
             provider: { type: "string" },
+            fallbackProviders: {
+              type: "array",
+              items: {
+                type: "string"
+              }
+            },
             model: { type: "string" },
             tokenBudget: { type: "integer" },
-            maxChunks: { type: "integer" }
+            maxChunks: { type: "integer" },
+            guardPolicyProfile: { type: "string" }
           }
         },
         GuardRequest: {
@@ -91,6 +98,7 @@ export function buildNexusOpenApiSpec(options = {}) {
           additionalProperties: true,
           properties: {
             output: { type: "string" },
+            guardPolicyProfile: { type: "string" },
             guard: { type: "object", additionalProperties: true },
             compliance: { type: "object", additionalProperties: true }
           }
@@ -156,6 +164,14 @@ export function buildNexusOpenApiSpec(options = {}) {
           }
         }
       },
+      "/api/sync/drift": {
+        get: {
+          summary: "Sync drift report across runs",
+          responses: {
+            "200": { description: "Drift report" }
+          }
+        }
+      },
       "/api/sync": {
         post: {
           summary: "Run sync now",
@@ -180,6 +196,15 @@ export function buildNexusOpenApiSpec(options = {}) {
           responses: {
             "200": { description: "Output accepted" },
             "422": { description: "Output blocked" }
+          }
+        }
+      },
+      "/api/guard/policies": {
+        get: {
+          summary: "List available guard policy profiles",
+          security: [],
+          responses: {
+            "200": { description: "Guard profiles list" }
           }
         }
       },
@@ -240,6 +265,46 @@ export function buildNexusOpenApiSpec(options = {}) {
           }
         }
       },
+      "/api/observability/alerts": {
+        get: {
+          summary: "Alert status derived from observability metrics",
+          parameters: [
+            {
+              name: "blockedRateMax",
+              in: "query",
+              required: false,
+              schema: { type: "number" }
+            },
+            {
+              name: "degradedRateMax",
+              in: "query",
+              required: false,
+              schema: { type: "number" }
+            },
+            {
+              name: "recallHitRateMin",
+              in: "query",
+              required: false,
+              schema: { type: "number" }
+            },
+            {
+              name: "averageDurationMsMax",
+              in: "query",
+              required: false,
+              schema: { type: "number" }
+            },
+            {
+              name: "minRuns",
+              in: "query",
+              required: false,
+              schema: { type: "integer" }
+            }
+          ],
+          responses: {
+            "200": { description: "Alert report" }
+          }
+        }
+      },
       "/api/versioning/prompts": {
         get: {
           summary: "List prompt versions by key",
@@ -293,6 +358,36 @@ export function buildNexusOpenApiSpec(options = {}) {
           ],
           responses: {
             "200": { description: "Prompt diff payload" }
+          }
+        }
+      },
+      "/api/versioning/rollback-plan": {
+        post: {
+          summary: "Build rollback plan from policy + eval scores",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["promptKey"],
+                  properties: {
+                    promptKey: { type: "string" },
+                    minScore: { type: "number" },
+                    preferPrevious: { type: "boolean" },
+                    evalScoresByVersion: {
+                      type: "object",
+                      additionalProperties: {
+                        type: "number"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Rollback plan response" }
           }
         }
       }

@@ -42,6 +42,14 @@
  */
 
 /**
+ * @typedef {{
+ *   provider?: string,
+ *   fallbackProviders?: string[],
+ *   options?: LlmGenerateOptions
+ * }} LlmFallbackInput
+ */
+
+/**
  * @param {unknown} value
  */
 function asFiniteNumber(value) {
@@ -69,6 +77,66 @@ export function normalizeGenerateResult(input) {
     usage,
     raw: input.raw
   };
+}
+
+/**
+ * @param {{ get: (name?: string) => LlmProvider }} registry
+ * @param {string} prompt
+ * @param {LlmFallbackInput} [input]
+ */
+export async function generateWithProviderFallback(registry, prompt, input = {}) {
+  const primaryName = typeof input.provider === "string" ? input.provider.trim() : "";
+  const fallbackProviders = Array.isArray(input.fallbackProviders)
+    ? input.fallbackProviders
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter(Boolean)
+    : [];
+  const options = input.options ?? {};
+  const queue = [...new Set([primaryName, ...fallbackProviders].filter(Boolean))];
+
+  if (!queue.length) {
+    queue.push("");
+  }
+
+  /** @type {Array<{ provider: string, ok: boolean, error?: string }>} */
+  const attempts = [];
+  /** @type {Error | null} */
+  let lastError = null;
+
+  for (const providerName of queue) {
+    try {
+      const provider = registry.get(providerName);
+      const generated = await provider.generate(prompt, options);
+
+      attempts.push({
+        provider: provider.provider,
+        ok: true
+      });
+
+      return {
+        provider: provider.provider,
+        generated,
+        attempts
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lastError = error instanceof Error ? error : new Error(message);
+      attempts.push({
+        provider: providerName || "default",
+        ok: false,
+        error: message
+      });
+    }
+  }
+
+  const error = new Error(
+    `All provider attempts failed: ${attempts.map((entry) => `${entry.provider}:${entry.error ?? "error"}`).join(" | ")}`
+  );
+
+  throw Object.assign(error, {
+    attempts,
+    cause: lastError
+  });
 }
 
 /**
@@ -148,6 +216,20 @@ export function createLlmProviderRegistry(options = {}) {
 
     getDefault() {
       return defaultProvider;
+    },
+
+    /**
+     * @param {string} prompt
+     * @param {LlmFallbackInput} [input]
+     */
+    async generateWithFallback(prompt, input = {}) {
+      return generateWithProviderFallback(
+        {
+          get: (name = "") => this.get(name)
+        },
+        prompt,
+        input
+      );
     }
   };
 }

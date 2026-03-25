@@ -1,6 +1,19 @@
-# Learning Context System - Resumen en espanol
+# Learning Context System (NEXUS) - Resumen en espanol
+
+[![CI](https://img.shields.io/github/actions/workflow/status/IGMED01/learning-context-system/ci.yml?branch=main&label=CI)](https://github.com/IGMED01/learning-context-system/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/IGMED01/learning-context-system/codeql.yml?branch=main&label=CodeQL)](https://github.com/IGMED01/learning-context-system/actions/workflows/codeql.yml)
+![Node 20+](https://img.shields.io/badge/node-20%2B-339933?logo=nodedotjs&logoColor=white)
+![NEXUS](https://img.shields.io/badge/platform-NEXUS-2563eb)
 
 Learning Context System es una CLI para **programar, ensenar y controlar contexto al mismo tiempo**.
+
+## Enlaces rapidos
+
+- [Plan NEXUS](NEXUS-PLAN.md)
+- [Indice de documentacion](docs/README.md)
+- [Guia API NEXUS](docs/nexus-api.md)
+- [Zero-to-demo](docs/zero-to-demo.md)
+- [Checklist de release](docs/release-checklist.md)
 
 ## Que hace este proyecto
 
@@ -190,6 +203,7 @@ Incluye:
 - contratos JSON estables para automatizacion
 - gates de calidad en CI (tests, typecheck, build y benchmarks)
 - NEXUS API con SDK, OpenAPI y demo visual (`/api/demo`)
+- perfiles de guard, drift de sync, alertas de observabilidad y plan de rollback por API
 
 ## Snapshot actual de madurez
 
@@ -230,7 +244,10 @@ Lectura correcta:
 - `docs/repo-split-5-repos.md`: estrategia actual del repositorio: 1 repo ahora, 5 dominios internos
 - `docs/status-actual.md`: estado operativo actual y hitos cerrados
 - `docs/usage.md`: como usar la CLI
+- `docs/README.md`: indice ordenado de documentacion
 - `docs/nexus-api.md`: endpoints API, export OpenAPI, uso del SDK y demo UI
+- `docs/zero-to-demo.md`: flujo completo desde checkout limpio hasta demo
+- `docs/release-checklist.md`: checklist de hardening para release
 - `learning-context.config.json`: defaults versionados del proyecto
 - `VERSIONING.md`: politica para alinear version de paquete, tags y releases
 - `src/ci/pr-learnings.js`: mapeador de metadata de PR mergeada hacia payload de aprendizaje durable
@@ -246,7 +263,11 @@ Lectura correcta:
 - `src/eval/`: consistency scorer + CI gate + suite de eval por dominio
 - `src/observability/metrics-store.js`: almacenamiento local de metricas de comandos y reporte agregado
 - `src/observability/dashboard-data.js`: payload agregado para dashboard
+- `src/observability/alert-engine.js`: motor de alertas por umbrales operativos
+- `src/guard/domain-policy-profiles.js`: perfiles de guard por dominio
+- `src/sync/drift-monitor.js`: monitoreo de drift entre corridas de sync
 - `src/versioning/`: versionado de prompts y plan de rollback
+- `src/versioning/rollback-policy.js`: politica para planificar rollback por API
 - `src/interface/`: constructor OpenAPI + demo UI visual
 - `src/sdk/`: cliente SDK de la API NEXUS
 - `src/api/`: auth middleware y servidor HTTP (`/api/ask`, `/api/guard/output`, `/api/sync`, `/api/observability/dashboard`, `/api/versioning/*`, `/api/openapi.json`, `/api/demo`)
@@ -317,6 +338,7 @@ npm run typecheck
 npm run build
 npm run release:check
 npm run benchmark
+npm run benchmark:foundations
 npm run benchmark:recall
 npm run benchmark:vertical
 npm run eval:domains

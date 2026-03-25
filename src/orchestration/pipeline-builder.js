@@ -37,6 +37,13 @@ function asRecord(value) {
 }
 
 /**
+ * @param {number} value
+ */
+function waitMs(value) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, value)));
+}
+
+/**
  * NEXUS:5 — dynamic workflow pipeline builder with pluggable executors.
  * @param {{ executors?: Record<string, StepExecutor> }} [options]
  */
@@ -82,7 +89,7 @@ export function createPipelineBuilder(options = {}) {
         input,
         steps: {}
       };
-      /** @type {Array<{ stepId: string, stepType: string, status: string, durationMs: number, error?: string }>} */
+      /** @type {Array<{ stepId: string, stepType: string, status: string, durationMs: number, attempts?: number, error?: string }>} */
       const trace = [];
 
       for (const step of pipeline.steps) {
@@ -109,14 +116,46 @@ export function createPipelineBuilder(options = {}) {
           inputKey && inputKey in asRecord(state.steps)
             ? asRecord(state.steps)[inputKey]
             : input;
+        const params = asRecord(step.params);
+        const retryAttempts = Math.max(
+          0,
+          Math.min(5, Math.trunc(Number(params.retryAttempts ?? params.retries ?? 0)))
+        );
+        const retryDelayMs = Math.max(0, Math.trunc(Number(params.retryDelayMs ?? 0)));
 
         try {
-          const result = await executor({
-            step,
-            state,
-            input: stepInput,
-            params: asRecord(step.params)
-          });
+          /** @type {unknown} */
+          let result;
+          let attempts = 0;
+          /** @type {Error | null} */
+          let lastError = null;
+
+          for (let attempt = 0; attempt <= retryAttempts; attempt += 1) {
+            attempts = attempt + 1;
+            try {
+              result = await executor({
+                step,
+                state,
+                input: stepInput,
+                params
+              });
+              lastError = null;
+              break;
+            } catch (error) {
+              lastError = error instanceof Error ? error : new Error(String(error));
+
+              if (attempt < retryAttempts) {
+                if (retryDelayMs > 0) {
+                  await waitMs(retryDelayMs);
+                }
+                continue;
+              }
+            }
+          }
+
+          if (lastError) {
+            throw lastError;
+          }
 
           asRecord(state.steps)[step.id] = result;
 
@@ -124,7 +163,8 @@ export function createPipelineBuilder(options = {}) {
             stepId: step.id,
             stepType: step.type,
             status: "ok",
-            durationMs: Date.now() - startedAt
+            durationMs: Date.now() - startedAt,
+            attempts
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -134,6 +174,7 @@ export function createPipelineBuilder(options = {}) {
             stepType: step.type,
             status: step.optional ? "failed-optional" : "failed",
             durationMs: Date.now() - startedAt,
+            attempts: retryAttempts + 1,
             error: message
           });
 
