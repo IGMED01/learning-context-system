@@ -67,6 +67,17 @@ export function buildNexusOpenApiSpec(options = {}) {
             }
           }
         },
+        ErrorResponse: {
+          type: "object",
+          required: ["status", "error", "errorCode", "requestId"],
+          properties: {
+            status: { type: "string", enum: ["error"] },
+            error: { type: "string" },
+            errorCode: { type: "string" },
+            requestId: { type: "string" },
+            details: { type: "object", additionalProperties: true }
+          }
+        },
         AskRequest: {
           type: "object",
           required: ["question"],
@@ -262,7 +273,23 @@ export function buildNexusOpenApiSpec(options = {}) {
             }
           },
           responses: {
-            "200": { description: "Pipeline result" }
+            "200": { description: "Pipeline result" },
+            "400": {
+              description: "Invalid request payload",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ErrorResponse" }
+                }
+              }
+            },
+            "500": {
+              description: "Internal error",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ErrorResponse" }
+                }
+              }
+            }
           }
         }
       },
@@ -281,7 +308,23 @@ export function buildNexusOpenApiSpec(options = {}) {
           },
           responses: {
             "200": { description: "Answer generated" },
-            "422": { description: "Guard/compliance blocked" }
+            "400": {
+              description: "Invalid request payload",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ErrorResponse" }
+                }
+              }
+            },
+            "422": { description: "Guard/compliance blocked" },
+            "500": {
+              description: "Internal error",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ErrorResponse" }
+                }
+              }
+            }
           }
         }
       },
@@ -358,7 +401,23 @@ export function buildNexusOpenApiSpec(options = {}) {
             }
           },
           responses: {
-            "200": { description: "Domain eval report" }
+            "200": { description: "Domain eval report" },
+            "400": {
+              description: "Invalid request payload",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ErrorResponse" }
+                }
+              }
+            },
+            "500": {
+              description: "Internal error",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ErrorResponse" }
+                }
+              }
+            }
           }
         }
       },

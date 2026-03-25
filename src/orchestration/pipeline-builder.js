@@ -43,6 +43,29 @@ function waitMs(value) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, value)));
 }
 
+function createRunId() {
+  return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * @param {Array<{ status: string }>} trace
+ */
+function buildTraceSummary(trace) {
+  const totalSteps = trace.length;
+  const okSteps = trace.filter((entry) => entry.status === "ok").length;
+  const skippedSteps = trace.filter((entry) => entry.status === "skipped").length;
+  const failedOptionalSteps = trace.filter((entry) => entry.status === "failed-optional").length;
+  const failedSteps = trace.filter((entry) => entry.status === "failed").length;
+
+  return {
+    totalSteps,
+    okSteps,
+    skippedSteps,
+    failedOptionalSteps,
+    failedSteps
+  };
+}
+
 /**
  * NEXUS:5 — dynamic workflow pipeline builder with pluggable executors.
  * @param {{ executors?: Record<string, StepExecutor> }} [options]
@@ -85,11 +108,14 @@ export function createPipelineBuilder(options = {}) {
         throw new Error("Invalid pipeline: id and steps are required.");
       }
 
+      const runId = createRunId();
+      const pipelineStartedAt = new Date().toISOString();
+      const pipelineStartedAtMs = Date.now();
       const state = {
         input,
         steps: {}
       };
-      /** @type {Array<{ stepId: string, stepType: string, status: string, durationMs: number, attempts?: number, error?: string }>} */
+      /** @type {Array<{ stepId: string, stepType: string, status: string, durationMs: number, inputFrom?: string, optional?: boolean, attempts?: number, attemptTrace?: Array<{ attempt: number, status: string, durationMs: number, error?: string }>, error?: string }>} */
       const trace = [];
 
       for (const step of pipeline.steps) {
@@ -103,6 +129,8 @@ export function createPipelineBuilder(options = {}) {
               stepType: step.type,
               status: "skipped",
               durationMs: 0,
+              inputFrom: step.inputFrom,
+              optional: step.optional === true,
               error: "missing-executor"
             });
             continue;
@@ -122,6 +150,8 @@ export function createPipelineBuilder(options = {}) {
           Math.min(5, Math.trunc(Number(params.retryAttempts ?? params.retries ?? 0)))
         );
         const retryDelayMs = Math.max(0, Math.trunc(Number(params.retryDelayMs ?? 0)));
+        /** @type {Array<{ attempt: number, status: string, durationMs: number, error?: string }>} */
+        const attemptTrace = [];
 
         try {
           /** @type {unknown} */
@@ -132,6 +162,7 @@ export function createPipelineBuilder(options = {}) {
 
           for (let attempt = 0; attempt <= retryAttempts; attempt += 1) {
             attempts = attempt + 1;
+            const attemptStartedAt = Date.now();
             try {
               result = await executor({
                 step,
@@ -139,10 +170,21 @@ export function createPipelineBuilder(options = {}) {
                 input: stepInput,
                 params
               });
+              attemptTrace.push({
+                attempt: attempts,
+                status: "ok",
+                durationMs: Date.now() - attemptStartedAt
+              });
               lastError = null;
               break;
             } catch (error) {
               lastError = error instanceof Error ? error : new Error(String(error));
+              attemptTrace.push({
+                attempt: attempts,
+                status: "failed",
+                durationMs: Date.now() - attemptStartedAt,
+                error: lastError.message
+              });
 
               if (attempt < retryAttempts) {
                 if (retryDelayMs > 0) {
@@ -164,6 +206,9 @@ export function createPipelineBuilder(options = {}) {
             stepType: step.type,
             status: "ok",
             durationMs: Date.now() - startedAt,
+            inputFrom: step.inputFrom,
+            optional: step.optional === true,
+            attemptTrace,
             attempts
           });
         } catch (error) {
@@ -174,6 +219,9 @@ export function createPipelineBuilder(options = {}) {
             stepType: step.type,
             status: step.optional ? "failed-optional" : "failed",
             durationMs: Date.now() - startedAt,
+            inputFrom: step.inputFrom,
+            optional: step.optional === true,
+            attemptTrace,
             attempts: retryAttempts + 1,
             error: message
           });
@@ -187,8 +235,13 @@ export function createPipelineBuilder(options = {}) {
       }
 
       return {
+        runId,
         pipelineId: pipeline.id,
         pipelineName: pipeline.name,
+        startedAt: pipelineStartedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Math.max(0, Date.now() - pipelineStartedAtMs),
+        summary: buildTraceSummary(trace),
         state,
         trace
       };

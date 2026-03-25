@@ -2,7 +2,7 @@
 
 ## Decisión recomendada
 
-**Lo que conviene hoy es subir y consolidar todo en el repo de LCS**, manteniendo una división **lógica** en 5 dominios internos, **no** separar todavía en 5 repos físicos.
+**Lo que conviene hoy es subir y consolidar todo en el repo de NEXUS**, manteniendo una división **lógica** en 5 dominios internos, **no** separar todavía en 5 repos físicos.
 
 La separación en múltiples repos solo conviene cuando:
 
@@ -22,9 +22,9 @@ Hoy el estado de madurez no justifica ese costo, especialmente con:
 
 ### Opción recomendada ahora
 
-Mantener **un solo repo principal**:
+Mantener **un solo repo principal NEXUS**:
 
-- `learning-context-system`
+- `learning-context-system` (nombre actual en GitHub del repo NEXUS)
 
 Y reorganizarlo en 5 dominios internos.
 
@@ -32,7 +32,7 @@ Y reorganizarlo en 5 dominios internos.
 
 Separar en repos físicos **más adelante**, solo si el crecimiento real lo pide.
 
-## Estructura objetivo dentro del repo LCS
+## Estructura objetivo dentro del repo NEXUS
 
 ### 1) Core
 
@@ -172,7 +172,7 @@ Separar en repos físicos **más adelante**, solo si el crecimiento real lo pide
 
 - `README.md`
 - `README.es.md`
-- `ROADMAP.md`
+- `docs/planning/roadmap.md`
 - `CONTRIBUTING.md`
 
 ## Mapa resumido
@@ -218,7 +218,7 @@ Separar un dominio en repo propio solo cuando cumpla al menos 4 de estas 6 condi
 
 ### Fase 1 — ahora
 
-- subir y estabilizar todo en `learning-context-system`
+- subir y estabilizar todo en `learning-context-system` (repo NEXUS)
 - ordenar carpetas por dominio
 - mejorar boundaries internos
 - mantener Engram fuera de lo público si corresponde
@@ -242,7 +242,7 @@ pasar de 1 repo a:
 
 ### Lo que conviene hacer ahora
 
-**Subir todo al repo de LCS**, pero con esta narrativa:
+**Subir todo al repo de NEXUS**, pero con esta narrativa:
 
 - un solo repo físico
 - cinco dominios internos bien definidos

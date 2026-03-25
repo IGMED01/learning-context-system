@@ -5,9 +5,10 @@ Central index for all repository documentation.
 ## Start here
 
 1. [README](../README.md) — product overview, architecture map, quick start
-2. [NEXUS Plan](../NEXUS-PLAN.md) — phase/layer checklist and execution status
-3. [NEXUS API guide](./nexus-api.md) — API, OpenAPI, SDK, and demo UI
-4. [Usage guide](./usage.md) — CLI contracts and command workflows
+2. [NEXUS Plan](./planning/nexus-plan.md) — phase/layer checklist and execution status
+3. [Planning index](./planning/roadmap.md) — current priorities by section
+4. [NEXUS API guide](./nexus-api.md) — API, OpenAPI, SDK, and demo UI
+5. [Usage guide](./usage.md) — CLI contracts and command workflows
 
 ## Architecture and operations
 
@@ -16,7 +17,7 @@ Central index for all repository documentation.
 - [Ops runbook](./ops-runbook.md)
 - [Benchmark strategy](./benchmark.md)
 - [Status actual](./status-actual.md)
-- [LCS scope](./lcs-scope.md)
+- [NEXUS:3 (LCS) scope](./lcs-scope.md)
 
 ## NEXUS by phase
 

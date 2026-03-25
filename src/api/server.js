@@ -74,6 +74,30 @@ function sendHtml(response, statusCode, html) {
   response.end(html);
 }
 
+function createRequestId() {
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * @param {http.ServerResponse} response
+ * @param {number} statusCode
+ * @param {{
+ *   requestId: string,
+ *   code: string,
+ *   message: string,
+ *   details?: Record<string, unknown>
+ * }} input
+ */
+function sendErrorJson(response, statusCode, input) {
+  sendJson(response, statusCode, {
+    status: "error",
+    error: input.message,
+    errorCode: input.code,
+    requestId: input.requestId,
+    details: input.details ?? {}
+  });
+}
+
 /**
  * @param {http.IncomingMessage} request
  */
@@ -239,6 +263,8 @@ export function createNexusApiServer(options = {}) {
 
   const server = http.createServer(async (request, response) => {
     const requestStartedAt = Date.now();
+    const requestId = createRequestId();
+    response.setHeader("x-request-id", requestId);
 
     try {
       const method = request.method ?? "GET";
@@ -288,10 +314,13 @@ export function createNexusApiServer(options = {}) {
       });
 
       if (!authResult.authorized) {
-        sendJson(response, authResult.statusCode ?? 401, {
-          status: "error",
-          error: authResult.error,
-          reason: authResult.reason
+        sendErrorJson(response, authResult.statusCode ?? 401, {
+          requestId,
+          code: "auth_unauthorized",
+          message: authResult.error ?? "Unauthorized request.",
+          details: {
+            reason: authResult.reason ?? "unauthorized"
+          }
         });
         await recordApiMetric("api.auth.blocked", requestStartedAt, {
           command: "api.auth.blocked",
@@ -431,9 +460,10 @@ export function createNexusApiServer(options = {}) {
         const promptKey = String(requestUrl.searchParams.get("promptKey") ?? "").trim();
 
         if (!promptKey) {
-          sendJson(response, 400, {
-            status: "error",
-            error: "Missing 'promptKey' query parameter."
+          sendErrorJson(response, 400, {
+            requestId,
+            code: "missing_prompt_key",
+            message: "Missing 'promptKey' query parameter."
           });
           await recordApiMetric("api.versioning.list", requestStartedAt, {
             command: "api.versioning.list",
@@ -465,9 +495,10 @@ export function createNexusApiServer(options = {}) {
         const content = String(body.content ?? "").trim();
 
         if (!promptKey || !content) {
-          sendJson(response, 400, {
-            status: "error",
-            error: "Missing 'promptKey' or 'content' in request body."
+          sendErrorJson(response, 400, {
+            requestId,
+            code: "missing_prompt_version_input",
+            message: "Missing 'promptKey' or 'content' in request body."
           });
           await recordApiMetric("api.versioning.save", requestStartedAt, {
             command: "api.versioning.save",
@@ -500,9 +531,10 @@ export function createNexusApiServer(options = {}) {
         const rightId = String(requestUrl.searchParams.get("rightId") ?? "").trim();
 
         if (!leftId || !rightId) {
-          sendJson(response, 400, {
-            status: "error",
-            error: "Missing 'leftId' or 'rightId' query parameters."
+          sendErrorJson(response, 400, {
+            requestId,
+            code: "missing_version_diff_input",
+            message: "Missing 'leftId' or 'rightId' query parameters."
           });
           await recordApiMetric("api.versioning.compare", requestStartedAt, {
             command: "api.versioning.compare",
@@ -532,9 +564,10 @@ export function createNexusApiServer(options = {}) {
         const promptKey = String(body.promptKey ?? "").trim();
 
         if (!promptKey) {
-          sendJson(response, 400, {
-            status: "error",
-            error: "Missing 'promptKey' in request body."
+          sendErrorJson(response, 400, {
+            requestId,
+            code: "missing_prompt_key",
+            message: "Missing 'promptKey' in request body."
           });
           await recordApiMetric("api.versioning.rollback-plan", requestStartedAt, {
             command: "api.versioning.rollback-plan",
@@ -639,9 +672,10 @@ export function createNexusApiServer(options = {}) {
         const question = String(body.question ?? "").trim();
 
         if (!question) {
-          sendJson(response, 400, {
-            status: "error",
-            error: "Missing 'question' in request body."
+          sendErrorJson(response, 400, {
+            requestId,
+            code: "missing_question",
+            message: "Missing 'question' in request body."
           });
           return;
         }
@@ -728,9 +762,10 @@ export function createNexusApiServer(options = {}) {
         return;
       }
 
-      sendJson(response, 404, {
-        status: "error",
-        error: `Route ${method} ${pathname} not found.`
+      sendErrorJson(response, 404, {
+        requestId,
+        code: "route_not_found",
+        message: `Route ${method} ${pathname} not found.`
       });
       await recordApiMetric("api.route.404", requestStartedAt, {
         command: "api.route.404",
@@ -742,17 +777,22 @@ export function createNexusApiServer(options = {}) {
         }
       });
     } catch (error) {
-      sendJson(response, 500, {
-        status: "error",
-        error: error instanceof Error ? error.message : String(error)
+      const message = error instanceof Error ? error.message : String(error);
+      const invalidJson = /Invalid JSON request body\./i.test(message);
+      const statusCode = invalidJson ? 400 : 500;
+
+      sendErrorJson(response, statusCode, {
+        requestId,
+        code: invalidJson ? "invalid_json" : "internal_error",
+        message
       });
-      await recordApiMetric("api.route.500", requestStartedAt, {
-        command: "api.route.500",
+      await recordApiMetric(invalidJson ? "api.route.400" : "api.route.500", requestStartedAt, {
+        command: invalidJson ? "api.route.400" : "api.route.500",
         durationMs: 0,
         degraded: true,
         safety: {
           blocked: true,
-          reason: "internal-error"
+          reason: invalidJson ? "invalid-json" : "internal-error"
         }
       });
     }

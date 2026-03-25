@@ -1,6 +1,6 @@
-# LCS Integration Guide (Quick Start)
+# NEXUS Integration Guide (NEXUS:3 Quick Start)
 
-_For operators and integrators who want to run LCS without reading source code._
+_For operators and integrators who want to run NEXUS context workflows (`NEXUS:3`) without reading source code._
 
 ## Prerequisites
 
@@ -80,7 +80,7 @@ All `--format json` outputs follow this envelope:
 | Malformed Engram output | Treats as empty recall | `degraded: true`, `memoryRecall.failureKind: "parse-error"` |
 | Safety gate blocked | Command exits with structured error | `status: "blocked"`, `safety.reason: "safety-gate"` |
 
-LCS **never crashes** on memory failures. It degrades and continues with workspace-only context.
+NEXUS:3 **never crashes** on memory failures. It degrades and continues with workspace-only context.
 
 ## 5. Project config
 

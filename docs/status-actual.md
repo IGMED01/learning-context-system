@@ -1,10 +1,10 @@
 # Estado actual del proyecto
 
-_Ultima actualizacion: 24 de marzo de 2026_
+_Ultima actualizacion: 25 de marzo de 2026_
 
 ## Resumen ejecutivo
 
-Este ecosistema hoy es **un solo repositorio de LCS con cinco dominios internos**, no una suite multi-repo.
+Este ecosistema hoy es **un solo repositorio de NEXUS con cinco dominios internos**, no una suite multi-repo.
 
 El repo esta en estado **operativo serio** para uso open source:
 
@@ -93,7 +93,7 @@ No conviene abrir varios repos ahora porque:
 
 - muchas piezas todavia cambian juntas
 - el costo de versionado y CI cruzado seria alto
-- primero conviene modularizar dentro de LCS y despues extraer
+- primero conviene modularizar dentro de NEXUS (manteniendo LCS como capa `NEXUS:3`) y despues extraer
 
 Ver `docs/repo-split-5-repos.md`.
 

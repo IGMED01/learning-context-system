@@ -136,3 +136,29 @@ curl http://127.0.0.1:8787/api/guard/policies
   - `baselineWindow`
 
 The drift report includes `thresholds`, per-run drift level (`stable|warning|critical`), and spike detection metadata.
+
+## Error contract (NEXUS:10 hardening)
+
+Error responses now follow a consistent envelope:
+
+```json
+{
+  "status": "error",
+  "error": "Human-readable message",
+  "errorCode": "machine_readable_code",
+  "requestId": "req-...",
+  "details": {}
+}
+```
+
+- Response header `x-request-id` is always included.
+- SDK errors now expose `errorCode`, `requestId`, and `apiMessage`.
+
+## Pipeline traceability (NEXUS:5 hardening)
+
+`POST /api/pipeline/run` now returns richer trace metadata:
+
+- `runId`
+- `startedAt` / `finishedAt` / `durationMs`
+- `summary` (`okSteps`, `failedSteps`, `skippedSteps`, etc.)
+- per-step `attemptTrace` for retry visibility

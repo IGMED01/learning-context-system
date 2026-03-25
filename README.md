@@ -1,17 +1,17 @@
-# Learning Context System (NEXUS)
+# NEXUS — Learning Workspace Platform
 
 [![CI](https://img.shields.io/github/actions/workflow/status/IGMED01/learning-context-system/ci.yml?branch=main&label=CI)](https://github.com/IGMED01/learning-context-system/actions/workflows/ci.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/IGMED01/learning-context-system/codeql.yml?branch=main&label=CodeQL)](https://github.com/IGMED01/learning-context-system/actions/workflows/codeql.yml)
 ![Node 20+](https://img.shields.io/badge/node-20%2B-339933?logo=nodedotjs&logoColor=white)
 ![NEXUS](https://img.shields.io/badge/platform-NEXUS-2563eb)
 
-Learning Context System (LCS) is a CLI for **coding with teaching, memory, and context control in the same workflow**.
+NEXUS is a CLI-first platform for **coding with teaching, memory, and context control in the same workflow**.
 
 > Spanish summary available in [README.es.md](README.es.md).
 
 ## Quick links
 
-- [NEXUS plan](NEXUS-PLAN.md)
+- [NEXUS plan](docs/planning/nexus-plan.md)
 - [Docs index](docs/README.md)
 - [NEXUS API guide](docs/nexus-api.md)
 - [Zero-to-demo](docs/zero-to-demo.md)
@@ -29,7 +29,7 @@ It does three things together:
 - **LCS** = context engine layer (`NEXUS:3`)
 - **NEXUS:N** = direct layer reference (for example `NEXUS:6` = LLM Layer)
 
-Operational checklists, dependencies, and per-layer priorities are tracked in **`NEXUS-PLAN.md`**.
+Operational checklists, dependencies, and per-layer priorities are tracked in **`docs/planning/nexus-plan.md`**.
 
 ## What this ecosystem actually is
 
@@ -37,7 +37,7 @@ This ecosystem is **not** a generic AI platform and **not** a multi-repo product
 
 Right now, it is:
 
-- **one main LCS repository**
+- **one main NEXUS repository**
 - with **five internal domains**
 - centered on **context selection + teaching + durable memory**
 - exposed through a **Node.js CLI**
@@ -78,7 +78,7 @@ It is **not**:
 
 The correct strategy **today** is:
 
-- keep everything in **one LCS repo**
+- keep everything in **one NEXUS repo**
 - keep the ecosystem **modular by internal domain**
 - extract separate repos **later only if boundaries become stable**
 
@@ -105,6 +105,7 @@ Today it provides:
 - NEXUS API + SDK + OpenAPI + visual demo (`/api/demo`)
 - guard policy profiles, sync drift (levels + configurable thresholds), observability alerts, and rollback planning endpoints
 - ask fallback telemetry (attempt latency/tokens summary) for provider failover analysis
+- consistent API error contract (`errorCode`, `requestId`) and pipeline traceability (`runId`, `attemptTrace`)
 
 ## Current maturity snapshot
 
@@ -286,7 +287,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `docs/usage.md`: CLI usage and input contract
 - `examples/typescript-backend/`: realistic TypeScript middleware workspace
 - `learning-context.config.json`: tracked project defaults for selection, memory, and Engram paths
-- `ROADMAP.md`: next priorities
+- `docs/planning/roadmap.md`: next priorities
 - `VERSIONING.md`: package/tag/release alignment policy
 - `src/analysis/readme-generator.js`: generated learning README builder
 - `src/ci/pr-learnings.js`: merged-PR metadata to durable learning-note payload mapper
@@ -311,7 +312,7 @@ These projects are credited as architectural inspiration. They are not listed as
 - `src/interface/`: OpenAPI builder + visual demo page
 - `src/sdk/`: NEXUS API client SDK
 - `src/api/`: auth middleware and HTTP server (`/api/ask`, `/api/guard/output`, `/api/sync`, `/api/observability/dashboard`, `/api/evals/domain-suite`, `/api/versioning/*`, `/api/openapi.json`, `/api/demo`)
-- `src/security/prowler-ingest.js`: converter from Prowler findings JSON to LCS-compatible chunk JSON
+- `src/security/prowler-ingest.js`: converter from Prowler findings JSON to NEXUS context chunk JSON (`NEXUS:3` compatible)
 - `scripts/sync-pr-learnings.js`: CI helper that syncs merged PR learnings to Notion through `sync-knowledge`
 - `scripts/run-nexus-api.js`: local NEXUS API launcher
 - `src/cli.js`: local CLI entrypoint
@@ -391,9 +392,9 @@ npm run api:nexus
 
 `security:pipeline:example` includes a default quality gate (`min-included-findings=1`, `min-selected-teach-chunks=1`, `min-priority=0.84`).
 
-## How to use LCS (end-to-end)
+## How to use NEXUS (end-to-end)
 
-Use this flow when you want to apply LCS in a real repository:
+Use this flow when you want to apply NEXUS in a real repository (using `NEXUS:3` as the context engine):
 
 1. Validate local setup.
 2. Select high-signal context.
@@ -673,4 +674,4 @@ The runtime is intentionally dependency-light and runs on plain Node to keep loc
 
 ## Roadmaps by area
 
-Use `ROADMAP.md` as the index and the section roadmaps under `docs/roadmaps/` when you want the next steps split by concern instead of mixed in one list.
+Use `docs/planning/roadmap.md` as the index and the section roadmaps under `docs/roadmaps/` when you want the next steps split by concern instead of mixed in one list.
