@@ -97,6 +97,7 @@
 - [x] tests de gate/consistencia en suite portable
 - [x] ampliar suites de eval por dominio (`src/eval/domain-eval-suite.js` + `benchmark/domain-eval-suite.json`)
 - [x] conectar gate a deploy CI como bloqueo obligatorio (`npm run eval:domains` en `.github/workflows/ci.yml`)
+- [x] politica de cobertura por dominio en eval suite (`qualityPolicy.requiredDomains`, `qualityPolicy.minCasesPerDomain`)
 
 ### NEXUS:8 — OBSERVABILITY
 **Prioridad:** Baja
@@ -122,6 +123,7 @@
 - [x] `src/api/server.js`
 - [x] script `npm run api:nexus` (`scripts/run-nexus-api.js`)
 - [x] endpoints operativos (`/api/health`, `/api/sync`, `/api/guard/output`, `/api/pipeline/run`, `/api/ask`)
+- [x] endpoint de evaluacion operativa por dominio (`POST /api/evals/domain-suite`)
 - [x] SDK cliente de API (`src/sdk/nexus-api-client.js`)
 - [x] OpenAPI spec (`src/interface/nexus-openapi.js`, `docs/openapi/nexus-openapi.json`)
 - [x] demo UI completa (`/api/demo`, dashboard + versioning + ask playground)

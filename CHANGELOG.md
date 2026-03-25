@@ -60,6 +60,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added cost-safety enforcement for workspace scans: explicit focus requirement, minimum focus length, and weak-focus debug blocking (`safety.requireExplicitFocusForWorkspaceScan`, `safety.minWorkspaceFocusLength`, `safety.blockDebugWithoutStrongFocus`).
 - `POST /api/ask` now supports `attemptTimeoutMs` and returns fallback execution telemetry (`fallback.summary`) with attempt counts, duration, token totals, and successful provider.
 - Sync drift monitoring now classifies each run as `stable|warning|critical`, detects spike behavior against historical baseline, and supports threshold overrides via `GET /api/sync/drift` query params.
+- Domain eval suite now supports coverage policy (`qualityPolicy.requiredDomains`, `qualityPolicy.minCasesPerDomain`) and can run through API/SDK with `POST /api/evals/domain-suite`.
 
 ### Contracts
 - Added v1 compatibility fixtures/tests for all JSON CLI commands (`version`, `doctor`, `init`, `sync-knowledge`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`).

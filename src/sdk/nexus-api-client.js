@@ -212,6 +212,16 @@ export class NexusApiClient {
   }
 
   /**
+   * @param {{ suitePath?: string, suite?: Record<string, unknown> }} [input]
+   */
+  async runDomainEvalSuite(input = {}) {
+    return this.request("/api/evals/domain-suite", {
+      method: "POST",
+      body: input
+    });
+  }
+
+  /**
    * @param {string} promptKey
    */
   async listPromptVersions(promptKey) {

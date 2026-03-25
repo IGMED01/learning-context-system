@@ -271,7 +271,7 @@ Lectura correcta:
 - `src/versioning/rollback-policy.js`: politica para planificar rollback por API
 - `src/interface/`: constructor OpenAPI + demo UI visual
 - `src/sdk/`: cliente SDK de la API NEXUS
-- `src/api/`: auth middleware y servidor HTTP (`/api/ask`, `/api/guard/output`, `/api/sync`, `/api/observability/dashboard`, `/api/versioning/*`, `/api/openapi.json`, `/api/demo`)
+- `src/api/`: auth middleware y servidor HTTP (`/api/ask`, `/api/guard/output`, `/api/sync`, `/api/observability/dashboard`, `/api/evals/domain-suite`, `/api/versioning/*`, `/api/openapi.json`, `/api/demo`)
 - `src/security/prowler-ingest.js`: convertidor de findings JSON de Prowler a JSON de chunks compatible con la CLI
 - `scripts/sync-pr-learnings.js`: helper de CI para sincronizar aprendizajes de PR mergeadas hacia Notion usando `sync-knowledge`
 - `scripts/run-nexus-api.js`: launcher local de la API NEXUS

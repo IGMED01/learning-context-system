@@ -113,6 +113,18 @@ export function buildNexusOpenApiSpec(options = {}) {
             content: { type: "string" },
             metadata: { type: "object", additionalProperties: true }
           }
+        },
+        DomainEvalRequest: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            suitePath: { type: "string" },
+            suite: {
+              type: "object",
+              additionalProperties: true,
+              description: "Optional inline eval suite payload. If omitted, server loads suitePath/default suite."
+            }
+          }
         }
       }
     },
@@ -329,6 +341,24 @@ export function buildNexusOpenApiSpec(options = {}) {
           ],
           responses: {
             "200": { description: "Alert report" }
+          }
+        }
+      },
+      "/api/evals/domain-suite": {
+        post: {
+          summary: "Run domain eval suite and return pass/blocked report",
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/DomainEvalRequest"
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Domain eval report" }
           }
         }
       },

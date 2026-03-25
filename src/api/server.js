@@ -19,6 +19,7 @@ import { createSyncScheduler } from "../sync/sync-scheduler.js";
 import { createSyncDriftMonitor } from "../sync/drift-monitor.js";
 import { createPipelineBuilder, buildDefaultNexusPipeline } from "../orchestration/pipeline-builder.js";
 import { createDefaultExecutors } from "../orchestration/default-executors.js";
+import { loadDomainEvalSuite, runDomainEvalSuite } from "../eval/domain-eval-suite.js";
 import { buildDashboardData } from "../observability/dashboard-data.js";
 import { evaluateObservabilityAlerts } from "../observability/alert-engine.js";
 import { getObservabilityReport, recordCommandMetric } from "../observability/metrics-store.js";
@@ -119,6 +120,9 @@ function getRequestUrl(request) {
  *     minScore?: number,
  *     preferPrevious?: boolean,
  *     requireAtLeastVersions?: number
+ *   },
+ *   evals?: {
+ *     defaultDomainSuitePath?: string
  *   }
  * }} [options]
  */
@@ -202,6 +206,9 @@ export function createNexusApiServer(options = {}) {
     filePath: options.promptVersionFilePath
   });
   const rollbackPolicy = createRollbackPolicy(options.rollbackPolicy);
+  const defaultDomainSuitePath = path.resolve(
+    options.evals?.defaultDomainSuitePath ?? "benchmark/domain-eval-suite.json"
+  );
   const openApiSpec = buildNexusOpenApiSpec({
     title: options.openApi?.title,
     version: options.openApi?.version,
@@ -373,6 +380,50 @@ export function createNexusApiServer(options = {}) {
           alerts
         });
         await recordApiMetric("api.observability.alerts", requestStartedAt);
+        return;
+      }
+
+      if (method === "POST" && pathname === "/api/evals/domain-suite") {
+        const body = /** @type {{ suitePath?: string, suite?: Record<string, unknown> }} */ (
+          await readJsonBody(request)
+        );
+        const suitePath = String(body.suitePath ?? defaultDomainSuitePath).trim();
+        const sourceSuite =
+          body.suite && typeof body.suite === "object"
+            ? body.suite
+            : await loadDomainEvalSuite(suitePath);
+        const suiteRecord =
+          sourceSuite && typeof sourceSuite === "object"
+            ? /** @type {Record<string, unknown>} */ (sourceSuite)
+            : {};
+
+        const report = runDomainEvalSuite({
+          suite: String(suiteRecord.suite ?? "nexus-domain-suite"),
+          thresholds:
+            suiteRecord.thresholds && typeof suiteRecord.thresholds === "object"
+              ? /** @type {Record<string, unknown>} */ (suiteRecord.thresholds)
+              : {},
+          qualityPolicy:
+            suiteRecord.qualityPolicy && typeof suiteRecord.qualityPolicy === "object"
+              ? /** @type {Record<string, unknown>} */ (suiteRecord.qualityPolicy)
+              : {},
+          cases: Array.isArray(suiteRecord.cases) ? suiteRecord.cases : []
+        });
+
+        sendJson(response, 200, {
+          status: report.status,
+          suitePath,
+          report
+        });
+        await recordApiMetric("api.evals.domain-suite", requestStartedAt, {
+          command: "api.evals.domain-suite",
+          durationMs: 0,
+          degraded: report.status !== "pass",
+          safety: {
+            blocked: report.status !== "pass",
+            reason: report.status !== "pass" ? "domain-evals-blocked" : ""
+          }
+        });
         return;
       }
 

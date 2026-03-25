@@ -37,6 +37,15 @@ function asArray(value) {
 }
 
 /**
+ * @param {unknown} value
+ */
+function asStringArray(value) {
+  return asArray(value)
+    .map((entry) => asString(entry))
+    .filter(Boolean);
+}
+
+/**
  * @param {string} filePath
  */
 export async function loadDomainEvalSuite(filePath) {
@@ -49,7 +58,8 @@ export async function loadDomainEvalSuite(filePath) {
     filePath: resolved,
     suite: asString(root.suite) || path.basename(resolved),
     thresholds: asRecord(root.thresholds),
-    cases: asArray(root.cases)
+    cases: asArray(root.cases),
+    qualityPolicy: asRecord(root.qualityPolicy)
   };
 }
 
@@ -79,6 +89,7 @@ function consistencyFromResponses(responses) {
  * @param {{
  *   suite: string,
  *   thresholds?: Record<string, unknown>,
+ *   qualityPolicy?: Record<string, unknown>,
  *   cases: unknown[]
  * }} suite
  */
@@ -90,6 +101,11 @@ export function runDomainEvalSuite(suite) {
     cost: 180,
     ...suite.thresholds
   };
+  const qualityPolicy = asRecord(suite.qualityPolicy);
+  const minCasesPerDomain = Math.max(1, Math.trunc(asNumber(qualityPolicy.minCasesPerDomain || 1)));
+  const requiredDomains = [...new Set(asStringArray(qualityPolicy.requiredDomains))].sort((a, b) =>
+    a.localeCompare(b)
+  );
 
   const normalizedCases = suite.cases.map((entry, index) => {
     const current = asRecord(entry);
@@ -145,19 +161,40 @@ export function runDomainEvalSuite(suite) {
       total: domainCases.length,
       passed,
       failed: domainCases.length - passed,
-      passRate: domainCases.length ? Number((passed / domainCases.length).toFixed(4)) : 1
+      passRate: domainCases.length ? Number((passed / domainCases.length).toFixed(4)) : 1,
+      status: domainCases.length - passed > 0 ? "blocked" : "pass"
     };
   });
 
   const failedCases = normalizedCases.filter((entry) => entry.gate.status !== "pass");
+  const failedDomains = byDomain.filter((entry) => entry.failed > 0).map((entry) => entry.domain);
+  const missingRequiredDomains = requiredDomains.filter(
+    (domain) => !byDomain.some((entry) => entry.domain === domain)
+  );
+  const insufficientCoverageDomains = byDomain
+    .filter((entry) => entry.total < minCasesPerDomain)
+    .map((entry) => entry.domain);
+  const blockedByCoverage = missingRequiredDomains.length > 0 || insufficientCoverageDomains.length > 0;
 
   return {
     suite: suite.suite,
-    status: failedCases.length ? "blocked" : "pass",
+    status: failedCases.length || blockedByCoverage ? "blocked" : "pass",
     summary: {
       totalCases: normalizedCases.length,
       passedCases: normalizedCases.length - failedCases.length,
-      failedCases: failedCases.length
+      failedCases: failedCases.length,
+      totalDomains: byDomain.length,
+      failedDomains: failedDomains.length,
+      missingRequiredDomains: missingRequiredDomains.length,
+      insufficientCoverageDomains: insufficientCoverageDomains.length
+    },
+    qualityPolicy: {
+      minCasesPerDomain,
+      requiredDomains
+    },
+    coverage: {
+      missingRequiredDomains,
+      insufficientCoverageDomains
     },
     byDomain,
     cases: normalizedCases,
@@ -190,6 +227,26 @@ export function formatDomainEvalSuiteReport(report) {
     lines.push(
       `- [${entry.gate.status === "pass" ? "PASS" : "BLOCK"}] ${entry.domain} :: ${entry.name} | failed: ${failedMetrics}`
     );
+  }
+
+  if (report.coverage?.missingRequiredDomains?.length || report.coverage?.insufficientCoverageDomains?.length) {
+    lines.push("");
+    lines.push("Coverage policy:");
+    lines.push(
+      `- minCasesPerDomain: ${report.qualityPolicy?.minCasesPerDomain ?? 1}`
+    );
+
+    if (report.coverage.missingRequiredDomains.length) {
+      lines.push(
+        `- missing required domains: ${report.coverage.missingRequiredDomains.join(", ")}`
+      );
+    }
+
+    if (report.coverage.insufficientCoverageDomains.length) {
+      lines.push(
+        `- insufficient domain coverage: ${report.coverage.insufficientCoverageDomains.join(", ")}`
+      );
+    }
   }
 
   return lines.join("\n");
