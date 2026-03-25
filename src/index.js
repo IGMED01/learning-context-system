@@ -7,25 +7,16 @@ export {
   NEXUS_SCORING_PROFILES
 } from "./context/noise-canceler.js";
 export { buildLearningReadme } from "./analysis/readme-generator.js";
-export { buildLlmPrompt } from "./llm/prompt-builder.js";
-export { parseLlmResponse } from "./llm/response-parser.js";
-export { createLlmProviderRegistry, generateWithProviderFallback } from "./llm/provider.js";
-export { createNexusApiServer } from "./api/server.js";
-export { createPipelineBuilder, buildDefaultNexusPipeline } from "./orchestration/pipeline-builder.js";
-export { scoreResponseConsistency } from "./eval/consistency-scorer.js";
-export { evaluateCiGate } from "./eval/ci-gate.js";
-export { runDomainEvalSuite, formatDomainEvalSuiteReport } from "./eval/domain-eval-suite.js";
-export { buildDashboardData } from "./observability/dashboard-data.js";
-export {
-  evaluateObservabilityAlerts,
-  formatObservabilityAlertReport
-} from "./observability/alert-engine.js";
-export {
-  getDomainGuardPolicyProfile,
-  listDomainGuardPolicyProfiles,
-  resolveDomainGuardPolicy
-} from "./guard/domain-policy-profiles.js";
-export { createSyncDriftMonitor } from "./sync/drift-monitor.js";
-export { createRollbackPolicy } from "./versioning/rollback-policy.js";
-export { buildNexusOpenApiSpec } from "./interface/nexus-openapi.js";
-export { createNexusApiClient, NexusApiClient } from "./sdk/nexus-api-client.js";
+export { registerRoute, registerMiddleware, handleRequest, jsonResponse, errorResponse } from "./api/router.js";
+export { createGuardMiddleware } from "./api/guard-middleware.js";
+export { runEvalSuite, loadEvalSuite, scoreAccuracy, scoreRelevance } from "./eval/eval-runner.js";
+export { createTrace } from "./observability/trace.js";
+export { recordRequest, getMetricsSnapshot, registerAlertRule } from "./observability/live-metrics.js";
+export { executeWorkflow, registerStepExecutor } from "./orchestration/workflow-engine.js";
+export { createSession, getSession, addTurn, buildConversationContext } from "./orchestration/conversation-manager.js";
+export { executeAction, executeActions } from "./orchestration/action-executor.js";
+export { withRetry } from "./orchestration/retry-policy.js";
+export { savePromptVersion, getCurrentPrompt, rollbackPrompt, listPrompts } from "./versioning/prompt-versioning.js";
+export { saveSnapshot, loadSnapshots, getScoreTrend } from "./versioning/context-snapshot.js";
+export { getCurrentModelConfig, updateModelConfig } from "./versioning/model-config.js";
+export { checkAndRollback } from "./versioning/rollback-engine.js";

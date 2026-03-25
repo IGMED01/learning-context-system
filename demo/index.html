@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEXUS — Context Intelligence Platform</title>
+  <style>
+    :root {
+      --bg:      #0a0a0f;
+      --s1:      #111118;
+      --s2:      #16161f;
+      --s3:      #1c1c28;
+      --b1:      #22223a;
+      --b2:      #2e2e4a;
+      --text:    #e8e8f0;
+      --muted:   #6b6b8a;
+      --faint:   #3a3a55;
+      --accent:  #7c6fff;
+      --accent2: #a89fff;
+      --cyan:    #22d3ee;
+      --green:   #34d399;
+      --red:     #f87171;
+      --orange:  #fbbf24;
+      --pink:    #f472b6;
+      --r:       16px;
+      --r-sm:    10px;
+    }
+
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+    body {
+      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── TOP BAR ─────────────────────────────────── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(10,10,15,0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--b1);
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-n {
+      width: 30px;
+      height: 30px;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--pink) 100%);
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-size: 14px;
+      font-weight: 900;
+      color: #fff;
+      letter-spacing: -1px;
+      flex-shrink: 0;
+    }
+
+    .brand-name {
+      font-size: 15px;
+      font-weight: 700;
+      background: linear-gradient(90deg, #fff 0%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-left: 4px;
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      background: var(--s2);
+      border: 1px solid var(--b1);
+      border-radius: 20px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--red);
+      transition: background .3s;
+      flex-shrink: 0;
+    }
+    .dot.on  { background: var(--green); box-shadow: 0 0 5px var(--green); }
+
+    /* ── BENTO GRID ──────────────────────────────── */
+    .bento {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      grid-auto-rows: 64px;
+      gap: 10px;
+      padding: 16px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    /* CELL base */
+    .cell {
+      background: var(--s1);
+      border: 1px solid var(--b1);
+      border-radius: var(--r);
+      overflow: hidden;
+      transition: border-color .2s, box-shadow .2s;
+      position: relative;
+    }
+
+    .cell:hover {
+      border-color: var(--b2);
+      box-shadow: 0 0 0 1px rgba(124,111,255,.12), 0 8px 32px rgba(0,0,0,.4);
+    }
+
+    /* Column/row spans */
+    .c1  { grid-column: span 1; }
+    .c2  { grid-column: span 2; }
+    .c3  { grid-column: span 3; }
+    .c4  { grid-column: span 4; }
+    .c5  { grid-column: span 5; }
+    .c6  { grid-column: span 6; }
+    .c7  { grid-column: span 7; }
+    .c8  { grid-column: span 8; }
+    .c9  { grid-column: span 9; }
+    .c12 { grid-column: span 12; }
+    .r2  { grid-row: span 2; }
+    .r3  { grid-row: span 3; }
+    .r4  { grid-row: span 4; }
+    .r5  { grid-row: span 5; }
+    .r6  { grid-row: span 6; }
+    .r7  { grid-row: span 7; }
+    .r8  { grid-row: span 8; }
+    .r9  { grid-row: span 9; }
+    .r10 { grid-row: span 10; }
+
+    /* ── CELL HEADER ─────────────────────────────── */
+    .ch {
+      padding: 10px 14px 8px;
+      border-bottom: 1px solid var(--b1);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .ch-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .cb {
+      padding: 12px 14px;
+      height: calc(100% - 41px);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── KPI CELLS ───────────────────────────────── */
+    .kpi-cell {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 14px 16px;
+      position: relative;
+    }
+
+    .kpi-cell::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: var(--r);
+      opacity: .06;
+      background: var(--kc, var(--accent));
+      pointer-events: none;
+    }
+
+    .kpi-cell::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      border-radius: var(--r) var(--r) 0 0;
+      background: var(--kc, var(--accent));
+      opacity: .7;
+    }
+
+    .kpi-icon {
+      font-size: 18px;
+      margin-bottom: 4px;
+      opacity: .7;
+    }
+
+    .kpi-val {
+      font-size: 26px;
+      font-weight: 800;
+      line-height: 1;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kpi-lbl {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      margin-top: 4px;
+    }
+
+    /* ── BUTTONS ─────────────────────────────────── */
+    .btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--r-sm);
+      padding: 7px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s, transform .1s;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+    }
+
+    .btn:hover   { opacity: .85; }
+    .btn:active  { transform: scale(.97); }
+    .btn:disabled { opacity: .3; cursor: not-allowed; }
+    .btn-xs  { padding: 4px 10px; font-size: 11px; border-radius: 6px; }
+    .btn-ghost { background: var(--s3); border: 1px solid var(--b2); color: var(--text); }
+    .btn-ghost:hover { border-color: var(--accent); }
+    .btn-green  { background: var(--green); color: #000; }
+    .btn-cyan   { background: var(--cyan); color: #000; }
+    .btn-danger { background: var(--red); }
+
+    /* ── FORM ────────────────────────────────────── */
+    .lbl {
+      display: block;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .inp, .sel, .ta {
+      width: 100%;
+      background: var(--s3);
+      border: 1px solid var(--b1);
+      border-radius: var(--r-sm);
+      padding: 7px 11px;
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+      transition: border-color .15s;
+    }
+
+    .inp:focus, .sel:focus, .ta:focus { border-color: var(--accent); }
+    .ta { min-height: 70px; resize: vertical; font-family: monospace; font-size: 11px; }
+    .fg { margin-bottom: 10px; }
+
+    /* ── CHAT ────────────────────────────────────── */
+    .msgs {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-bottom: 4px;
+    }
+
+    .msg { display: flex; flex-direction: column; gap: 2px; }
+    .msg.u { align-items: flex-end; }
+    .msg.n { align-items: flex-start; }
+
+    .msg-role { font-size: 10px; color: var(--faint); padding: 0 3px; }
+
+    .bubble {
+      padding: 9px 13px;
+      border-radius: 10px;
+      max-width: 86%;
+      font-size: 12px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+
+    .msg.u .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
+    .msg.n .bubble { background: var(--s3); border: 1px solid var(--b1); border-bottom-left-radius: 3px; }
+
+    .bubble pre {
+      background: var(--bg);
+      border: 1px solid var(--b1);
+      border-radius: 6px;
+      padding: 7px 9px;
+      font-size: 10px;
+      margin-top: 6px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    .chat-bar {
+      display: flex;
+      gap: 6px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--b1);
+      flex-shrink: 0;
+    }
+
+    .chat-bar .inp { flex: 1; }
+
+    .mode-sel {
+      background: var(--s3);
+      border: 1px solid var(--b1);
+      border-radius: var(--r-sm);
+      padding: 7px 9px;
+      color: var(--text);
+      font-size: 11px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    /* ── CONTEXT CHUNKS ──────────────────────────── */
+    .chunk-item {
+      background: var(--s3);
+      border: 1px solid var(--b1);
+      border-radius: var(--r-sm);
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      font-size: 11px;
+    }
+
+    .chunk-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .chunk-src {
+      font-family: monospace;
+      font-size: 10px;
+      color: var(--accent2);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 150px;
+    }
+
+    .score { padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 700; font-family: monospace; }
+    .s-hi { background: rgba(52,211,153,.18); color: var(--green); }
+    .s-md { background: rgba(251,191,36,.18); color: var(--orange); }
+    .s-lo { background: rgba(248,113,113,.18); color: var(--red); }
+
+    .chunk-txt { color: var(--muted); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+    /* ── GUARD ───────────────────────────────────── */
+    .guard-out {
+      padding: 8px 12px;
+      border-radius: var(--r-sm);
+      font-size: 11px;
+      line-height: 1.5;
+      margin-top: 8px;
+    }
+    .g-pass  { background: rgba(52,211,153,.07); border: 1px solid rgba(52,211,153,.3); color: var(--green); }
+    .g-block { background: rgba(248,113,113,.07); border: 1px solid rgba(248,113,113,.3); color: var(--red); }
+    .g-warn  { background: rgba(251,191,36,.07);  border: 1px solid rgba(251,191,36,.3); color: var(--orange); }
+
+    /* ── METRICS BARS ────────────────────────────── */
+    .latency-spark {
+      display: flex;
+      align-items: flex-end;
+      gap: 3px;
+      height: 40px;
+      margin-bottom: 10px;
+    }
+
+    .spark-bar {
+      flex: 1;
+      background: linear-gradient(to top, var(--accent), var(--pink));
+      border-radius: 2px 2px 0 0;
+      opacity: .65;
+      min-height: 3px;
+      transition: height .3s;
+    }
+
+    .score-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 11px;
+    }
+
+    .score-name { width: 80px; color: var(--muted); flex-shrink: 0; }
+    .score-track { flex: 1; height: 5px; background: var(--s3); border-radius: 3px; overflow: hidden; }
+    .score-fill  { height: 100%; border-radius: 3px; transition: width .5s; }
+    .score-pct   { width: 30px; text-align: right; font-family: monospace; font-size: 10px; color: var(--muted); }
+
+    /* ── LOG ─────────────────────────────────────── */
+    .log {
+      background: var(--bg);
+      border: 1px solid var(--b1);
+      border-radius: var(--r-sm);
+      padding: 8px 10px;
+      font-family: monospace;
+      font-size: 10px;
+      max-height: 120px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      color: var(--muted);
+      line-height: 1.5;
+      flex-shrink: 0;
+    }
+
+    /* ── INGEST DROP ─────────────────────────────── */
+    .drop {
+      border: 2px dashed var(--b2);
+      border-radius: var(--r-sm);
+      padding: 20px 12px;
+      text-align: center;
+      cursor: pointer;
+      transition: all .2s;
+      background: var(--s3);
+      margin-bottom: 10px;
+      flex-shrink: 0;
+    }
+
+    .drop:hover, .drop.over { border-color: var(--accent); background: rgba(124,111,255,.06); }
+    .drop-icon { font-size: 26px; margin-bottom: 6px; opacity: .5; }
+    .drop-txt  { font-size: 12px; color: var(--muted); }
+    .drop-hint { font-size: 10px; color: var(--faint); margin-top: 2px; }
+
+    /* ── CHUNK ROWS ──────────────────────────────── */
+    .chunk-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      background: var(--s3);
+      border: 1px solid var(--b1);
+      border-radius: var(--r-sm);
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      font-size: 11px;
+    }
+
+    .chunk-row.blocked { border-color: rgba(248,113,113,.3); background: rgba(248,113,113,.04); }
+    .chunk-id { font-family: monospace; font-size: 10px; color: var(--accent2); margin-bottom: 2px; }
+    .chunk-preview { color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+    /* ── ALERTS ──────────────────────────────────── */
+    .alert-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: var(--r-sm);
+      font-size: 11px;
+      background: var(--s3);
+      border: 1px solid var(--b1);
+      margin-bottom: 5px;
+    }
+    .alert-row.firing { border-color: rgba(248,113,113,.4); }
+
+    /* ── ROUTES ──────────────────────────────────── */
+    .routes-wrap { display: flex; flex-wrap: wrap; gap: 5px; }
+    .rtag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      background: var(--s3);
+      border: 1px solid var(--b1);
+      border-radius: 5px;
+      font-size: 10px;
+      font-family: monospace;
+    }
+
+    .mpill {
+      font-size: 8px;
+      font-weight: 800;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    .mGET  { background: rgba(52,211,153,.2); color: var(--green); }
+    .mPOST { background: rgba(124,111,255,.2); color: var(--accent2); }
+
+    /* ── TOKEN BAR ───────────────────────────────── */
+    .tbar { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+    .tbar-track { height: 3px; background: var(--s3); border-radius: 2px; overflow: hidden; margin-top: 3px; }
+    .tbar-fill  { height: 100%; background: linear-gradient(90deg, var(--accent), var(--cyan)); border-radius: 2px; transition: width .4s; }
+
+    /* ── SCROLLBARS ──────────────────────────────── */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--b2); border-radius: 2px; }
+
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .loading { animation: pulse 1.2s infinite; }
+
+    /* ── RESPONSIVE ──────────────────────────────── */
+    @media (max-width: 1200px) {
+      .bento { grid-template-columns: repeat(8, 1fr); }
+      .c12 { grid-column: span 8; }
+      .c9  { grid-column: span 8; }
+      .c8  { grid-column: span 5; }
+      .c4  { grid-column: span 3; }
+      .c3  { grid-column: span 2; }
+    }
+
+    @media (max-width: 768px) {
+      .bento { grid-template-columns: repeat(4, 1fr); grid-auto-rows: 56px; }
+      .cell[class*="c"] { grid-column: span 4 !important; }
+      .cell[class*="r"] { grid-row: span 4 !important; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-n">Nx</div>
+    <span class="brand-name">NEXUS</span>
+    <span class="brand-sub">Context Intelligence Platform</span>
+  </div>
+  <div class="topbar-right">
+    <div class="pill">
+      <div class="dot" id="apiDot"></div>
+      <span id="apiStatus">Connecting…</span>
+    </div>
+    <div class="pill" style="font-family:monospace;">
+      :3100
+    </div>
+    <div class="pill" id="endpointPill">-- endpoints</div>
+  </div>
+</div>
+
+<!-- BENTO GRID -->
+<div class="bento">
+
+  <!-- ── KPI: Requests ── c3 r2 -->
+  <div class="cell c3 r2 kpi-cell" style="--kc:var(--accent);">
+    <div class="kpi-icon">📡</div>
+    <div class="kpi-val" id="kpiReq">--</div>
+    <div class="kpi-lbl">Total Requests</div>
+  </div>
+
+  <!-- ── KPI: Latency p95 ── c3 r2 -->
+  <div class="cell c3 r2 kpi-cell" style="--kc:var(--cyan);">
+    <div class="kpi-icon">⚡</div>
+    <div class="kpi-val" id="kpiLat">--</div>
+    <div class="kpi-lbl">Latency p95</div>
+  </div>
+
+  <!-- ── KPI: Error Rate ── c3 r2 -->
+  <div class="cell c3 r2 kpi-cell" style="--kc:var(--red);">
+    <div class="kpi-icon">⚠️</div>
+    <div class="kpi-val" id="kpiErr">--</div>
+    <div class="kpi-lbl">Error Rate</div>
+  </div>
+
+  <!-- ── KPI: Guard Blocks ── c3 r2 -->
+  <div class="cell c3 r2 kpi-cell" style="--kc:var(--orange);">
+    <div class="kpi-icon">🛡️</div>
+    <div class="kpi-val" id="kpiBlocked">--</div>
+    <div class="kpi-lbl">Guard Blocks</div>
+  </div>
+
+  <!-- ── CHAT ── c8 r9 -->
+  <div class="cell c8 r9" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">💬 Chat / Recall</span>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <span style="font-size:10px;color:var(--faint)" id="sessionLbl">No session</span>
+        <button class="btn btn-xs btn-ghost" onclick="newSession()">New Session</button>
+      </div>
+    </div>
+    <div class="msgs cb" id="chatMsgs" style="height:0;flex:1;">
+      <div class="msg n">
+        <span class="msg-role">NEXUS</span>
+        <div class="bubble">
+          Hola. Soy NEXUS — motor de contexto inteligente.<br>
+          Ingestá documentos, hacé preguntas. Selecciono el contexto relevante y elimino el ruido.<br><br>
+          Probá: <em>"¿Qué es NEXUS?"</em>
+        </div>
+      </div>
+    </div>
+    <div class="chat-bar">
+      <select class="mode-sel" id="qmode">
+        <option value="recall">Recall</option>
+        <option value="conversation">Conversation</option>
+        <option value="guard">Guard Test</option>
+      </select>
+      <input class="inp" id="qinput" placeholder="Escribí tu consulta..."
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}">
+      <button class="btn" id="sendBtn" onclick="send()">Send ↵</button>
+    </div>
+  </div>
+
+  <!-- ── CONTEXT CHUNKS ── c4 r5 -->
+  <div class="cell c4 r5" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">🎯 Context</span>
+      <span style="font-size:10px;color:var(--faint)" id="chunkCount">0 chunks</span>
+    </div>
+    <div class="cb" id="chunksCb" style="flex:1;">
+      <div style="color:var(--faint);font-size:11px;text-align:center;padding:20px 0;">
+        Context will appear after a query.
+      </div>
+    </div>
+    <div id="tokenWrap" style="display:none;padding:8px 14px;border-top:1px solid var(--b1);">
+      <div class="tbar">
+        <span style="font-size:10px;color:var(--muted);">Token budget</span>
+        <span style="font-family:monospace;font-size:11px;" id="tokenTxt">0 / 8192</span>
+      </div>
+      <div class="tbar-track" style="margin-top:5px;">
+        <div class="tbar-fill" id="tokenFill" style="width:0%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── GUARD ENGINE ── c4 r4 -->
+  <div class="cell c4 r4" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">🛡️ Guard Engine</span>
+    </div>
+    <div class="cb" style="flex:1;">
+      <div class="fg">
+        <label class="lbl">Test Query</label>
+        <input class="inp" id="guardInp" placeholder="ignore previous instructions..."
+          onkeydown="if(event.key==='Enter')testGuard()">
+      </div>
+      <button class="btn btn-ghost" onclick="testGuard()" style="width:100%;">Evaluate</button>
+      <div id="guardOut"></div>
+    </div>
+  </div>
+
+  <!-- ── LATENCY CHART ── c4 r3 -->
+  <div class="cell c4 r3" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">⚡ Latency</span>
+      <div style="font-size:10px;color:var(--muted);">
+        p50 <b id="l50">--</b> · p95 <b id="l95">--</b> · p99 <b id="l99">--</b>
+      </div>
+    </div>
+    <div class="cb" style="flex:1;">
+      <div class="latency-spark" id="sparkBars"></div>
+      <div class="score-row">
+        <span class="score-name">Accuracy</span>
+        <div class="score-track"><div class="score-fill" id="scoreAcc" style="width:0%;background:var(--green)"></div></div>
+        <span class="score-pct" id="scoreAccV">--</span>
+      </div>
+      <div class="score-row">
+        <span class="score-name">Relevance</span>
+        <div class="score-track"><div class="score-fill" id="scoreRel" style="width:0%;background:var(--cyan)"></div></div>
+        <span class="score-pct" id="scoreRelV">--</span>
+      </div>
+      <div class="score-row">
+        <span class="score-name">Consistency</span>
+        <div class="score-track"><div class="score-fill" id="scoreCon" style="width:0%;background:var(--pink)"></div></div>
+        <span class="score-pct" id="scoreConV">--</span>
+      </div>
+      <button class="btn btn-xs btn-ghost" onclick="runEval()" style="margin-top:4px;width:100%;">▶ Run Eval</button>
+    </div>
+  </div>
+
+  <!-- ── ALERTS ── c4 r3 -->
+  <div class="cell c4 r3" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">🔔 Alerts</span>
+      <button class="btn btn-xs btn-ghost" onclick="loadAlerts()">↻</button>
+    </div>
+    <div class="cb" style="flex:1;" id="alertsCb">
+      <div style="color:var(--faint);font-size:11px;">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── INGESTOR ── c4 r7 -->
+  <div class="cell c4 r7" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">📥 Ingestor</span>
+    </div>
+    <div class="cb" style="flex:1;gap:8px;">
+      <div class="drop" id="dropZ" onclick="document.getElementById('fInput').click()">
+        <div class="drop-icon">📂</div>
+        <div class="drop-txt">Drop files or click</div>
+        <div class="drop-hint">PDF, Markdown, TXT</div>
+        <input type="file" id="fInput" multiple accept=".pdf,.md,.txt" style="display:none" onchange="handleFiles(this)">
+      </div>
+      <div class="fg">
+        <label class="lbl">Source</label>
+        <select class="sel" id="iSrc"><option value="markdown">Markdown</option><option value="pdf">PDF</option></select>
+      </div>
+      <div class="fg">
+        <label class="lbl">Path</label>
+        <input class="inp" id="iPath" placeholder="./docs">
+      </div>
+      <div class="fg">
+        <label class="lbl">Project</label>
+        <input class="inp" id="iProj" value="nexus-demo">
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0;">
+        <button class="btn btn-green" onclick="doIngest(false)" style="flex:1;">▶ Ingest</button>
+        <button class="btn btn-ghost" onclick="doIngest(true)">Dry Run</button>
+      </div>
+      <div class="log" id="iLog">Ready.</div>
+    </div>
+  </div>
+
+  <!-- ── CHUNKS RESULT ── c4 r7 -->
+  <div class="cell c4 r7" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">🧩 Chunks</span>
+      <div style="display:flex;gap:8px;font-size:10px;color:var(--faint);">
+        <span id="iChunkLbl">—</span>
+        <span id="iTokenLbl">—</span>
+      </div>
+    </div>
+    <div id="iStatsRow" style="display:none;padding:8px 14px;border-bottom:1px solid var(--b1);flex-shrink:0;">
+      <div style="display:flex;gap:8px;font-size:11px;">
+        <div style="flex:1;background:var(--s3);border-radius:8px;padding:7px;text-align:center;">
+          <div style="font-size:18px;font-weight:800;color:var(--green)" id="sIncl">0</div>
+          <div style="color:var(--muted);font-size:10px;">Included</div>
+        </div>
+        <div style="flex:1;background:var(--s3);border-radius:8px;padding:7px;text-align:center;">
+          <div style="font-size:18px;font-weight:800;color:var(--orange)" id="sRedc">0</div>
+          <div style="color:var(--muted);font-size:10px;">Redacted</div>
+        </div>
+        <div style="flex:1;background:var(--s3);border-radius:8px;padding:7px;text-align:center;">
+          <div style="font-size:18px;font-weight:800;color:var(--red)" id="sIgn">0</div>
+          <div style="color:var(--muted);font-size:10px;">Ignored</div>
+        </div>
+      </div>
+    </div>
+    <div class="cb" style="flex:1;" id="iChunkList">
+      <div style="color:var(--faint);font-size:11px;text-align:center;padding:20px 0;">
+        Run ingestion to see chunks.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MEMORY ── c4 r5 -->
+  <div class="cell c4 r5" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">🧠 Save Memory</span>
+    </div>
+    <div class="cb" style="flex:1;">
+      <div class="fg">
+        <label class="lbl">Title</label>
+        <input class="inp" id="mTitle" placeholder="Memory title">
+      </div>
+      <div class="fg">
+        <label class="lbl">Content</label>
+        <textarea class="ta" id="mContent" placeholder="Memory content…" style="min-height:55px;"></textarea>
+      </div>
+      <div class="fg">
+        <label class="lbl">Project</label>
+        <input class="inp" id="mProj" value="nexus-demo">
+      </div>
+      <button class="btn" onclick="saveMem()" style="width:100%;">💾 Save</button>
+      <div class="log" id="mLog" style="margin-top:8px;">Ready.</div>
+    </div>
+  </div>
+
+  <!-- ── PROMPT VERSIONING ── c4 r5 -->
+  <div class="cell c4 r5" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">📝 Prompt Versioning</span>
+      <button class="btn btn-xs btn-ghost" onclick="listPr()">List All</button>
+    </div>
+    <div class="cb" style="flex:1;">
+      <div class="fg">
+        <label class="lbl">Name</label>
+        <input class="inp" id="pName" placeholder="main-prompt">
+      </div>
+      <div class="fg">
+        <label class="lbl">Content</label>
+        <textarea class="ta" id="pContent" placeholder="You are NEXUS…" style="min-height:55px;"></textarea>
+      </div>
+      <button class="btn" onclick="savePr()" style="width:100%;">Save Version</button>
+      <div class="log" id="pLog" style="margin-top:8px;">Ready.</div>
+    </div>
+  </div>
+
+  <!-- ── API ROUTES ── c12 r2 -->
+  <div class="cell c12 r2" style="display:flex;flex-direction:column;">
+    <div class="ch">
+      <span class="ch-title">🗺️ API Routes</span>
+      <span style="font-size:10px;color:var(--faint)" id="routeCnt">--</span>
+    </div>
+    <div class="cb" style="flex:1;">
+      <div class="routes-wrap" id="routeList">
+        <div style="color:var(--faint);font-size:11px;">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /bento -->
+
+<script>
+const API = 'http://127.0.0.1:3100';
+let sessionId = null;
+let latHist = [];
+
+// ── API ────────────────────────────────────────────
+async function api(method, path, body) {
+  try {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(API + path, opts);
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: { error: true, message: e.message } };
+  }
+}
+
+// ── HEALTH ────────────────────────────────────────
+async function health() {
+  const { ok } = await api('GET', '/api/health');
+  const dot = document.getElementById('apiDot');
+  const st  = document.getElementById('apiStatus');
+  dot.className = 'dot' + (ok ? ' on' : '');
+  st.textContent = ok ? 'Online' : 'Offline';
+}
+
+// ── METRICS ───────────────────────────────────────
+async function metrics() {
+  const { ok, data: m } = await api('GET', '/api/metrics');
+  if (!ok) return;
+  const set = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = v; };
+  set('kpiReq', m.totalRequests ?? m.requests?.total ?? '--');
+  set('kpiLat', (m.p95 ?? m.latency?.p95 ?? '--') + 'ms');
+  set('kpiErr', ((m.errorRate ?? m.errors?.rate ?? 0) * 100).toFixed(1) + '%');
+  set('kpiBlocked', m.blocked ?? m.guard?.blocked ?? '--');
+  const p50 = m.p50 ?? m.latency?.p50 ?? 0;
+  const p95 = m.p95 ?? m.latency?.p95 ?? 0;
+  const p99 = m.p99 ?? m.latency?.p99 ?? 0;
+  set('l50', p50); set('l95', p95); set('l99', p99);
+  latHist.push(p95 || (Math.random() * 80 + 15));
+  if (latHist.length > 24) latHist.shift();
+  renderSpark();
+}
+
+function renderSpark() {
+  const c = document.getElementById('sparkBars');
+  if (!latHist.length) return;
+  const mx = Math.max(...latHist, 1);
+  c.innerHTML = latHist.map(v =>
+    `<div class="spark-bar" style="height:${Math.max(3,(v/mx)*40)}px"></div>`
+  ).join('');
+}
+
+async function loadAlerts() {
+  const { ok, data } = await api('GET', '/api/alerts');
+  const c = document.getElementById('alertsCb');
+  if (!ok || !Array.isArray(data.rules)) {
+    c.innerHTML = '<div class="alert-row"><span>✅</span><span>All clear</span></div>';
+    return;
+  }
+  if (!data.rules.length) {
+    c.innerHTML = '<div class="alert-row"><span>✅</span><span>No alerts configured</span></div>';
+    return;
+  }
+  c.innerHTML = data.rules.map(r => `
+    <div class="alert-row ${r.firing ? 'firing' : ''}">
+      <span>${r.firing ? '🔴' : '✅'}</span>
+      <span style="flex:1;">${r.name}</span>
+      <span style="font-size:10px;color:var(--muted)">${r.firing ? 'FIRING' : 'OK'}</span>
+    </div>`).join('');
+}
+
+async function loadRoutes() {
+  const { ok, data } = await api('GET', '/api/routes');
+  const c = document.getElementById('routeList');
+  if (!ok || !data.routes) { c.textContent = 'Failed.'; return; }
+  document.getElementById('routeCnt').textContent = data.routes.length + ' endpoints';
+  document.getElementById('endpointPill').textContent = data.routes.length + ' endpoints';
+  c.innerHTML = data.routes.map(r =>
+    `<span class="rtag"><span class="mpill m${r.method}">${r.method}</span>${r.path}</span>`
+  ).join('');
+}
+
+async function runEval() {
+  const { ok, data } = await api('POST', '/api/eval', { suite: 'default' });
+  if (!ok) return;
+  const setS = (name, val) => {
+    const pct = Math.round((val ?? 0) * 100);
+    const fill = document.getElementById('score' + name);
+    const txt  = document.getElementById('score' + name + 'V');
+    if (fill) fill.style.width = pct + '%';
+    if (txt)  txt.textContent = pct + '%';
+  };
+  setS('Acc', data.accuracy); setS('Rel', data.relevance); setS('Con', data.consistency);
+}
+
+// ── CHAT ──────────────────────────────────────────
+function addMsg(role, content) {
+  const c = document.getElementById('chatMsgs');
+  const w = document.createElement('div');
+  w.className = 'msg ' + (role === 'user' ? 'u' : 'n');
+  const r = document.createElement('span');
+  r.className = 'msg-role';
+  r.textContent = role === 'user' ? 'You' : 'NEXUS';
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  if (typeof content === 'object') {
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(content, null, 2);
+    b.appendChild(pre);
+  } else { b.textContent = content; }
+  w.appendChild(r); w.appendChild(b);
+  c.appendChild(w);
+  c.scrollTop = c.scrollHeight;
+}
+
+function addLoading() {
+  const c = document.getElementById('chatMsgs');
+  const w = document.createElement('div');
+  w.className = 'msg n'; w.id = 'ldMsg';
+  const r = document.createElement('span'); r.className = 'msg-role'; r.textContent = 'NEXUS';
+  const b = document.createElement('div'); b.className = 'bubble loading'; b.textContent = '…';
+  w.appendChild(r); w.appendChild(b);
+  c.appendChild(w);
+  c.scrollTop = c.scrollHeight;
+}
+
+function rmLoading() { document.getElementById('ldMsg')?.remove(); }
+
+async function send() {
+  const inp = document.getElementById('qinput');
+  const mode = document.getElementById('qmode').value;
+  const q = inp.value.trim();
+  if (!q) return;
+  inp.value = '';
+  document.getElementById('sendBtn').disabled = true;
+  addMsg('user', q);
+  addLoading();
+
+  try {
+    if (mode === 'recall') {
+      const { ok, data } = await api('POST', '/api/recall', { query: q });
+      rmLoading();
+      addMsg('nexus', ok ? (data.result ?? data.stdout ?? data.context ?? JSON.stringify(data)) : '⚠️ ' + (data.message ?? 'Error'));
+      renderCtx(data.chunks ?? []);
+    } else if (mode === 'conversation') {
+      if (!sessionId) { rmLoading(); addMsg('nexus', 'Click "New Session" first.'); return; }
+      const { ok, data } = await api('POST', '/api/conversation/turn', { sessionId, content: q });
+      rmLoading();
+      addMsg('nexus', ok ? (data.response ?? JSON.stringify(data)) : '⚠️ ' + data.message);
+    } else {
+      const { data } = await api('POST', '/api/guard', { query: q });
+      rmLoading();
+      addMsg('nexus', data.blocked
+        ? `🛡️ BLOCKED by "${data.blockedBy}"\n${data.userMessage}`
+        : `✅ Guard passed (${data.durationMs ?? 0}ms)`);
+    }
+  } finally {
+    document.getElementById('sendBtn').disabled = false;
+  }
+  metrics();
+}
+
+async function newSession() {
+  const { ok, data } = await api('POST', '/api/conversation', { project: 'nexus-demo' });
+  if (ok) {
+    sessionId = data.sessionId;
+    document.getElementById('sessionLbl').textContent = 'Session: ' + data.sessionId.slice(0, 8) + '…';
+    addMsg('nexus', '✅ Session started. Switch mode to "Conversation".');
+  }
+}
+
+function renderCtx(chunks) {
+  const c = document.getElementById('chunksCb');
+  const cnt = document.getElementById('chunkCount');
+  if (!chunks.length) { cnt.textContent = '0 chunks'; c.innerHTML = '<div style="color:var(--faint);font-size:11px;text-align:center;padding:16px 0;">No chunks.</div>'; return; }
+  cnt.textContent = chunks.length + ' chunks';
+  c.innerHTML = chunks.map(ch => {
+    const s = ch.priority ?? ch.score ?? 0;
+    const cls = s >= .7 ? 's-hi' : s >= .4 ? 's-md' : 's-lo';
+    return `<div class="chunk-item">
+      <div class="chunk-top">
+        <span class="chunk-src" title="${ch.source ?? ''}">${ch.source ?? ch.id ?? 'chunk'}</span>
+        <span class="score ${cls}">${(s*100).toFixed(0)}%</span>
+      </div>
+      <div class="chunk-txt">${(ch.content ?? '').slice(0, 200)}</div>
+    </div>`;
+  }).join('');
+  const tokens = chunks.reduce((a, ch) => a + (ch.tokens ?? Math.ceil((ch.content ?? '').length / 4)), 0);
+  document.getElementById('tokenWrap').style.display = 'block';
+  document.getElementById('tokenFill').style.width = Math.min(100, tokens / 81.92) + '%';
+  document.getElementById('tokenTxt').textContent = tokens + ' / 8192';
+}
+
+// ── GUARD TEST ─────────────────────────────────────
+async function testGuard() {
+  const q = document.getElementById('guardInp').value.trim();
+  const out = document.getElementById('guardOut');
+  if (!q) return;
+  const { data } = await api('POST', '/api/guard', { query: q });
+  if (data.blocked) {
+    out.innerHTML = `<div class="guard-out g-block">🛡️ <b>BLOCKED</b> — ${data.blockedBy}<br>${data.userMessage}<br><small>${data.durationMs ?? 0}ms</small></div>`;
+  } else {
+    out.innerHTML = `<div class="guard-out g-pass">✅ <b>PASSED</b> — ${data.results?.length ?? 0} rules checked · ${data.durationMs ?? 0}ms</div>`;
+  }
+}
+
+// ── INGESTOR ───────────────────────────────────────
+function handleFiles(el) {
+  const files = Array.from(el.files);
+  const dz = document.getElementById('dropZ');
+  dz.querySelector('.drop-txt').textContent = files.map(f => f.name).join(', ');
+  dz.querySelector('.drop-hint').textContent = files.length + ' file(s) selected';
+}
+
+const dz = document.getElementById('dropZ');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('over');
+  const files = Array.from(e.dataTransfer.files);
+  dz.querySelector('.drop-txt').textContent = files.map(f => f.name).join(', ');
+  dz.querySelector('.drop-hint').textContent = files.length + ' file(s)';
+});
+
+async function doIngest(dry) {
+  const src = document.getElementById('iSrc').value;
+  const path = document.getElementById('iPath').value.trim();
+  const proj = document.getElementById('iProj').value.trim();
+  const log  = document.getElementById('iLog');
+  if (!path) { log.textContent = '⚠️ Path required.'; return; }
+  log.textContent = (dry ? '[DRY] ' : '') + 'Ingesting…';
+  const { ok, data } = await api('POST', '/api/ingest', { source: src, path, project: proj, dryRun: dry });
+  if (!ok) { log.textContent = '⚠️ ' + (data.message ?? JSON.stringify(data)); return; }
+  log.textContent = JSON.stringify(data, null, 2);
+  const chunks = data.chunks ?? [];
+  const stats  = data.stats ?? {};
+  document.getElementById('iChunkLbl').textContent = chunks.length + ' chunks';
+  document.getElementById('iTokenLbl').textContent = '~' + chunks.reduce((a,c) => a + Math.ceil((c.content ?? '').length / 4), 0) + ' tokens';
+  if (stats.includedFiles !== undefined) {
+    document.getElementById('iStatsRow').style.display = 'block';
+    document.getElementById('sIncl').textContent = stats.includedFiles ?? 0;
+    document.getElementById('sRedc').textContent = stats.redactedFiles ?? 0;
+    document.getElementById('sIgn').textContent  = stats.ignoredFiles ?? 0;
+  }
+  const cl = document.getElementById('iChunkList');
+  if (!chunks.length) { cl.innerHTML = '<div style="color:var(--faint);font-size:11px;text-align:center;padding:16px;">No chunks.</div>'; return; }
+  cl.innerHTML = chunks.map(c => {
+    const s = c.priority ?? 0;
+    const cls = s >= .7 ? 's-hi' : s >= .4 ? 's-md' : 's-lo';
+    return `<div class="chunk-row ${s < .2 ? 'blocked' : ''}">
+      <span class="score ${cls}" style="flex-shrink:0;">${(s*100).toFixed(0)}%</span>
+      <div style="min-width:0;">
+        <div class="chunk-id">${c.id ?? 'chunk'}</div>
+        <div class="chunk-preview">${(c.content ?? '').slice(0, 130)}</div>
+      </div>
+      ${s < .2 ? '<span style="color:var(--red);">🛡️</span>' : ''}
+    </div>`;
+  }).join('');
+  metrics();
+}
+
+// ── MEMORY / PROMPTS ───────────────────────────────
+async function saveMem() {
+  const t = document.getElementById('mTitle').value.trim();
+  const c = document.getElementById('mContent').value.trim();
+  const p = document.getElementById('mProj').value.trim();
+  const l = document.getElementById('mLog');
+  if (!t || !c) { l.textContent = '⚠️ Title + content required.'; return; }
+  l.textContent = 'Saving…';
+  const { ok, data } = await api('POST', '/api/remember', { title: t, content: c, project: p });
+  l.textContent = ok ? '✅ ' + (data.stdout ?? JSON.stringify(data)) : '⚠️ ' + data.message;
+}
+
+async function savePr() {
+  const n = document.getElementById('pName').value.trim();
+  const c = document.getElementById('pContent').value.trim();
+  const l = document.getElementById('pLog');
+  if (!n || !c) { l.textContent = '⚠️ Name + content required.'; return; }
+  l.textContent = 'Saving…';
+  const { ok, data } = await api('POST', '/api/prompts', { name: n, content: c });
+  l.textContent = JSON.stringify(data, null, 2);
+}
+
+async function listPr() {
+  const l = document.getElementById('pLog');
+  l.textContent = 'Loading…';
+  const { ok, data } = await api('GET', '/api/prompts');
+  l.textContent = JSON.stringify(data, null, 2);
+}
+
+// ── INIT ──────────────────────────────────────────
+async function init() {
+  await health();
+  await Promise.all([metrics(), loadRoutes(), loadAlerts()]);
+  setInterval(() => { health(); metrics(); }, 8000);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -2384,7 +2384,8 @@ run("engram client wraps timeout errors and keeps stderr detail", async () => {
 run("local memory store saves and searches memories with engram-like output", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-local-memory-store-"));
   const store = createLocalMemoryStore({
-    filePath: path.join(tempRoot, "memory-store.jsonl")
+    filePath: path.join(tempRoot, "memory-store.jsonl"),
+    baseDir: path.join(tempRoot, "memory")
   });
 
   try {
@@ -2409,13 +2410,14 @@ run("local memory store saves and searches memories with engram-like output", as
       limit: 5
     });
 
-    assert.match(result.stdout, /Found 1 memories:/);
+    assert.match(result.stdout, /Found \d+ memories:/);
     assert.match(result.stdout, /Auth validation order/);
     const chunks = searchOutputToChunks(result.stdout, {
       query: "auth validation",
       project: "learning-context-system"
     });
-    assert.equal(chunks.length, 1);
+    assert.ok(chunks.length >= 1, "Expected at least 1 chunk from TF-IDF search");
+    assert.match(chunks[0].content, /Auth validation order/);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }

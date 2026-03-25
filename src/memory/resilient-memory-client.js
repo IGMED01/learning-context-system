@@ -1,6 +1,17 @@
 // @ts-check
 
 /**
+ * @typedef {import("../types/core-contracts.d.ts").MemoryProvider} MemoryProvider
+ * @typedef {import("../types/core-contracts.d.ts").MemorySearchOptions} MemorySearchOptions
+ * @typedef {import("../types/core-contracts.d.ts").MemorySaveInput} MemorySaveInput
+ * @typedef {import("../types/core-contracts.d.ts").MemoryCloseInput} MemoryCloseInput
+ * @typedef {import("../types/core-contracts.d.ts").MemorySearchResult} MemorySearchResult
+ * @typedef {import("../types/core-contracts.d.ts").MemorySaveResult} MemorySaveResult
+ * @typedef {import("../types/core-contracts.d.ts").MemoryHealthResult} MemoryHealthResult
+ * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
+ */
+
+/**
  * @param {unknown} error
  * @returns {string}
  */
@@ -60,30 +71,38 @@ function fallbackWarning(operation, error) {
 }
 
 /**
+ * Creates a resilient memory client that implements MemoryProvider.
+ * Tries primary (Engram) first, falls back to local store on failure.
+ *
  * @param {{
  *   primary: {
+ *     name?: string,
  *     config?: { dataDir?: string },
+ *     search?: (query: string, options?: MemorySearchOptions) => Promise<MemorySearchResult>,
+ *     save?: (input: MemorySaveInput) => Promise<MemorySaveResult>,
+ *     delete?: (id: string, project?: string) => Promise<{ deleted: boolean, id: string }>,
+ *     list?: (options?: { project?: string, limit?: number }) => Promise<MemoryEntry[]>,
+ *     health?: () => Promise<MemoryHealthResult>,
  *     recallContext: (project?: string) => Promise<Record<string, unknown> & { stdout?: string }>,
- *     searchMemories: (query: string, options?: { project?: string, scope?: string, type?: string, limit?: number }) => Promise<Record<string, unknown> & { stdout: string }>,
- *     saveMemory: (input: { title: string, content: string, type?: string, project?: string, scope?: string, topic?: string }) => Promise<Record<string, unknown>>,
- *     closeSession: (input: { summary: string, learned?: string, next?: string, title?: string, project?: string, scope?: string, type?: string }) => Promise<Record<string, unknown>>
+ *     searchMemories: (query: string, options?: MemorySearchOptions) => Promise<Record<string, unknown> & { stdout: string }>,
+ *     saveMemory: (input: MemorySaveInput) => Promise<Record<string, unknown>>,
+ *     closeSession: (input: MemoryCloseInput) => Promise<Record<string, unknown>>
  *   },
  *   fallback: {
+ *     name?: string,
  *     config?: { dataDir?: string, filePath?: string },
+ *     search?: (query: string, options?: MemorySearchOptions) => Promise<MemorySearchResult>,
+ *     save?: (input: MemorySaveInput) => Promise<MemorySaveResult>,
+ *     delete?: (id: string, project?: string) => Promise<{ deleted: boolean, id: string }>,
+ *     list?: (options?: { project?: string, limit?: number }) => Promise<MemoryEntry[]>,
+ *     health?: () => Promise<MemoryHealthResult>,
  *     recallContext: (project?: string) => Promise<Record<string, unknown> & { stdout?: string }>,
- *     searchMemories: (query: string, options?: { project?: string, scope?: string, type?: string, limit?: number }) => Promise<Record<string, unknown> & { stdout: string }>,
- *     saveMemory: (input: { title: string, content: string, type?: string, project?: string, scope?: string, topic?: string }) => Promise<Record<string, unknown>>,
- *     closeSession: (input: { summary: string, learned?: string, next?: string, title?: string, project?: string, scope?: string, type?: string }) => Promise<Record<string, unknown>>
+ *     searchMemories: (query: string, options?: MemorySearchOptions) => Promise<Record<string, unknown> & { stdout: string }>,
+ *     saveMemory: (input: MemorySaveInput) => Promise<Record<string, unknown>>,
+ *     closeSession: (input: MemoryCloseInput) => Promise<Record<string, unknown>>
  *   },
  *   enabled?: boolean
  * }} input
- * @returns {{
- *   config: { dataDir?: string, filePath?: string },
- *   recallContext: (project?: string) => Promise<Record<string, unknown> & { stdout?: string, provider: string, degraded?: boolean, warning?: string, error?: string, failureKind?: string, fixHint?: string }>,
- *   searchMemories: (query: string, options?: { project?: string, scope?: string, type?: string, limit?: number }) => Promise<Record<string, unknown> & { stdout: string, provider: string, degraded?: boolean, warning?: string, error?: string, failureKind?: string, fixHint?: string }>,
- *   saveMemory: (input: { title: string, content: string, type?: string, project?: string, scope?: string, topic?: string }) => Promise<Record<string, unknown> & { provider: string, degraded?: boolean, warning?: string, error?: string, failureKind?: string, fixHint?: string }>,
- *   closeSession: (input: { summary: string, learned?: string, next?: string, title?: string, project?: string, scope?: string, type?: string }) => Promise<Record<string, unknown> & { provider: string, degraded?: boolean, warning?: string, error?: string, failureKind?: string, fixHint?: string }>
- * }}
  */
 export function createResilientMemoryClient(input) {
   const enabled = input.enabled !== false;
@@ -135,7 +154,102 @@ export function createResilientMemoryClient(input) {
   }
 
   return {
+    name: "resilient",
     config: primary.config ?? fallback.config ?? {},
+
+    // ── MemoryProvider interface ──
+
+    /**
+     * @param {string} query
+     * @param {MemorySearchOptions} [options]
+     * @returns {Promise<MemorySearchResult>}
+     */
+    search(query, options = {}) {
+      if (!primary.search || !fallback.search) {
+        throw new Error("search() not supported by underlying providers");
+      }
+
+      return withFallback(
+        "search",
+        () => /** @type {Function} */ (primary.search)(query, options),
+        () => /** @type {Function} */ (fallback.search)(query, options)
+      );
+    },
+
+    /**
+     * @param {MemorySaveInput} saveInput
+     * @returns {Promise<MemorySaveResult>}
+     */
+    save(saveInput) {
+      if (!primary.save || !fallback.save) {
+        throw new Error("save() not supported by underlying providers");
+      }
+
+      return withFallback(
+        "save",
+        () => /** @type {Function} */ (primary.save)(saveInput),
+        () => /** @type {Function} */ (fallback.save)(saveInput)
+      );
+    },
+
+    /**
+     * @param {string} id
+     * @param {string} [project]
+     * @returns {Promise<{ deleted: boolean, id: string }>}
+     */
+    delete(id, project) {
+      if (!primary.delete || !fallback.delete) {
+        throw new Error("delete() not supported by underlying providers");
+      }
+
+      return withFallback(
+        "delete",
+        () => /** @type {Function} */ (primary.delete)(id, project),
+        () => /** @type {Function} */ (fallback.delete)(id, project)
+      );
+    },
+
+    /**
+     * @param {{ project?: string, limit?: number }} [listOpts]
+     * @returns {Promise<MemoryEntry[]>}
+     */
+    list(listOpts = {}) {
+      if (!primary.list || !fallback.list) {
+        throw new Error("list() not supported by underlying providers");
+      }
+
+      return withFallback(
+        "list",
+        () => /** @type {Function} */ (primary.list)(listOpts),
+        () => /** @type {Function} */ (fallback.list)(listOpts)
+      );
+    },
+
+    /**
+     * @returns {Promise<MemoryHealthResult>}
+     */
+    async health() {
+      const primaryHealth = primary.health
+        ? await primary.health()
+        : { healthy: false, provider: "engram", detail: "health() not implemented" };
+
+      if (primaryHealth.healthy) {
+        return primaryHealth;
+      }
+
+      const fallbackHealth = fallback.health
+        ? await fallback.health()
+        : { healthy: false, provider: "local", detail: "health() not implemented" };
+
+      return {
+        healthy: fallbackHealth.healthy,
+        provider: fallbackHealth.healthy ? "local (degraded)" : "none",
+        detail: `Primary: ${primaryHealth.detail}. Fallback: ${fallbackHealth.detail}`
+      };
+    },
+
+    // ── Legacy compatibility ──
+
     /**
      * @param {string} [project]
      */
@@ -148,7 +262,7 @@ export function createResilientMemoryClient(input) {
     },
     /**
      * @param {string} query
-     * @param {{ project?: string, scope?: string, type?: string, limit?: number }} [options]
+     * @param {MemorySearchOptions} [options]
      */
     searchMemories(query, options = {}) {
       return withFallback(
@@ -158,7 +272,7 @@ export function createResilientMemoryClient(input) {
       );
     },
     /**
-     * @param {{ title: string, content: string, type?: string, project?: string, scope?: string, topic?: string }} payload
+     * @param {MemorySaveInput} payload
      */
     saveMemory(payload) {
       return withFallback(
@@ -168,7 +282,7 @@ export function createResilientMemoryClient(input) {
       );
     },
     /**
-     * @param {{ summary: string, learned?: string, next?: string, title?: string, project?: string, scope?: string, type?: string }} payload
+     * @param {MemoryCloseInput} payload
      */
     closeSession(payload) {
       return withFallback(

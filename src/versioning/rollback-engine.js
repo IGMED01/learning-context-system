@@ -1,85 +1,72 @@
 // @ts-check
 
 /**
- * @typedef {{ id: string, version: number, createdAt: string }} PromptVersionLite
+ * @typedef {import("../types/core-contracts.d.ts").RollbackCheck} RollbackCheck
+ * @typedef {import("../types/core-contracts.d.ts").EvalSuite} EvalSuite
+ * @typedef {{ dropThreshold?: number, evalSuite: EvalSuite, project: string, promptName: string, baseDir?: string }} RollbackEngineOptions
  */
+
+import { runEvalSuite } from "../eval/eval-runner.js";
+import { getPromptHistory, rollbackPrompt } from "./prompt-versioning.js";
+import { saveSnapshot, getScoreTrend } from "./context-snapshot.js";
 
 /**
- * @param {number} value
+ * @param {RollbackEngineOptions} options
+ * @returns {Promise<RollbackCheck>}
  */
-function clamp(value) {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
+export async function checkAndRollback(options) {
+  const threshold = options.dropThreshold ?? 0.10;
 
-  return Math.max(0, Math.min(1, value));
-}
+  const trend = await getScoreTrend(options.project, 2, options.baseDir);
+  const previousScore = trend.length > 0 ? trend[0].evalScore : 1.0;
 
-/**
- * NEXUS:9 — choose rollback target from prompt versions and eval scores.
- * @param {{
- *   versions: PromptVersionLite[],
- *   evalScoresByVersion?: Record<string, number>,
- *   minScore?: number,
- *   preferPrevious?: boolean
- * }} input
- */
-export function selectRollbackCandidate(input) {
-  const versions = [...(input.versions ?? [])].sort((left, right) => right.version - left.version);
-  const minScore = clamp(Number(input.minScore ?? 0.65));
-  const evalScoresByVersion = input.evalScoresByVersion ?? {};
+  const report = await runEvalSuite(options.evalSuite, { minScore: 0 });
+  const currentScore = report.ciGate.actualScore;
 
-  if (!versions.length) {
+  const dropPercent = previousScore > 0
+    ? (previousScore - currentScore) / previousScore
+    : 0;
+
+  await saveSnapshot({
+    project: options.project,
+    command: "rollback-check",
+    query: `eval:${options.evalSuite.name}`,
+    selectedChunkIds: [],
+    evalScore: currentScore,
+    promptVersionId: options.promptName
+  });
+
+  if (dropPercent > threshold) {
+    const history = await getPromptHistory(options.promptName, options.baseDir);
+    const previousVersion = history.currentVersion - 1;
+
+    /** @type {number | undefined} */
+    let rolledBackTo;
+
+    if (previousVersion >= 1) {
+      const rollbackResult = await rollbackPrompt(options.promptName, previousVersion, options.baseDir);
+      rolledBackTo = rollbackResult?.version;
+    }
+
     return {
-      selected: null,
-      status: "no-versions",
-      minScore,
-      considered: []
+      shouldRollback: true,
+      reason: `Eval score dropped ${(dropPercent * 100).toFixed(1)}% (threshold: ${(threshold * 100).toFixed(1)}%)`,
+      previousScore,
+      currentScore,
+      dropPercent: Math.round(dropPercent * 1000) / 1000,
+      threshold,
+      rolledBackTo
     };
   }
 
-  const current = versions[0];
-  const candidates = versions
-    .filter((version) =>
-      input.preferPrevious === false ? true : version.id !== current.id
-    )
-    .map((version) => ({
-      version,
-      score: clamp(Number(evalScoresByVersion[version.id] ?? 0))
-    }))
-    .sort((left, right) => right.score - left.score || right.version.version - left.version.version);
-
-  const selected = candidates.find((candidate) => candidate.score >= minScore) ?? null;
-
   return {
-    selected: selected?.version ?? null,
-    selectedScore: selected?.score ?? 0,
-    current,
-    minScore,
-    status: selected ? "rollback-ready" : "no-safe-candidate",
-    considered: candidates.map((candidate) => ({
-      id: candidate.version.id,
-      version: candidate.version.version,
-      score: candidate.score
-    }))
-  };
-}
-
-/**
- * @param {{ listVersions: (promptKey: string) => Promise<Array<{ id: string, version: number, createdAt: string }>> }} store
- * @param {{ promptKey: string, evalScoresByVersion?: Record<string, number>, minScore?: number, preferPrevious?: boolean }} input
- */
-export async function buildRollbackPlan(store, input) {
-  const versions = await store.listVersions(input.promptKey);
-  const selection = selectRollbackCandidate({
-    versions,
-    evalScoresByVersion: input.evalScoresByVersion,
-    minScore: input.minScore,
-    preferPrevious: input.preferPrevious
-  });
-
-  return {
-    promptKey: input.promptKey,
-    ...selection
+    shouldRollback: false,
+    reason: dropPercent > 0
+      ? `Score dropped ${(dropPercent * 100).toFixed(1)}% but within threshold (${(threshold * 100).toFixed(1)}%)`
+      : "Score stable or improved",
+    previousScore,
+    currentScore,
+    dropPercent: Math.round(dropPercent * 1000) / 1000,
+    threshold
   };
 }

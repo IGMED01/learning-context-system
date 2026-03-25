@@ -1,8 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
-import { chunkDocument } from "../processing/chunker.js";
+import { smartChunk as chunkDocument } from "../processing/chunker.js";
 import { extractEntities } from "../processing/entity-extractor.js";
-import { tagChunkMetadata } from "../processing/metadata-tagger.js";
+import { tagChunk as tagChunkMetadata } from "../processing/metadata-tagger.js";
 
 import {
   createSecurityScanStats,
@@ -277,9 +277,8 @@ export async function loadWorkspaceChunks(
     const processingEnabled = options.processing?.chunkBySection !== false;
     const processedChunks = processingEnabled
       ? chunkDocument(content, {
-          source: file.source,
-          maxCharsPerChunk: Math.max(500, Number(options.processing?.maxCharsPerChunk ?? 1800))
-        })
+          maxChunkChars: Math.max(500, Number(options.processing?.maxCharsPerChunk ?? 1800))
+        } as Parameters<typeof chunkDocument>[1])
       : [
           {
             id: file.source,
@@ -297,11 +296,12 @@ export async function loadWorkspaceChunks(
 
     for (const processed of processedChunks) {
       const tags = tagChunkMetadata({
+        id: processed.id || file.source,
         source: file.source,
         kind,
         content: processed.content
-      });
-      const entities = options.processing?.extractEntities === false ? [] : extractEntities(processed.content);
+      } as Parameters<typeof tagChunkMetadata>[0]);
+      const entities: unknown[] = options.processing?.extractEntities === false ? [] : [extractEntities(processed.content)];
       const chunk: Chunk & {
         processing?: {
           section: unknown;
@@ -317,7 +317,7 @@ export async function loadWorkspaceChunks(
       };
 
       chunk.processing = {
-        section: processed.metadata,
+        section: (processed as Record<string, unknown>).metadata,
         tags,
         entities
       };

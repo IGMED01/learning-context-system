@@ -1,54 +1,159 @@
 // @ts-check
 
 /**
- * @typedef {{
- *   allowEmail?: boolean,
- *   allowPhone?: boolean,
- *   blockedTerms?: string[]
- * }} ComplianceOptions
+ * @typedef {import("../types/core-contracts.d.ts").ComplianceInput} ComplianceInput
+ * @typedef {import("../types/core-contracts.d.ts").ComplianceReport} ComplianceReport
+ * @typedef {import("../types/core-contracts.d.ts").ComplianceViolation} ComplianceViolation
+ * @typedef {import("../types/core-contracts.d.ts").ComplianceRiskLevel} ComplianceRiskLevel
+ * @typedef {import("../types/core-contracts.d.ts").ComplianceSeverity} ComplianceSeverity
  */
+
+// ── Severity Ordering ────────────────────────────────────────────────
+
+/** @type {Record<string, number>} */
+const SEVERITY_ORDER = {
+  info: 0,
+  warning: 1,
+  error: 2,
+  critical: 3
+};
+
+/** @type {Record<string, ComplianceRiskLevel>} */
+const RISK_FROM_SEVERITY = {
+  info: "low",
+  warning: "medium",
+  error: "high",
+  critical: "critical"
+};
+
+// ── Compliance Checker ───────────────────────────────────────────────
 
 /**
- * @typedef {{
- *   compliant: boolean,
- *   violations: string[]
- * }} ComplianceResult
+ * Evaluate compliance across the full request/response cycle.
+ *
+ * @param {ComplianceInput} input
+ * @returns {ComplianceReport}
  */
-
-const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
-const PHONE_PATTERN = /\b(?:\+?\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?)?\d{3,4}[\s-]?\d{3,4}\b/gu;
-
-/**
- * NEXUS:4 — lightweight compliance checks for output.
- * @param {string} output
- * @param {ComplianceOptions} [options]
- * @returns {ComplianceResult}
- */
-export function checkOutputCompliance(output, options = {}) {
-  const text = String(output ?? "");
-  /** @type {string[]} */
+export function checkCompliance(input) {
+  /** @type {ComplianceViolation[]} */
   const violations = [];
 
-  if (!options.allowEmail && EMAIL_PATTERN.test(text)) {
-    violations.push("email-detected");
+  // ── Input Guard Analysis ─────────────────────────────────────────
+
+  const inputResult = input.inputGuardResult;
+
+  if (inputResult.results.length === 0 && !inputResult.blocked) {
+    violations.push({
+      rule: "input-guard-bypass",
+      severity: /** @type {ComplianceSeverity} */ ("warning"),
+      description: "Input guard did not evaluate any rules — guard may be disabled or misconfigured",
+      layer: /** @type {"input"} */ ("input")
+    });
   }
 
-  if (!options.allowPhone && PHONE_PATTERN.test(text)) {
-    violations.push("phone-detected");
+  if (inputResult.blocked && inputResult.blockedBy === "rate-limit") {
+    violations.push({
+      rule: "rate-limit-triggered",
+      severity: /** @type {ComplianceSeverity} */ ("info"),
+      description: `Input was rate-limited: ${inputResult.userMessage}`,
+      layer: /** @type {"input"} */ ("input")
+    });
   }
 
-  const blockedTerms = Array.isArray(options.blockedTerms)
-    ? options.blockedTerms.map((entry) => String(entry).trim()).filter(Boolean)
-    : [];
+  if (inputResult.blocked && inputResult.blockedBy !== "rate-limit") {
+    violations.push({
+      rule: `input-blocked-${inputResult.blockedBy}`,
+      severity: /** @type {ComplianceSeverity} */ ("warning"),
+      description: `Input was blocked by ${inputResult.blockedBy}: ${inputResult.userMessage}`,
+      layer: /** @type {"input"} */ ("input")
+    });
+  }
 
-  for (const term of blockedTerms) {
-    if (text.toLowerCase().includes(term.toLowerCase())) {
-      violations.push(`blocked-term:${term}`);
+  // ── Output Guard Analysis ────────────────────────────────────────
+
+  const outputResult = input.outputGuardResult;
+
+  for (const mod of outputResult.modifications) {
+    if (mod.type === "block" && mod.rule === "secret-leak") {
+      violations.push({
+        rule: "secret-leak-detected",
+        severity: /** @type {ComplianceSeverity} */ ("critical"),
+        description: `Output contained secrets and was blocked: ${mod.detail}`,
+        layer: /** @type {"output"} */ ("output")
+      });
+    } else if (mod.type === "redact" && mod.rule === "pii-redaction") {
+      violations.push({
+        rule: "pii-redacted",
+        severity: /** @type {ComplianceSeverity} */ ("info"),
+        description: `PII was detected and redacted: ${mod.detail}`,
+        layer: /** @type {"output"} */ ("output")
+      });
+    } else if (mod.type === "block") {
+      violations.push({
+        rule: `output-blocked-${mod.rule}`,
+        severity: /** @type {ComplianceSeverity} */ ("error"),
+        description: `Output was blocked by ${mod.rule}: ${mod.detail}`,
+        layer: /** @type {"output"} */ ("output")
+      });
+    } else if (mod.type === "warn") {
+      violations.push({
+        rule: `output-warn-${mod.rule}`,
+        severity: /** @type {ComplianceSeverity} */ ("warning"),
+        description: `Output warning from ${mod.rule}: ${mod.detail}`,
+        layer: /** @type {"output"} */ ("output")
+      });
     }
   }
 
+  // ── Risk Level Calculation ───────────────────────────────────────
+
+  /** @type {ComplianceSeverity | null} */
+  let highestSeverity = null;
+
+  for (const v of violations) {
+    if (highestSeverity === null || SEVERITY_ORDER[v.severity] > SEVERITY_ORDER[highestSeverity]) {
+      highestSeverity = v.severity;
+    }
+  }
+
+  /** @type {ComplianceRiskLevel} */
+  const riskLevel = highestSeverity
+    ? RISK_FROM_SEVERITY[highestSeverity]
+    : "none";
+
+  const compliant = riskLevel === "none" || riskLevel === "low";
+
+  // ── Summary ──────────────────────────────────────────────────────
+
+  /** @type {string} */
+  let summary;
+
+  if (violations.length === 0) {
+    summary = `Compliance check passed for project "${input.project}" — no violations detected.`;
+  } else {
+    /** @type {Record<string, number>} */
+    const counts = {};
+
+    for (const v of violations) {
+      counts[v.severity] = (counts[v.severity] ?? 0) + 1;
+    }
+
+    /** @type {string[]} */
+    const parts = [];
+
+    for (const sev of ["critical", "error", "warning", "info"]) {
+      if (counts[sev]) {
+        parts.push(`${counts[sev]} ${sev}`);
+      }
+    }
+
+    summary = `Compliance check for project "${input.project}": ${parts.join(", ")}. Risk level: ${riskLevel}.`;
+  }
+
   return {
-    compliant: violations.length === 0,
-    violations
+    compliant,
+    violations,
+    riskLevel,
+    summary
   };
 }

@@ -44,14 +44,35 @@
     "minWorkspaceFocusLength": 24,
     "blockDebugWithoutStrongFocus": true
   },
-  "llm": {
-    "provider": "claude",
-    "model": "claude-3-5-sonnet-20241022",
-    "temperature": 0.2,
-    "maxTokens": 700,
-    "tokenBudget": 520,
-    "maxContextChunks": 8,
-    "requireAuth": true,
-    "apiKeys": []
+  "guard": {
+    "enabled": false,
+    "rules": [
+      {
+        "type": "input-validation",
+        "enabled": true,
+        "params": {
+          "minLength": 3,
+          "maxLength": 2000,
+          "blockInjection": true
+        }
+      },
+      {
+        "type": "rate-limit",
+        "enabled": true,
+        "params": {
+          "maxRequests": 60,
+          "windowMs": 60000
+        }
+      },
+      {
+        "type": "keyword-block",
+        "enabled": false,
+        "params": {
+          "keywords": [],
+          "message": ""
+        }
+      }
+    ],
+    "defaultBlockMessage": "This query is outside the scope of this project."
   }
 }
