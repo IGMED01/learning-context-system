@@ -9,6 +9,7 @@ Este proyecto ahora tiene benchmarks + gates formales:
 3. **vertical benchmark**: mide el flujo integrado del vertical TypeScript en variantes comparables
 4. **domain eval suite**: gate transversal por dominio (auth, security, observability, versioning)
 5. **weight tuning benchmark**: compara perfiles de pesos del selector (NEXUS:3)
+6. **foundations stress benchmark**: valida processing/storage/guard en volumen sintético (NEXUS:1/2/4)
 
 No mide “si se siente bien”. Mide comportamiento repetible.
 
@@ -23,6 +24,7 @@ No mide “si se siente bien”. Mide comportamiento repetible.
 
 ```bash
 npm run benchmark
+npm run benchmark:foundations
 npm run benchmark:recall
 npm run benchmark:vertical
 npm run eval:domains

@@ -62,7 +62,10 @@
       <div class="row" style="margin-top:8px">
         <button id="btnHealth">Check health</button>
         <button id="btnDashboard">Load dashboard</button>
+        <button id="btnAlerts">Load alerts</button>
+        <button id="btnDrift">Load sync drift</button>
         <button id="btnVersions">Load versions</button>
+        <button id="btnGuardPolicies">Guard profiles</button>
         <button id="btnOpenApi">OpenAPI snapshot</button>
       </div>
     </section>
@@ -324,6 +327,9 @@
       renderDashboard(payload);
       printRaw(payload);
     });
+    bind("btnAlerts", async () => printRaw(await apiFetch("/api/observability/alerts?minRuns=20")));
+    bind("btnDrift", async () => printRaw(await apiFetch("/api/sync/drift")));
+    bind("btnGuardPolicies", async () => printRaw(await apiFetch("/api/guard/policies")));
     bind("btnVersions", loadVersions);
     bind("btnOpenApi", async () => printRaw(await apiFetch("/api/openapi.json")));
     bind("btnSaveVersion", saveVersion);

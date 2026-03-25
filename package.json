@@ -19,6 +19,7 @@
     "test": "node test/run-tests.js",
     "typecheck": "tsc --project tsconfig.json",
     "benchmark": "node benchmark/run-benchmark.js",
+    "benchmark:foundations": "node benchmark/run-foundations-stress.js",
     "benchmark:recall": "node benchmark/run-recall-benchmark.js",
     "benchmark:vertical": "node benchmark/run-vertical-benchmark.js",
     "benchmark:tune": "node benchmark/run-weight-tuning.js",

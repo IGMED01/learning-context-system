@@ -172,6 +172,9 @@ jobs:
       - name: Run selector benchmark
         run: npm run benchmark
 
+      - name: Run foundations stress benchmark
+        run: npm run benchmark:foundations
+
       - name: Run recall benchmark
         run: npm run benchmark:recall
 
