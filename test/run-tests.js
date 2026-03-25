@@ -4773,7 +4773,12 @@ run("NEXUS:5 pipeline builder runs ingest-process-store-recall end-to-end", asyn
       ]
     });
 
+    assert.match(result.runId, /^run-/);
+    assert.equal(result.summary.totalSteps, 4);
+    assert.equal(result.summary.failedSteps, 0);
+    assert.equal(result.durationMs >= 0, true);
     assert.equal(result.trace.every((entry) => entry.status === "ok"), true);
+    assert.equal(result.trace.every((entry) => Array.isArray(entry.attemptTrace)), true);
     assert.equal(result.state.steps.store.storedCount >= 1, true);
     assert.equal(result.state.steps.recall.results.length >= 1, true);
   } finally {
@@ -4994,6 +4999,7 @@ run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () 
     const baseUrl = `http://127.0.0.1:${start.port}`;
     const health = await fetch(`${baseUrl}/api/health`);
     const blockedStatus = await fetch(`${baseUrl}/api/sync/status`);
+    const blockedPayload = await blockedStatus.json();
     const sync = await fetch(`${baseUrl}/api/sync`, {
       method: "POST",
       headers: {
@@ -5031,6 +5037,22 @@ run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () 
         objective: "Teach validation order",
         provider: "mock"
       })
+    });
+    const askMissingQuestion = await fetch(`${baseUrl}/api/ask`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({})
+    });
+    const askInvalidJson = await fetch(`${baseUrl}/api/ask`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: "{"
     });
     const evalSuite = await fetch(`${baseUrl}/api/evals/domain-suite`, {
       method: "POST",
@@ -5077,19 +5099,30 @@ run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () 
     const syncPayload = await sync.json();
     const pipelinePayload = await pipeline.json();
     const askPayload = await ask.json();
+    const askMissingQuestionPayload = await askMissingQuestion.json();
+    const askInvalidJsonPayload = await askInvalidJson.json();
     const evalPayload = await evalSuite.json();
 
     assert.equal(health.status, 200);
     assert.equal(blockedStatus.status, 401);
+    assert.equal(blockedPayload.errorCode, "auth_unauthorized");
+    assert.match(blockedPayload.requestId, /^req-/);
     assert.equal(sync.status, 200);
     assert.equal(syncPayload.lastSync.status, "ok");
     assert.equal(pipeline.status, 200);
     assert.equal(pipelinePayload.pipeline.trace.length >= 4, true);
+    assert.match(pipelinePayload.pipeline.runId, /^run-/);
+    assert.equal(pipelinePayload.pipeline.summary.totalSteps >= 4, true);
     assert.equal(ask.status, 200);
     assert.equal(askPayload.status, "ok");
     assert.match(askPayload.parsed.change, /Updated auth flow/);
     assert.equal(askPayload.fallback.summary.attemptsCount, 1);
     assert.equal(askPayload.fallback.summary.failedAttempts, 0);
+    assert.equal(askMissingQuestion.status, 400);
+    assert.equal(askMissingQuestionPayload.errorCode, "missing_question");
+    assert.match(askMissingQuestionPayload.requestId, /^req-/);
+    assert.equal(askInvalidJson.status, 400);
+    assert.equal(askInvalidJsonPayload.errorCode, "invalid_json");
     assert.equal(evalSuite.status, 200);
     assert.equal(evalPayload.status, "pass");
     assert.equal(evalPayload.report.summary.totalDomains, 1);
@@ -5129,6 +5162,7 @@ run("NEXUS:10 OpenAPI builder includes dashboard and versioning endpoints", asyn
     Boolean(spec.components?.schemas?.AskRequest?.properties?.attemptTimeoutMs),
     true
   );
+  assert.equal(Boolean(spec.components?.schemas?.ErrorResponse), true);
   assert.equal(Boolean(spec.components?.schemas?.DomainEvalRequest), true);
 });
 
@@ -5195,6 +5229,40 @@ run("NEXUS:10 SDK client sends auth headers and query params", async () => {
   assert.equal(new Headers(calls[2].init.headers).get("content-type"), "application/json");
   assert.equal(new Headers(calls[5].init.headers).get("content-type"), "application/json");
   assert.equal(new Headers(calls[6].init.headers).get("content-type"), "application/json");
+});
+
+run("NEXUS:10 SDK surfaces API errorCode and requestId", async () => {
+  const client = createNexusApiClient({
+    baseUrl: "http://localhost:8787",
+    apiKey: "sdk-key",
+    fetchFn: async () =>
+      new Response(
+        JSON.stringify({
+          status: "error",
+          error: "Missing 'question' in request body.",
+          errorCode: "missing_question",
+          requestId: "req-test-123",
+          details: {}
+        }),
+        {
+          status: 400,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
+  });
+
+  await assert.rejects(
+    () => client.ask({}),
+    /** @param {any} error */ (error) => {
+      assert.equal(error.status, 400);
+      assert.equal(error.errorCode, "missing_question");
+      assert.equal(error.requestId, "req-test-123");
+      assert.match(error.message, /missing_question/i);
+      return true;
+    }
+  );
 });
 
 run("NEXUS:7 domain eval suite blocks failing domains", async () => {
@@ -5457,6 +5525,10 @@ run("NEXUS:5 pipeline retries failed step and succeeds", async () => {
   assert.equal(attempts, 2);
   assert.equal(result.trace[0].status, "ok");
   assert.equal(result.trace[0].attempts, 2);
+  assert.equal(Array.isArray(result.trace[0].attemptTrace), true);
+  assert.equal(result.trace[0].attemptTrace.length, 2);
+  assert.equal(result.trace[0].attemptTrace[0].status, "failed");
+  assert.equal(result.trace[0].attemptTrace[1].status, "ok");
 });
 
 run("NEXUS:4 guard domain policy profiles are listed and merged", async () => {
@@ -5713,6 +5785,11 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
         guardPolicyProfile: "security_strict"
       })
     });
+    const unknownRoute = await fetch(`${baseUrl}/api/does-not-exist`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
     const openapiPayload = await openapiResponse.json();
     const guardPoliciesPayload = await guardPolicies.json();
     const comparePayload = await compareVersions.json();
@@ -5722,6 +5799,7 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     const alertsPayload = await alerts.json();
     const evalPayload = await evalSuite.json();
     const fallbackPayload = await askWithFallback.json();
+    const unknownRoutePayload = await unknownRoute.json();
 
     assert.equal(openapiResponse.status, 200);
     assert.equal(demoResponse.status, 200);
@@ -5755,6 +5833,9 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     assert.equal(fallbackPayload.fallback.summary.failedAttempts >= 1, true);
     assert.equal(fallbackPayload.fallback.summary.successfulProvider, "mock");
     assert.equal(typeof fallbackPayload.fallback.summary.totalDurationMs, "number");
+    assert.equal(unknownRoute.status, 404);
+    assert.equal(unknownRoutePayload.errorCode, "route_not_found");
+    assert.match(unknownRoutePayload.requestId, /^req-/);
     assert.equal(Boolean(openapiPayload.paths["/api/versioning/prompts"]), true);
     assert.equal(Boolean(openapiPayload.paths["/api/observability/alerts"]), true);
     assert.equal(Boolean(openapiPayload.paths["/api/evals/domain-suite"]), true);

@@ -1,15 +1,15 @@
-# Learning Context System (NEXUS) - Resumen en espanol
+# NEXUS — Plataforma de aprendizaje (resumen en espanol)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/IGMED01/learning-context-system/ci.yml?branch=main&label=CI)](https://github.com/IGMED01/learning-context-system/actions/workflows/ci.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/IGMED01/learning-context-system/codeql.yml?branch=main&label=CodeQL)](https://github.com/IGMED01/learning-context-system/actions/workflows/codeql.yml)
 ![Node 20+](https://img.shields.io/badge/node-20%2B-339933?logo=nodedotjs&logoColor=white)
 ![NEXUS](https://img.shields.io/badge/platform-NEXUS-2563eb)
 
-Learning Context System es una CLI para **programar, ensenar y controlar contexto al mismo tiempo**.
+NEXUS es una plataforma CLI-first para **programar, ensenar y controlar contexto al mismo tiempo**.
 
 ## Enlaces rapidos
 
-- [Plan NEXUS](NEXUS-PLAN.md)
+- [Plan NEXUS](docs/planning/nexus-plan.md)
 - [Indice de documentacion](docs/README.md)
 - [Guia API NEXUS](docs/nexus-api.md)
 - [Zero-to-demo](docs/zero-to-demo.md)
@@ -29,7 +29,7 @@ Este repo hace tres cosas juntas:
 - **LCS** = motor de contexto (`NEXUS:3`)
 - **NEXUS:N** = referencia directa de capa (ej. `NEXUS:6` = LLM Layer)
 
-El detalle operativo por fase/capa (checkboxes, dependencias y prioridades) esta en **`NEXUS-PLAN.md`**.
+El detalle operativo por fase/capa (checkboxes, dependencias y prioridades) esta en **`docs/planning/nexus-plan.md`**.
 
 Ademas, ya puede sincronizar aprendizajes de PR mergeados hacia Notion como capa opcional de conocimiento de equipo.
 
@@ -39,7 +39,7 @@ Este ecosistema **no** es una plataforma generica de IA y **todavia no** es una 
 
 Hoy es:
 
-- **un solo repo principal de LCS**
+- **un solo repo principal de NEXUS**
 - con **cinco dominios internos**
 - centrado en **seleccion de contexto + ensenanza + memoria durable**
 - expuesto como **CLI en Node.js**
@@ -80,7 +80,7 @@ No es:
 
 Lo correcto **hoy** es:
 
-- mantener todo en **un solo repo LCS**
+- mantener todo en **un solo repo NEXUS**
 - conservar el ecosistema **modular por dominio interno**
 - extraer otros repos **mas adelante solo si las fronteras se estabilizan**
 
@@ -205,6 +205,7 @@ Incluye:
 - NEXUS API con SDK, OpenAPI y demo visual (`/api/demo`)
 - perfiles de guard, drift de sync (niveles + umbrales configurables), alertas de observabilidad y plan de rollback por API
 - telemetria de fallback en `ask` (latencia por intento + resumen de tokens) para analizar failover de providers
+- contrato de error API consistente (`errorCode`, `requestId`) y trazabilidad de pipeline (`runId`, `attemptTrace`)
 
 ## Snapshot actual de madurez
 
@@ -554,7 +555,7 @@ Estado actual:
 
 ## Roadmaps por area
 
-Usa `ROADMAP.md` como indice y `docs/roadmaps/` cuando quieras ver los siguientes pasos separados por seccion en vez de mezclados.
+Usa `docs/planning/roadmap.md` como indice y `docs/roadmaps/` cuando quieras ver los siguientes pasos separados por seccion en vez de mezclados.
 
 Pero todavia le falta:
 

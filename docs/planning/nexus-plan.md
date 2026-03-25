@@ -75,6 +75,7 @@
 - [x] pipeline default ingest → process → store → recall
 - [x] test de integracion end-to-end (pipeline + API route)
 - [x] recuperacion por retries en pasos (`retryAttempts`, `retryDelayMs` en pipeline builder)
+- [x] trazabilidad extendida de pipeline (`runId`, `summary`, `attemptTrace` por step)
 
 ### NEXUS:6 — LLM LAYER
 **Prioridad:** Critica
@@ -128,6 +129,7 @@
 - [x] OpenAPI spec (`src/interface/nexus-openapi.js`, `docs/openapi/nexus-openapi.json`)
 - [x] demo UI completa (`/api/demo`, dashboard + versioning + ask playground)
 - [x] surface profesional unificada (openapi + sdk + guard profiles + drift + alerts + rollback plan)
+- [x] contrato de error API consistente (`errorCode`, `requestId`, `details`) + header `x-request-id`
 
 ---
 

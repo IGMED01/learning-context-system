@@ -1,10 +1,10 @@
-# LCS Evidence of Value
+# NEXUS:3 (LCS) Evidence of Value
 
 _Generated: 2026-03-22 · Based on 2352 tracked runs_
 
 ## Summary
 
-LCS reduces context noise by **83.7%**, retains **91.2%** of recalled memory in selection, prevents **100%** of safety-blocked errors, and achieves **100%** benchmark accuracy on all quality metrics.
+NEXUS:3 (LCS) reduces context noise by **83.7%**, retains **91.2%** of recalled memory in selection, prevents **100%** of safety-blocked errors, and achieves **100%** benchmark accuracy on all quality metrics.
 
 ---
 
@@ -20,13 +20,13 @@ LCS reduces context noise by **83.7%**, retains **91.2%** of recalled memory in 
 | Avg suppressed per query | 18.18 |
 | **Noise reduction rate** | **83.7%** |
 
-**Interpretation**: for every context query, LCS removes ~18 irrelevant chunks and keeps ~3.5 high-signal ones. Without LCS, an agent would consume all 21+ chunks, wasting tokens on noise.
+**Interpretation**: for every context query, NEXUS:3 removes ~18 irrelevant chunks and keeps ~3.5 high-signal ones. Without NEXUS:3, an agent would consume all 21+ chunks, wasting tokens on noise.
 
 ### Before / After
 
 ```
-Before LCS (raw input):    ~21.7 chunks per query
-After LCS (selected):      ~3.5 chunks per query
+Before NEXUS:3 (raw input):    ~21.7 chunks per query
+After NEXUS:3 (selected):      ~3.5 chunks per query
 ─────────────────────────────────────────────────
 Noise removed:             ~18.2 chunks (83.7%)
 ```
@@ -49,7 +49,7 @@ node src/cli.js doctor --format json | jq '.observability.selection'
 | Relevant ratio | 100% |
 | Top-prefix pass rate | 100% |
 
-The benchmark validates that LCS:
+The benchmark validates that NEXUS:3:
 - Always selects the right chunks (`mustSelect`)
 - Always excludes noise (`mustExclude`)
 - Ranks high-signal chunks before low-signal ones (`topPrefix`)
@@ -73,7 +73,7 @@ npm run benchmark
 | **Retention rate** | **91.2%** |
 | Suppressed recalled | 1 |
 
-**Interpretation**: when Engram returns relevant memory, LCS retains 91.2% of it through selection. Only 1 recalled chunk was ever suppressed — evidence that `recallBoost` works correctly.
+**Interpretation**: when Engram returns relevant memory, NEXUS:3 retains 91.2% of it through selection. Only 1 recalled chunk was ever suppressed — evidence that `recallBoost` works correctly.
 
 ### Recall by status
 
@@ -113,7 +113,7 @@ Every blocked run corresponds to a prevented error — the safety gate has a 0% 
 | Degraded rate | 17.8% |
 | Crashes from degraded | 0 |
 
-LCS degrades gracefully: 419 runs hit a partial failure (Engram binary missing, timeout, parse error) and all completed successfully with reduced context.
+NEXUS:3 degrades gracefully: 419 runs hit a partial failure (Engram binary missing, timeout, parse error) and all completed successfully with reduced context.
 
 ---
 

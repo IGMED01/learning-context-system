@@ -10,6 +10,13 @@ function ensureRecord(value) {
 }
 
 /**
+ * @param {unknown} value
+ */
+function ensureString(value) {
+  return typeof value === "string" ? value : "";
+}
+
+/**
  * @param {string} baseUrl
  * @param {string} pathname
  */
@@ -109,12 +116,19 @@ export class NexusApiClient {
 
     if (!response.ok) {
       const errorPayload = typeof payload === "string" ? { message: payload } : ensureRecord(payload);
+      const apiMessage =
+        ensureString(errorPayload.error) || ensureString(errorPayload.message) || "Unknown API error";
+      const errorCode = ensureString(errorPayload.errorCode);
+      const requestId = ensureString(errorPayload.requestId);
       const error = new Error(
-        `NEXUS API request failed (${response.status} ${response.statusText})`
+        `NEXUS API request failed (${response.status} ${response.statusText})${errorCode ? ` [${errorCode}]` : ""}: ${apiMessage}`
       );
       throw Object.assign(error, {
         status: response.status,
-        payload: errorPayload
+        payload: errorPayload,
+        errorCode,
+        requestId,
+        apiMessage
       });
     }
 

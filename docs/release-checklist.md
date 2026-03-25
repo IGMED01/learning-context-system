@@ -29,7 +29,7 @@ Use this checklist before promoting changes to `main`.
 
 ## Repository hygiene
 
-- [ ] Update `NEXUS-PLAN.md` if scope changed
+- [ ] Update `docs/planning/nexus-plan.md` if scope changed
 - [ ] Update `README.md` / `README.es.md` if user-facing behavior changed
 - [ ] Update docs index (`docs/README.md`) when adding/removing docs
 - [ ] Ensure branch is synced with `origin/main` and PR checks are green

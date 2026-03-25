@@ -8,7 +8,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
-- Added `NEXUS-PLAN.md` to track the full 11-layer execution checklist by phase (`FASE 1..4`) with dependencies, priorities, and completion status.
+- Added `docs/planning/nexus-plan.md` to track the full 11-layer execution checklist by phase (`FASE 1..4`) with dependencies, priorities, and completion status.
 - Added NEXUS runtime layers and modules:
   - `src/processing/*` (structure parser, chunker, metadata tagger, entity extractor)
   - `src/storage/*` (chunk repository, BM25 index, hybrid retriever, vector-store interface)
@@ -23,9 +23,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added local API launcher `scripts/run-nexus-api.js` and npm script `api:nexus`.
 
 ### Docs
-- Clarified the repository direction: the current ecosystem is **one LCS repo with five internal domains**, not a multi-repo product suite yet.
+- Clarified the repository direction: the current ecosystem is **one NEXUS repo with five internal domains**, not a multi-repo product suite yet.
 - Added `docs/repo-split-5-repos.md` to explain the real split strategy: modularize first, extract later.
-- Updated `README.md`, `README.es.md`, `ROADMAP.md`, and `docs/status-actual.md` so GitHub explains exactly what the ecosystem is and how mature each area is.
+- Updated `README.md`, `README.es.md`, `docs/planning/roadmap.md`, and `docs/status-actual.md` so GitHub explains exactly what the ecosystem is and how mature each area is.
 - Updated `docs/usage.md` with the active NEXUS API surface and auth model.
 
 ### Performance
@@ -61,6 +61,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `POST /api/ask` now supports `attemptTimeoutMs` and returns fallback execution telemetry (`fallback.summary`) with attempt counts, duration, token totals, and successful provider.
 - Sync drift monitoring now classifies each run as `stable|warning|critical`, detects spike behavior against historical baseline, and supports threshold overrides via `GET /api/sync/drift` query params.
 - Domain eval suite now supports coverage policy (`qualityPolicy.requiredDomains`, `qualityPolicy.minCasesPerDomain`) and can run through API/SDK with `POST /api/evals/domain-suite`.
+- API errors now use a consistent contract (`errorCode`, `requestId`, `details`) and `x-request-id` response header; pipeline execution now exposes extended traceability (`runId`, timing summary, and per-step `attemptTrace`).
 
 ### Contracts
 - Added v1 compatibility fixtures/tests for all JSON CLI commands (`version`, `doctor`, `init`, `sync-knowledge`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`).
