@@ -8,6 +8,14 @@ import { promisify } from "node:util";
 /** @typedef {import("../types/core-contracts.d.ts").EngramResolvedConfig} EngramResolvedConfig */
 /** @typedef {import("../types/core-contracts.d.ts").EngramCommandResult} EngramCommandResult */
 /** @typedef {import("../types/core-contracts.d.ts").EngramSearchOptions} EngramSearchOptions */
+/** @typedef {import("../types/core-contracts.d.ts").MemoryProvider} MemoryProvider */
+/** @typedef {import("../types/core-contracts.d.ts").MemorySearchOptions} MemorySearchOptions */
+/** @typedef {import("../types/core-contracts.d.ts").MemorySaveInput} MemorySaveInput */
+/** @typedef {import("../types/core-contracts.d.ts").MemoryCloseInput} MemoryCloseInput */
+/** @typedef {import("../types/core-contracts.d.ts").MemorySearchResult} MemorySearchResult */
+/** @typedef {import("../types/core-contracts.d.ts").MemorySaveResult} MemorySaveResult */
+/** @typedef {import("../types/core-contracts.d.ts").MemoryHealthResult} MemoryHealthResult */
+/** @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry */
 
 const execFile = promisify(execFileCallback);
 
@@ -467,8 +475,113 @@ export function createEngramClient(options = {}) {
     };
   }
 
+  // ── MemoryProvider interface methods ──
+
+  /**
+   * @param {string} query
+   * @param {MemorySearchOptions} [searchOpts]
+   * @returns {Promise<MemorySearchResult>}
+   */
+  async function search(query, searchOpts = {}) {
+    const result = await searchMemories(query, searchOpts);
+    const chunks = searchOutputToChunks(result.stdout, { query, project: searchOpts.project });
+
+    /** @type {MemoryEntry[]} */
+    const entries = chunks.map((chunk) => ({
+      id: chunk.id,
+      title: chunk.content.split(".")[0] ?? chunk.id,
+      content: chunk.content,
+      type: "memory",
+      project: searchOpts.project ?? "",
+      scope: searchOpts.scope ?? "project",
+      topic: "",
+      createdAt: new Date().toISOString()
+    }));
+
+    return {
+      entries,
+      stdout: result.stdout,
+      provider: "engram"
+    };
+  }
+
+  /**
+   * @param {MemorySaveInput} input
+   * @returns {Promise<MemorySaveResult>}
+   */
+  async function save(input) {
+    const result = await saveMemory(input);
+    const idMatch = result.stdout?.match(/#([^\s]+)/);
+
+    return {
+      id: idMatch?.[1] ?? `engram-${Date.now()}`,
+      stdout: result.stdout,
+      provider: "engram"
+    };
+  }
+
+  /**
+   * @param {string} _id
+   * @param {string} [_project]
+   * @returns {Promise<{ deleted: boolean, id: string }>}
+   */
+  async function deleteMemory(_id, _project) {
+    // Engram binary does not support delete — return not-deleted
+    return { deleted: false, id: _id };
+  }
+
+  /**
+   * @param {{ project?: string, limit?: number }} [listOpts]
+   * @returns {Promise<MemoryEntry[]>}
+   */
+  async function list(listOpts = {}) {
+    const result = await recallContext(listOpts.project);
+    const chunks = searchOutputToChunks(result.stdout, { project: listOpts.project });
+    const limit = listOpts.limit ?? 50;
+
+    return chunks.slice(0, limit).map((chunk) => ({
+      id: chunk.id,
+      title: chunk.content.split(".")[0] ?? chunk.id,
+      content: chunk.content,
+      type: "memory",
+      project: listOpts.project ?? "",
+      scope: "project",
+      topic: "",
+      createdAt: new Date().toISOString()
+    }));
+  }
+
+  /**
+   * @returns {Promise<MemoryHealthResult>}
+   */
+  async function health() {
+    try {
+      await execute(["--version"]);
+
+      return {
+        healthy: true,
+        provider: "engram",
+        detail: `Engram binary at ${config.binaryPath}`
+      };
+    } catch (error) {
+      return {
+        healthy: false,
+        provider: "engram",
+        detail: `Engram not available: ${error instanceof Error ? error.message : error}`
+      };
+    }
+  }
+
   return {
+    name: "engram",
     config,
+    // MemoryProvider interface
+    search,
+    save,
+    delete: deleteMemory,
+    list,
+    health,
+    // Legacy compatibility
     recallContext,
     searchMemories,
     saveMemory,

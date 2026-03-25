@@ -1,85 +1,145 @@
 // @ts-check
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
-
 /**
- * @typedef {{
- *   action: "allow" | "redact" | "block",
- *   reasons: string[],
- *   outputLength: number,
- *   source?: string,
- *   metadata?: Record<string, unknown>
- * }} OutputAuditEvent
+ * @typedef {import("../types/core-contracts.d.ts").AuditEntry} AuditEntry
+ * @typedef {import("../types/core-contracts.d.ts").AuditQueryFilters} AuditQueryFilters
+ * @typedef {import("../types/core-contracts.d.ts").AuditStats} AuditStats
+ * @typedef {import("../types/core-contracts.d.ts").OutputAuditor} OutputAuditor
  */
 
-/**
- * @typedef {{
- *   filePath?: string
- * }} OutputAuditorOptions
- */
+import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+
+// ── Auditor Factory ──────────────────────────────────────────────────
 
 /**
- * NEXUS:4 — audit trail for output-guard decisions.
- * @param {OutputAuditorOptions} [options]
+ * Create an output auditor instance.
+ *
+ * @param {{ logDir?: string }} [options]
+ * @returns {OutputAuditor}
  */
-export function createOutputAuditor(options = {}) {
-  const filePath = path.resolve(options.filePath ?? ".lcs/output-audit.jsonl");
+export function createOutputAuditor(options) {
+  const logDir = options?.logDir ?? join(process.cwd(), ".lcs", "audit");
+  const logFile = join(logDir, "output-guard.jsonl");
 
-  async function ensureFile() {
-    await mkdir(path.dirname(filePath), { recursive: true });
+  /** @type {AuditEntry[] | null} */
+  let cache = null;
+  let cacheStale = true;
 
-    try {
-      await readFile(filePath, "utf8");
-    } catch {
-      await writeFile(filePath, "", "utf8");
+  function ensureDir() {
+    if (!existsSync(logDir)) {
+      mkdirSync(logDir, { recursive: true });
     }
   }
 
-  return {
-    filePath,
+  /**
+   * @returns {AuditEntry[]}
+   */
+  function loadCache() {
+    if (cache !== null && !cacheStale) {
+      return cache;
+    }
 
+    if (!existsSync(logFile)) {
+      cache = [];
+      cacheStale = false;
+      return cache;
+    }
+
+    const raw = readFileSync(logFile, "utf-8");
+    const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+    /** @type {AuditEntry[]} */
+    const entries = [];
+
+    for (const line of lines) {
+      try {
+        entries.push(/** @type {AuditEntry} */ (JSON.parse(line)));
+      } catch {
+        // Skip malformed lines
+      }
+    }
+
+    cache = entries;
+    cacheStale = false;
+    return cache;
+  }
+
+  return {
     /**
-     * @param {OutputAuditEvent} event
+     * @param {AuditEntry} entry
+     * @returns {Promise<void>}
      */
-    async record(event) {
-      await ensureFile();
-      const entry = {
-        recordedAt: new Date().toISOString(),
-        action: event.action,
-        reasons: Array.isArray(event.reasons) ? event.reasons : [],
-        outputLength: Number(event.outputLength ?? 0),
-        source: event.source ?? "",
-        metadata: event.metadata ?? {}
-      };
-      await writeFile(filePath, `${JSON.stringify(entry)}\n`, {
-        encoding: "utf8",
-        flag: "a"
-      });
-      return entry;
+    async log(entry) {
+      ensureDir();
+      const line = JSON.stringify(entry) + "\n";
+      appendFileSync(logFile, line, "utf-8");
+      cacheStale = true;
     },
 
     /**
-     * @param {{ action?: string, limit?: number }} [filters]
+     * @param {AuditQueryFilters} [filters]
+     * @returns {Promise<AuditEntry[]>}
      */
-    async list(filters = {}) {
-      await ensureFile();
-      const raw = await readFile(filePath, "utf8");
-      let entries = raw
-        .split(/\r?\n/u)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
+    async query(filters) {
+      let entries = loadCache();
 
-      if (filters.action) {
-        entries = entries.filter((entry) => entry.action === filters.action);
+      if (!filters) {
+        return [...entries];
       }
 
-      if (typeof filters.limit === "number") {
-        entries = entries.slice(-Math.max(0, filters.limit));
+      if (filters.project) {
+        entries = entries.filter((e) => e.project === filters.project);
       }
 
-      return entries;
+      if (typeof filters.blocked === "boolean") {
+        entries = entries.filter((e) => e.blocked === filters.blocked);
+      }
+
+      if (filters.since) {
+        const sinceDate = filters.since;
+        entries = entries.filter((e) => e.timestamp >= sinceDate);
+      }
+
+      if (typeof filters.limit === "number" && filters.limit > 0) {
+        entries = entries.slice(-filters.limit);
+      }
+
+      return [...entries];
+    },
+
+    /**
+     * @returns {Promise<AuditStats>}
+     */
+    async stats() {
+      const entries = loadCache();
+
+      let blocked = 0;
+      let modified = 0;
+      let passedClean = 0;
+      /** @type {Record<string, number>} */
+      const byRule = {};
+
+      for (const entry of entries) {
+        if (entry.blocked) {
+          blocked++;
+        } else if (entry.modified) {
+          modified++;
+        } else {
+          passedClean++;
+        }
+
+        for (const rule of entry.rules) {
+          byRule[rule] = (byRule[rule] ?? 0) + 1;
+        }
+      }
+
+      return {
+        total: entries.length,
+        blocked,
+        modified,
+        passedClean,
+        byRule
+      };
     }
   };
 }

@@ -1,0 +1,36 @@
+{
+  "name": "legal-basics",
+  "project": "legal-salta",
+  "cases": [
+    {
+      "id": "legal-001",
+      "query": "ley de procedimiento administrativo salta",
+      "expectedAnswer": "procedimiento administrativo provincial regulado por ley",
+      "tags": ["admin-law", "salta"]
+    },
+    {
+      "id": "legal-002",
+      "query": "plazo recurso de reconsideración",
+      "expectedAnswer": "plazo días hábiles recurso reconsideración",
+      "tags": ["deadlines", "appeals"]
+    },
+    {
+      "id": "legal-003",
+      "query": "requisitos demanda contencioso administrativo",
+      "expectedAnswer": "demanda contencioso administrativo requisitos admisibilidad",
+      "tags": ["litigation", "requirements"]
+    },
+    {
+      "id": "legal-004",
+      "query": "código procesal civil salta competencia",
+      "expectedAnswer": "competencia territorial material código procesal civil",
+      "tags": ["civil-procedure", "jurisdiction"]
+    },
+    {
+      "id": "legal-005",
+      "query": "notificación acto administrativo validez",
+      "expectedAnswer": "notificación fehaciente acto administrativo validez eficacia",
+      "tags": ["admin-law", "notifications"]
+    }
+  ]
+}

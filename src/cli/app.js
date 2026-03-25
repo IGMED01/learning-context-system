@@ -39,6 +39,8 @@ import {
   usageText
 } from "./formatters.js";
 import { runTeachCommand } from "./teach-command.js";
+import { runIngestCommand, formatIngestResultAsText } from "./ingest-command.js";
+import { evaluateGuard, formatGuardResultAsText } from "../guard/guard-engine.js";
 import {
   assertNumberRules,
   listOption,
@@ -125,7 +127,7 @@ import {
  */
 
 /**
- * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "init" | "sync-knowledge" | "ingest-security" | "version"} CliCommand
+ * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "init" | "sync-knowledge" | "ingest-security" | "ingest" | "version"} CliCommand
  */
 
 /**
@@ -467,7 +469,8 @@ function getLocalMemoryClient(options, dependencies) {
   }
 
   return createLocalMemoryStore({
-    filePath: options["memory-fallback-file"]
+    filePath: options["memory-fallback-file"],
+    baseDir: options["memory-base-dir"]
   });
 }
 
@@ -756,6 +759,7 @@ function isSupportedCommand(command) {
     command === "init" ||
     command === "sync-knowledge" ||
     command === "ingest-security" ||
+    command === "ingest" ||
     command === "version"
   );
 }
@@ -1049,7 +1053,8 @@ export async function runCli(argv, dependencies = {}) {
     command === "remember" ||
     command === "close" ||
     command === "sync-knowledge" ||
-    command === "ingest-security"
+    command === "ingest-security" ||
+    command === "ingest"
       ? "text"
       : "json";
   const format =
@@ -1104,6 +1109,95 @@ export async function runCli(argv, dependencies = {}) {
     };
   }
 
+  // ── Guard Gate ──────────────────────────────────────────────────────
+  // Evaluates configurable guard rules BEFORE any command touches memory
+  // or the recall pipeline. The guard is the second gate after safety —
+  // safety checks structural limits (token budget, focus length), while
+  // the guard checks semantic content (injection, domain scope, rate).
+  //
+  // Only commands that accept user-provided queries need guarding:
+  //   - recall (--query)
+  //   - teach (--task / --objective / --focus)
+  //   - ingest (document content flows through, but the command itself
+  //            doesn't take a user query — skip for now)
+  //
+  // The guard config comes from learning-context.config.json → guard {}
+  // If guard.enabled is false (default), this is a no-op pass-through.
+
+  const guardApplicableCommands = ["recall", "teach"];
+
+  if (guardApplicableCommands.includes(command)) {
+    const guardQuery =
+      command === "recall"
+        ? options.query || ""
+        : [options.task, options.objective, options.focus].filter(Boolean).join(" ");
+
+    if (guardQuery.length > 0) {
+      /** @type {import("../types/core-contracts.d.ts").GuardInput} */
+      const guardInput = {
+        query: guardQuery,
+        project: options.project || loadedConfig.config.project || "",
+        command
+      };
+
+      /** @type {import("../types/core-contracts.d.ts").GuardConfig} */
+      const guardConfig = {
+        enabled: loadedConfig.config.guard?.enabled ?? false,
+        rules: loadedConfig.config.guard?.rules ?? [],
+        defaultBlockMessage:
+          loadedConfig.config.guard?.defaultBlockMessage ??
+          "This query is outside the scope of this project."
+      };
+
+      const guardResult = evaluateGuard(guardInput, guardConfig);
+
+      if (guardResult.blocked) {
+        const metric = buildCommandMetric(command, startedAt, {
+          degraded: true,
+          safety: {
+            blocked: true,
+            reason: `guard:${guardResult.blockedBy}`,
+            preventedError: true
+          }
+        });
+        await safeRecordCommandMetric(metric);
+
+        if (format === "json") {
+          return {
+            exitCode: 1,
+            stdout: serializeCommandResult(
+              command,
+              {
+                action: "blocked",
+                reason: `guard:${guardResult.blockedBy}`,
+                message: guardResult.userMessage,
+                guard: {
+                  blocked: guardResult.blocked,
+                  blockedBy: guardResult.blockedBy,
+                  results: guardResult.results,
+                  durationMs: guardResult.durationMs
+                }
+              },
+              format,
+              loadedConfig,
+              {
+                status: "error",
+                degraded: true,
+                warnings: [guardResult.userMessage],
+                ...buildRuntimeMeta(startedAt)
+              }
+            )
+          };
+        }
+
+        return {
+          exitCode: 1,
+          stderr: formatGuardResultAsText(guardResult)
+        };
+      }
+    }
+  }
+
   if (command === "sync-knowledge") {
     const notion = getNotionClient(options, dependencies);
     const result = await notion.appendKnowledgeEntry({
@@ -1127,6 +1221,51 @@ export async function runCli(argv, dependencies = {}) {
           ? formatNotionSyncAsText(payload)
           : serializeCommandResult(
               "sync-knowledge",
+              payload,
+              format,
+              loadedConfig,
+              buildRuntimeMeta(startedAt)
+            )
+    };
+  }
+
+  if (command === "ingest") {
+    const source = requireOption(options, "source");
+    const sourcePath = requireOption(options, "path");
+    const project = options.project || "";
+    const dryRun = booleanOption(options, "dry-run", false);
+    const memoryClient = getMemoryClient(options, dependencies);
+
+    const ingestResult = await runIngestCommand(
+      {
+        source,
+        path: sourcePath,
+        project,
+        dryRun,
+        security: loadedConfig.config.security
+      },
+      memoryClient
+    );
+
+    const metric = buildCommandMetric("ingest", startedAt, {
+      selection: {
+        selectedCount: ingestResult.savedChunks,
+        suppressedCount: ingestResult.failedSaves
+      }
+    });
+    await safeRecordCommandMetric(metric);
+    const payload = {
+      ...ingestResult,
+      observability: buildObservabilityEvent(metric)
+    };
+
+    return {
+      exitCode: ingestResult.failedSaves > 0 && ingestResult.savedChunks === 0 ? 1 : 0,
+      stdout:
+        format === "text"
+          ? formatIngestResultAsText(ingestResult)
+          : serializeCommandResult(
+              "ingest",
               payload,
               format,
               loadedConfig,

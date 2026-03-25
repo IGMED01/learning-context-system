@@ -1,86 +1,275 @@
 // @ts-check
 
 /**
- * @typedef {{
- *   id: string,
- *   title: string,
- *   level: number,
- *   startLine: number,
- *   endLine: number,
- *   content: string
- * }} ParsedSection
+ * @typedef {import("../types/core-contracts.d.ts").DocumentStructure} DocumentStructure
+ * @typedef {import("../types/core-contracts.d.ts").Section} Section
+ * @typedef {import("../types/core-contracts.d.ts").TableRef} TableRef
+ * @typedef {import("../types/core-contracts.d.ts").CodeBlockRef} CodeBlockRef
+ * @typedef {import("../types/core-contracts.d.ts").ListRef} ListRef
  */
 
 /**
- * @param {string} value
+ * Parse front-matter metadata (YAML-like key: value pairs at start of document).
+ * @param {string[]} lines
+ * @returns {{ metadata: Record<string, string>, contentStartLine: number }}
  */
-function toSlug(value) {
-  return String(value)
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s-]+/gu, "")
-    .replace(/\s+/gu, "-")
-    .replace(/-+/gu, "-")
-    .replace(/^-|-$/gu, "");
+function parseFrontMatter(lines) {
+  /** @type {Record<string, string>} */
+  const metadata = {};
+  let i = 0;
+
+  // Skip optional opening fence (---)
+  if (lines.length > 0 && /^---\s*$/.test(lines[0])) {
+    i = 1;
+    for (let j = i; j < lines.length; j++) {
+      if (/^---\s*$/.test(lines[j])) {
+        for (let k = i; k < j; k++) {
+          const match = lines[k].match(/^([A-Za-z_][\w.-]*)\s*:\s*(.+)$/);
+          if (match) {
+            metadata[match[1].trim()] = match[2].trim();
+          }
+        }
+        return { metadata, contentStartLine: j + 1 };
+      }
+    }
+    return { metadata: {}, contentStartLine: 0 };
+  }
+
+  // Try unfenced key: value pairs at start
+  for (; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed === "") {
+      if (Object.keys(metadata).length > 0) {
+        return { metadata, contentStartLine: i + 1 };
+      }
+      break;
+    }
+    const match = trimmed.match(/^([A-Za-z_][\w.-]*)\s*:\s*(.+)$/);
+    if (match) {
+      metadata[match[1].trim()] = match[2].trim();
+    } else {
+      break;
+    }
+  }
+
+  if (Object.keys(metadata).length > 0) {
+    return { metadata, contentStartLine: i };
+  }
+
+  return { metadata: {}, contentStartLine: 0 };
 }
 
 /**
- * NEXUS:1 — parse markdown-like structure into sections.
- * @param {string} source
- * @returns {ParsedSection[]}
+ * Detect document structure from raw text.
+ *
+ * Identifies: markdown headings, code fences, tables (pipe-delimited),
+ * ordered/unordered lists, separator lines, and front-matter metadata.
+ *
+ * @param {string} text
+ * @param {string} [_sourceHint]
+ * @returns {DocumentStructure}
  */
-export function parseDocumentStructure(source) {
-  const lines = String(source ?? "").split(/\r?\n/u);
-  /** @type {Array<{ title: string, level: number, startLine: number }>} */
-  const headings = [];
+export function parseStructure(text, _sourceHint) {
+  const lines = text.split(/\r?\n/);
+  const { metadata, contentStartLine } = parseFrontMatter(lines);
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const match = line.match(/^(#{1,6})\s+(.+?)\s*$/u);
+  /** @type {Section[]} */
+  const sections = [];
+  /** @type {TableRef[]} */
+  const tables = [];
+  /** @type {CodeBlockRef[]} */
+  const codeBlocks = [];
+  /** @type {ListRef[]} */
+  const lists = [];
 
-    if (!match) {
+  let currentHeading = "";
+  let currentLevel = 0;
+  let sectionStartLine = contentStartLine;
+  /** @type {string[]} */
+  let sectionLines = [];
+
+  let inCodeBlock = false;
+  let codeBlockStart = -1;
+  let codeBlockLang = "";
+  /** @type {string[]} */
+  let codeBlockLines = [];
+
+  let inTable = false;
+  let tableStart = -1;
+  /** @type {string[]} */
+  let tableHeaders = [];
+  let tableRowCount = 0;
+
+  let inList = false;
+  let listStart = -1;
+  /** @type {string[]} */
+  let listItems = [];
+  let listOrdered = false;
+
+  function flushSection(/** @type {number} */ endLine) {
+    const content = sectionLines.join("\n").trim();
+    if (content || currentHeading) {
+      sections.push({
+        heading: currentHeading,
+        level: currentLevel,
+        content,
+        startLine: sectionStartLine,
+        endLine
+      });
+    }
+  }
+
+  function flushTable(/** @type {number} */ endLine) {
+    if (inTable) {
+      tables.push({
+        startLine: tableStart,
+        endLine,
+        headers: tableHeaders,
+        rowCount: tableRowCount
+      });
+      inTable = false;
+      tableHeaders = [];
+      tableRowCount = 0;
+    }
+  }
+
+  function flushList(/** @type {number} */ endLine) {
+    if (inList) {
+      lists.push({
+        startLine: listStart,
+        endLine,
+        items: listItems,
+        ordered: listOrdered
+      });
+      inList = false;
+      listItems = [];
+    }
+  }
+
+  for (let i = contentStartLine; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i;
+
+    // ── Code fences ──────────────────────────────────────────────
+    const codeFenceMatch = line.match(/^(`{3,}|~{3,})(\w*)/);
+    if (codeFenceMatch) {
+      if (!inCodeBlock) {
+        flushTable(lineNum - 1);
+        flushList(lineNum - 1);
+        inCodeBlock = true;
+        codeBlockStart = lineNum;
+        codeBlockLang = codeFenceMatch[2] || "";
+        codeBlockLines = [];
+        sectionLines.push(line);
+        continue;
+      } else {
+        inCodeBlock = false;
+        codeBlocks.push({
+          startLine: codeBlockStart,
+          endLine: lineNum,
+          language: codeBlockLang,
+          content: codeBlockLines.join("\n")
+        });
+        sectionLines.push(line);
+        continue;
+      }
+    }
+
+    if (inCodeBlock) {
+      codeBlockLines.push(line);
+      sectionLines.push(line);
       continue;
     }
 
-    headings.push({
-      level: match[1].length,
-      title: match[2].trim(),
-      startLine: index
-    });
-  }
+    // ── Headings ─────────────────────────────────────────────────
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
+    if (headingMatch) {
+      flushTable(lineNum - 1);
+      flushList(lineNum - 1);
+      flushSection(lineNum - 1);
 
-  if (!headings.length) {
-    return [
-      {
-        id: "section-1",
-        title: "document",
-        level: 1,
-        startLine: 0,
-        endLine: Math.max(0, lines.length - 1),
-        content: lines.join("\n").trim()
+      currentHeading = headingMatch[2].trim();
+      currentLevel = headingMatch[1].length;
+      sectionStartLine = lineNum;
+      sectionLines = [];
+      continue;
+    }
+
+    // ── Tables (pipe-delimited) ──────────────────────────────────
+    const tableMatch = line.match(/^\|(.+)\|$/);
+    if (tableMatch) {
+      flushList(lineNum - 1);
+      const cells = tableMatch[1].split("|").map(c => c.trim());
+      const isSeparator = cells.every(c => /^[-:]+$/.test(c));
+
+      if (!inTable) {
+        inTable = true;
+        tableStart = lineNum;
+        if (!isSeparator) {
+          tableHeaders = cells;
+        }
+        tableRowCount = 0;
+      } else if (!isSeparator) {
+        tableRowCount++;
       }
-    ];
+
+      sectionLines.push(line);
+      continue;
+    } else if (inTable) {
+      flushTable(lineNum - 1);
+    }
+
+    // ── Lists ────────────────────────────────────────────────────
+    const unorderedMatch = line.match(/^(\s*)([-*+])\s+(.+)/);
+    const orderedMatch = line.match(/^(\s*)(\d+)[.)]\s+(.+)/);
+    const listMatch = unorderedMatch || orderedMatch;
+
+    if (listMatch) {
+      const itemText = listMatch[3].trim();
+      const isOrderedItem = !!orderedMatch;
+
+      if (!inList) {
+        inList = true;
+        listStart = lineNum;
+        listOrdered = isOrderedItem;
+        listItems = [itemText];
+      } else {
+        listItems.push(itemText);
+      }
+
+      sectionLines.push(line);
+      continue;
+    } else if (inList) {
+      const isContinuation = /^\s{2,}/.test(line) && line.trim().length > 0;
+      const isBlankInList = line.trim() === "";
+
+      if (isContinuation) {
+        if (listItems.length > 0) {
+          listItems[listItems.length - 1] += " " + line.trim();
+        }
+        sectionLines.push(line);
+        continue;
+      } else if (!isBlankInList) {
+        flushList(lineNum - 1);
+      }
+    }
+
+    sectionLines.push(line);
   }
 
-  /** @type {ParsedSection[]} */
-  const sections = [];
-
-  for (let index = 0; index < headings.length; index += 1) {
-    const current = headings[index];
-    const next = headings[index + 1];
-    const endLine = (next?.startLine ?? lines.length) - 1;
-    const rawContent = lines.slice(current.startLine, endLine + 1).join("\n").trim();
-    const slug = toSlug(current.title);
-
-    sections.push({
-      id: slug ? `section-${slug}` : `section-${index + 1}`,
-      title: current.title,
-      level: current.level,
-      startLine: current.startLine,
-      endLine: Math.max(current.startLine, endLine),
-      content: rawContent
+  // Flush remaining state
+  if (inCodeBlock) {
+    codeBlocks.push({
+      startLine: codeBlockStart,
+      endLine: lines.length - 1,
+      language: codeBlockLang,
+      content: codeBlockLines.join("\n")
     });
   }
 
-  return sections;
+  flushTable(lines.length - 1);
+  flushList(lines.length - 1);
+  flushSection(lines.length - 1);
+
+  return { sections, tables, codeBlocks, lists, metadata };
 }

@@ -15,6 +15,9 @@
     "release:check": "node scripts/check-release-discipline.js",
     "northstar:check": "node scripts/check-north-star.js",
     "dev:cli": "node src/cli.js",
+    "dev:api": "node src/api/server.js",
+    "eval": "node eval/run.js",
+    "eval:legal": "node eval/run.js --suite eval/suites/legal-basics.json --project legal-salta",
     "dist:cli": "node dist/cli.js",
     "test": "node test/run-tests.js",
     "typecheck": "tsc --project tsconfig.json",
@@ -55,6 +58,10 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "@types/pdf-parse": "^1.1.5",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "pdf-parse": "^2.4.5"
   }
 }
