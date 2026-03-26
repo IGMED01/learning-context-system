@@ -111,7 +111,7 @@ function OfflineBanner({ onDismiss }) {
         <span style={{ fontSize:'12px', color:'rgba(239,68,68,0.85)' }}>API Server no disponible —</span>
         <code style={{ fontSize:'11px', fontFamily:'JetBrains Mono,monospace', padding:'2px 8px',
           background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.15)', color:'rgba(239,68,68,0.65)' }}>
-          node src/api/server.js --port 3100
+          node src/api/start.js
         </code>
       </div>
       <button onClick={onDismiss} style={{ background:'none', border:'none', color:'rgba(239,68,68,0.4)', cursor:'pointer', fontSize:'16px', lineHeight:1, flexShrink:0 }}>✕</button>
