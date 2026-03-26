@@ -6472,6 +6472,8 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     const baseUrl = `http://127.0.0.1:${start.port}`;
     const openapiResponse = await fetch(`${baseUrl}/api/openapi.json`);
     const demoResponse = await fetch(`${baseUrl}/api/demo`);
+    const openapiPayload = await openapiResponse.json();
+    const demoHtml = await demoResponse.text();
     const guardPolicies = await fetch(`${baseUrl}/api/guard/policies`);
     const saveVersion = await fetch(`${baseUrl}/api/versioning/prompts`, {
       method: "POST",
@@ -6565,7 +6567,6 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
         "x-api-key": apiKey
       }
     });
-    const openapiPayload = await openapiResponse.json();
     const guardPoliciesPayload = await guardPolicies.json();
     const comparePayload = await compareVersions.json();
     const rollbackPayload = await rollbackPlan.json();
@@ -6578,7 +6579,7 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
 
     assert.equal(openapiResponse.status, 200);
     assert.equal(demoResponse.status, 200);
-    assert.match(await demoResponse.text(), /NEXUS Demo Console/);
+    assert.match(demoHtml, /NEXUS Demo Console/);
     assert.equal(guardPolicies.status, 200);
     assert.equal(Array.isArray(guardPoliciesPayload.profiles), true);
     assert.equal(saveVersion.status, 200);
