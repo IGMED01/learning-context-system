@@ -11,6 +11,10 @@ test/
 test-output/
 src/
 scripts/
+eval/
+ui/node_modules/
+node_modules/
+.lcs/
 
 # Local/runtime state
 learning-context.config.json
@@ -21,3 +25,9 @@ tsconfig.build.json
 AGENTS.md
 VERSIONING.md
 README.LEARN.md
+dist/**/*.map
+
+# Keep only built UI artifact (exclude source/tooling files)
+ui/*
+!ui/dist/
+!ui/dist/**
