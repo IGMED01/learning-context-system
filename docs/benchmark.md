@@ -10,6 +10,7 @@ Este proyecto ahora tiene benchmarks + gates formales:
 4. **domain eval suite**: gate transversal por dominio (auth, security, observability, versioning)
 5. **weight tuning benchmark**: compara perfiles de pesos del selector (NEXUS:3)
 6. **foundations stress benchmark**: valida processing/storage/guard en volumen sintético (NEXUS:1/2/4)
+7. **NEXUS vs raw benchmark**: compara el costo real de contexto con y sin NEXUS sobre workspaces reales
 
 No mide “si se siente bien”. Mide comportamiento repetible.
 
@@ -24,6 +25,7 @@ No mide “si se siente bien”. Mide comportamiento repetible.
 
 ```bash
 npm run benchmark
+npm run benchmark:nexus-vs-raw
 npm run benchmark:foundations
 npm run benchmark:recall
 npm run benchmark:vertical
@@ -52,6 +54,14 @@ npm run benchmark:tune
 - `relatedTestPass`: valida que el test relacionado siga apareciendo como segundo eje
 - `noiseExclusionPass`: valida que logs/chat sigan fuera
 - `memoryBehaviorPass`: compara variantes sin memoria, con memoria seleccionada y con memoria suprimida por presupuesto
+
+## Qué mide el benchmark NEXUS vs raw
+
+- `withoutNexus.chunks/tokens`: costo bruto si mandaras todo el contexto sin filtrar
+- `withNexus.chunks/tokens`: costo final del paquete seleccionado por NEXUS
+- `savings.percent`: ahorro real de tokens aproximados
+- `memory.retentionRate`: qué parte de la memoria recuperada sobrevivió a la selección
+- `quality.pass`: confirma que el ahorro no rompe foco de código, test relacionado ni exclusión de ruido
 
 ## Cómo usarlo
 
