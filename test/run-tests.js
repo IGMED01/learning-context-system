@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { buildLearningReadme } from "../src/analysis/readme-generator.js";
+import { runNexusComparisonSuite } from "../src/benchmark/nexus-comparison.js";
 import { runCli } from "../src/cli/app.js";
 import {
   evaluateDashboardRenderPolicy,
@@ -34,6 +35,7 @@ import {
 } from "../src/skills/auto-generator.js";
 import { defaultProjectConfig, parseProjectConfig } from "../src/contracts/config-contracts.js";
 import { parseChunkFile } from "../src/contracts/context-contracts.js";
+import { parseVerticalBenchmarkFile } from "../src/contracts/vertical-benchmark-contracts.js";
 import { loadWorkspaceChunks } from "../src/io/workspace-chunks.js";
 import { buildLearningPacket } from "../src/learning/mentor-loop.js";
 import { initProjectConfig, runProjectDoctor } from "../src/system/project-ops.js";
@@ -5636,6 +5638,21 @@ run("NEXUS:10 auth middleware validates API key and JWT token", async () => {
   assert.equal(jwtAuth.authorized, true);
   assert.equal(expired.authorized, false);
   assert.match(expired.error ?? "", /expired/i);
+});
+
+run("NEXUS benchmark compares raw context versus selected context on real workspace cases", async () => {
+  const benchmarkPath = path.join(process.cwd(), "benchmark", "vertical-benchmark.json");
+  const raw = await readFile(benchmarkPath, "utf8");
+  const payload = parseVerticalBenchmarkFile(raw, benchmarkPath);
+  const report = await runNexusComparisonSuite(payload.cases);
+
+  assert.equal(report.status, "ok");
+  assert.equal(report.results.length >= 3, true);
+  assert.equal(report.summary.avgRawChunks > report.summary.avgSelectedChunks, true);
+  assert.equal(report.summary.avgRawTokens > report.summary.avgSelectedTokens, true);
+  assert.equal(report.summary.avgTokenSavingsPercent > 0, true);
+  assert.equal(report.summary.qualityPassRate, 1);
+  assert.equal(report.results.some((result) => result.memory.recoveredChunks > 0), true);
 });
 
 run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () => {
