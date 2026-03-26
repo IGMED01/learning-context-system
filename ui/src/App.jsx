@@ -259,7 +259,7 @@ function QueryBlock({ onChunks }) {
                   <div style={{ padding:'8px 12px', fontSize:'13px', lineHeight:1.6, whiteSpace:'pre-wrap', wordBreak:'break-word',
                     background:m.role==='user'?'var(--accent)':'var(--surface-2)',
                     border:`1px solid ${m.role==='user'?'transparent':'var(--border)'}`,
-                    color:m.role==='user'?'#fff':'var(--text-1)' }}>
+                    color:m.role==='user'?'var(--accent-contrast, var(--bg))':'var(--text-1)' }}>
                     {m.text}
                   </div>
                 )}
@@ -344,7 +344,7 @@ function QueryBlock({ onChunks }) {
           style={{ flex:1, background:'var(--surface-2)', border:'1px solid var(--border)', padding:'7px 12px', fontSize:'13px', color:'var(--text-1)', outline:'none', fontFamily:'inherit', transition:'border-color 0.15s' }}
           onFocus={e=>e.target.style.borderColor='rgba(124,58,237,0.5)'} onBlur={e=>e.target.style.borderColor='var(--border)'} />
         <button onClick={send} disabled={loading||!input.trim()}
-          style={{ padding:'7px 16px', background:input.trim()&&!loading?'var(--accent)':'var(--surface-3)', border:'1px solid transparent', fontSize:'12px', fontWeight:600, fontFamily:'inherit', letterSpacing:'0.2px', color:input.trim()&&!loading?'#fff':'var(--text-3)', cursor:input.trim()&&!loading?'pointer':'not-allowed', transition:'all 0.15s' }}
+          style={{ padding:'7px 16px', background:input.trim()&&!loading?'var(--accent)':'var(--surface-3)', border:'1px solid transparent', fontSize:'12px', fontWeight:600, fontFamily:'inherit', letterSpacing:'0.2px', color:input.trim()&&!loading?'var(--accent-contrast, var(--bg))':'var(--text-3)', cursor:input.trim()&&!loading?'pointer':'not-allowed', transition:'all 0.15s' }}
           onMouseDown={e=>{if(!e.currentTarget.disabled)e.currentTarget.style.transform='scale(0.97)'}}
           onMouseUp={e=>e.currentTarget.style.transform='scale(1)'}>Send ↵</button>
       </div>
