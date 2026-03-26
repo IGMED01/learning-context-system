@@ -82,7 +82,7 @@ function toPosixPath(value) {
  * @param {string} content
  */
 function hashContent(content) {
-  return createHash("sha1").update(content).digest("hex");
+  return createHash("sha256").update(content).digest("hex");
 }
 
 function createRunId() {
