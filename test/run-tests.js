@@ -36,6 +36,7 @@ import {
 } from "../src/skills/auto-generator.js";
 import { defaultProjectConfig, parseProjectConfig } from "../src/contracts/config-contracts.js";
 import { parseChunkFile } from "../src/contracts/context-contracts.js";
+import { parseRagGoldenSetFile } from "../src/contracts/rag-golden-set-contracts.js";
 import { parseVerticalBenchmarkFile } from "../src/contracts/vertical-benchmark-contracts.js";
 import { loadWorkspaceChunks } from "../src/io/workspace-chunks.js";
 import { buildLearningPacket } from "../src/learning/mentor-loop.js";
@@ -63,9 +64,24 @@ import {
   createPipelineBuilder
 } from "../src/orchestration/pipeline-builder.js";
 import { createDefaultExecutors } from "../src/orchestration/default-executors.js";
+import {
+  addTurn as addConversationTurn,
+  buildConversationContext,
+  buildConversationRecallQuery,
+  cleanupExpiredSessions,
+  createSession as createConversationSession,
+  getConversationNoiseTelemetry,
+  getSession as getConversationSession,
+  resetAllSessions
+} from "../src/orchestration/conversation-manager.js";
 import { createAuthMiddleware } from "../src/api/auth-middleware.js";
 import { createNexusApiServer } from "../src/api/server.js";
-import "../src/api/handlers.js";
+import {
+  applyBaseSecurityHeaders,
+  createRateLimiter,
+  resolveCorsOrigin
+} from "../src/api/security-runtime.js";
+import { createSanitizedCliErrorPayload } from "../src/api/handlers.js";
 import { matchRoute } from "../src/api/router.js";
 import { loadApiAxioms } from "../src/api/axioms-loader.js";
 import { createChangeDetector } from "../src/sync/change-detector.js";
@@ -74,6 +90,16 @@ import { createSyncScheduler } from "../src/sync/sync-scheduler.js";
 import { createSyncRuntime } from "../src/sync/sync-runtime.js";
 import { scoreResponseConsistency } from "../src/eval/consistency-scorer.js";
 import { evaluateCiGate, formatCiGateReport } from "../src/eval/ci-gate.js";
+import { evaluateConversationNoiseGate } from "../src/eval/conversation-noise-gate.js";
+import {
+  computeMrr,
+  computeNdcgAtK,
+  computeRecallAtK,
+  evaluateRetrievalFirstGate
+} from "../src/eval/retrieval-first-gate.js";
+import { evaluateMemoryPoisoningGate } from "../src/eval/memory-poisoning-gate.js";
+import { evaluateRagGoldenSetGate } from "../src/eval/rag-golden-set-gate.js";
+import { evaluateFineTuningReadinessGate } from "../src/eval/fine-tuning-readiness-gate.js";
 import {
   getObservabilityReport,
   recordCommandMetric
@@ -112,6 +138,11 @@ import {
   selectContextWindow
 } from "../src/context/noise-canceler.js";
 import {
+  resolveContextMode,
+  resolveEndpointContextProfile,
+  selectEndpointContext
+} from "../src/context/context-mode.js";
+import {
   redactSensitiveContent,
   shouldIgnoreSensitiveFile
 } from "../src/security/secret-redaction.js";
@@ -144,7 +175,8 @@ import {
 } from "../src/eval/domain-eval-suite.js";
 import {
   getGateErrors,
-  formatGateErrors
+  formatGateErrors,
+  buildCodeGateEnv
 } from "../src/guard/code-gate.js";
 import {
   runArchitectureGate,
@@ -158,6 +190,9 @@ import {
   synthesizeAgent,
   runMitosisPipeline
 } from "../src/orchestration/agent-synthesizer.js";
+import { runRepairLoop } from "../src/orchestration/repair-loop.js";
+import { spawnAgent } from "../src/orchestration/nexus-agent-runtime.js";
+import { spawnNexusAgent } from "../src/orchestration/nexus-agent-bridge.js";
 
 const tests = [];
 const execFile = promisify(execFileCallback);
@@ -380,11 +415,13 @@ function createExecError(message, extra = {}) {
 /**
  * @param {Record<string, unknown>} payload
  * @param {string} secret
+ * @param {Record<string, unknown>} [headerOverrides]
  */
-function createHs256Jwt(payload, secret) {
+function createHs256Jwt(payload, secret, headerOverrides = {}) {
   const header = {
     alg: "HS256",
-    typ: "JWT"
+    typ: "JWT",
+    ...headerOverrides
   };
   const encode = (value) =>
     Buffer.from(JSON.stringify(value))
@@ -496,6 +533,718 @@ run("keeps the most focus-heavy sentences during compression", () => {
   assert.doesNotMatch(compressed, /CSS refactors/);
 });
 
+run("context mode toggles clean profiles per endpoint", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+
+  try {
+    delete process.env.LCS_CONTEXT_MODE;
+    const legacy = resolveEndpointContextProfile("chat");
+    assert.equal(resolveContextMode(), "default");
+    assert.equal(legacy.enabled, false);
+    assert.equal(legacy.tokenBudget, 350);
+
+    process.env.LCS_CONTEXT_MODE = "clean";
+    const clean = resolveEndpointContextProfile("chat");
+    assert.equal(resolveContextMode(), "clean");
+    assert.equal(clean.enabled, true);
+    assert.equal(clean.tokenBudget, 320);
+    assert.equal(clean.maxChunks, 5);
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+  }
+});
+
+run("teach endpoint profile mirrors chat defaults and supports selection", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+
+  try {
+    delete process.env.LCS_CONTEXT_MODE;
+    const legacyTeach = resolveEndpointContextProfile("teach");
+    const legacyChat = resolveEndpointContextProfile("chat");
+    assert.equal(legacyTeach.tokenBudget, legacyChat.tokenBudget);
+    assert.equal(legacyTeach.maxChunks, legacyChat.maxChunks);
+
+    process.env.LCS_CONTEXT_MODE = "clean";
+    const cleanTeach = resolveEndpointContextProfile("teach");
+    const cleanChat = resolveEndpointContextProfile("chat");
+    assert.equal(cleanTeach.tokenBudget, cleanChat.tokenBudget);
+    assert.equal(cleanTeach.maxChunks, cleanChat.maxChunks);
+
+    const selection = selectEndpointContext({
+      endpoint: "teach",
+      query: "jwt middleware validation",
+      chunks: [
+        {
+          id: "code-auth",
+          source: "src/auth/middleware.ts",
+          kind: "code",
+          content: "JWT validation must run before route handlers.",
+          priority: 0.9
+        },
+        {
+          id: "spec-auth",
+          source: "docs/auth-spec.md",
+          kind: "spec",
+          content: "Auth contract requires 401 for invalid tokens."
+        }
+      ],
+      forceSelection: true
+    });
+    assert.equal(selection.selectionApplied, true);
+    assert.equal(selection.selectedChunks.length >= 1, true);
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+  }
+});
+
+run("adaptive budget feature flag scales chat profile and supports endpoint override", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+  const previousAdaptive = process.env.LCS_ADAPTIVE_BUDGET;
+  const previousAdaptiveChat = process.env.LCS_ADAPTIVE_BUDGET_CHAT;
+
+  try {
+    process.env.LCS_CONTEXT_MODE = "clean";
+    process.env.LCS_ADAPTIVE_BUDGET = "true";
+    delete process.env.LCS_ADAPTIVE_BUDGET_CHAT;
+
+    const heavySelection = selectEndpointContext({
+      endpoint: "chat",
+      query:
+        "hardening auth middleware token expiration revocation policy session replay protection and incident runbook alignment",
+      chunks: Array.from({ length: 10 }, (_, index) => ({
+        id: `chunk-${index + 1}`,
+        source: `docs/security-${index + 1}.md`,
+        kind: index % 2 === 0 ? "spec" : "doc",
+        content:
+          "JWT validation, replay protection, revocation list synchronization, and token rotation policy enforcement must run before route handlers. ".repeat(8)
+      }))
+    });
+
+    assert.equal(heavySelection.profile.adaptiveBudget.enabled, true);
+    assert.equal(heavySelection.profile.adaptiveBudget.applied, true);
+    assert.equal(heavySelection.profile.tokenBudget > 320, true);
+
+    process.env.LCS_ADAPTIVE_BUDGET_CHAT = "false";
+    const fixedSelection = selectEndpointContext({
+      endpoint: "chat",
+      query:
+        "hardening auth middleware token expiration revocation policy session replay protection and incident runbook alignment",
+      chunks: Array.from({ length: 10 }, (_, index) => ({
+        id: `chunk-fixed-${index + 1}`,
+        source: `docs/security-fixed-${index + 1}.md`,
+        kind: index % 2 === 0 ? "spec" : "doc",
+        content:
+          "JWT validation, replay protection, revocation list synchronization, and token rotation policy enforcement must run before route handlers. ".repeat(8)
+      }))
+    });
+
+    assert.equal(fixedSelection.profile.adaptiveBudget.enabled, false);
+    assert.equal(fixedSelection.profile.adaptiveBudget.applied, false);
+    assert.equal(fixedSelection.profile.tokenBudget, 320);
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+    if (previousAdaptive === undefined) {
+      delete process.env.LCS_ADAPTIVE_BUDGET;
+    } else {
+      process.env.LCS_ADAPTIVE_BUDGET = previousAdaptive;
+    }
+    if (previousAdaptiveChat === undefined) {
+      delete process.env.LCS_ADAPTIVE_BUDGET_CHAT;
+    } else {
+      process.env.LCS_ADAPTIVE_BUDGET_CHAT = previousAdaptiveChat;
+    }
+  }
+});
+
+run("adaptive budget supports agent endpoint hints and respects explicit token overrides", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+  const previousAdaptive = process.env.LCS_ADAPTIVE_BUDGET;
+  const previousAdaptiveAgent = process.env.LCS_ADAPTIVE_BUDGET_AGENT;
+
+  try {
+    process.env.LCS_CONTEXT_MODE = "clean";
+    process.env.LCS_ADAPTIVE_BUDGET = "true";
+    process.env.LCS_ADAPTIVE_BUDGET_AGENT = "true";
+
+    const adaptiveAgentProfile = resolveEndpointContextProfile("agent", {}, {
+      query:
+        "harden auth boundary with strict session validation replay protection and mandatory security regression tests",
+      rawTokens: 1400,
+      chunkCount: 14,
+      changedFilesCount: 10
+    });
+
+    assert.equal(adaptiveAgentProfile.adaptiveBudget.enabled, true);
+    assert.equal(adaptiveAgentProfile.adaptiveBudget.applied, true);
+    assert.equal(adaptiveAgentProfile.tokenBudget > 280, true);
+
+    const explicitProfile = resolveEndpointContextProfile("agent", {
+      tokenBudget: 192
+    }, {
+      query: "same workload should not override explicit token budget",
+      rawTokens: 2000,
+      chunkCount: 20,
+      changedFilesCount: 12
+    });
+
+    assert.equal(explicitProfile.tokenBudget, 192);
+    assert.equal(explicitProfile.adaptiveBudget.applied, false);
+    assert.equal(explicitProfile.adaptiveBudget.reason, "explicit-token-budget-override");
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+    if (previousAdaptive === undefined) {
+      delete process.env.LCS_ADAPTIVE_BUDGET;
+    } else {
+      process.env.LCS_ADAPTIVE_BUDGET = previousAdaptive;
+    }
+    if (previousAdaptiveAgent === undefined) {
+      delete process.env.LCS_ADAPTIVE_BUDGET_AGENT;
+    } else {
+      process.env.LCS_ADAPTIVE_BUDGET_AGENT = previousAdaptiveAgent;
+    }
+  }
+});
+
+run("clean context mode suppresses noisy chat chunks", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+
+  try {
+    process.env.LCS_CONTEXT_MODE = "clean";
+
+    const selection = selectEndpointContext({
+      endpoint: "chat",
+      query: "jwt middleware expired token validation",
+      chunks: [
+        {
+          id: "signal",
+          source: "src/auth/middleware.js",
+          kind: "code",
+          content: "JWT middleware validates signature and returns 401 for expired tokens.",
+          priority: 0.9
+        },
+        {
+          id: "noise-1",
+          source: "chat://1",
+          kind: "chat",
+          content: "general brainstorming without concrete implementation details",
+          priority: 0.2
+        },
+        {
+          id: "noise-2",
+          source: "chat://2",
+          kind: "chat",
+          content: "more generic narrative and repetitive planning notes",
+          priority: 0.2
+        }
+      ]
+    });
+
+    assert.equal(selection.mode, "clean");
+    assert.equal(selection.rawChunks, 3);
+    assert.equal(selection.selectedChunks.some((chunk) => chunk.id === "signal"), true);
+    assert.equal(selection.selectedChunks.length < selection.rawChunks, true);
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+  }
+});
+
+run("clean context mode enforces SDD coverage for chat", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+
+  try {
+    process.env.LCS_CONTEXT_MODE = "clean";
+
+    const selection = selectEndpointContext({
+      endpoint: "chat",
+      query: "Implement JWT middleware validation and error handling",
+      chunks: [
+        {
+          id: "code-heavy",
+          source: "src/auth/middleware.js",
+          kind: "code",
+          content: "JWT middleware validates tokens and handles expired sessions.",
+          priority: 0.95
+        },
+        {
+          id: "chat-noise",
+          source: "chat://planning",
+          kind: "chat",
+          content: "brainstorming ideas and repetitive planning narrative",
+          priority: 0.9
+        },
+        {
+          id: "spec-contract",
+          source: "docs/auth/spec.md",
+          kind: "spec",
+          content: "API spec requires HTTP 401 on invalid or expired JWT."
+        }
+      ],
+      profileOverrides: {
+        maxChunks: 1,
+        tokenBudget: 90
+      }
+    });
+
+    assert.equal(selection.selectionApplied, true);
+    assert.equal(selection.sdd.enabled, true);
+    assert.equal(selection.sdd.coverage.spec, true);
+    assert.equal(selection.selectedChunks.length, 1);
+    assert.equal(selection.selectedChunks[0].kind, "spec");
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+  }
+});
+
+run("agent endpoint can force selection in default mode and emit SDD coverage", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+
+  try {
+    delete process.env.LCS_CONTEXT_MODE;
+
+    const selection = selectEndpointContext({
+      endpoint: "agent",
+      query: "Harden auth middleware path traversal checks",
+      forceSelection: true,
+      changedFiles: ["src/api/handlers.js"],
+      chunks: [
+        {
+          id: "spec-1",
+          source: "docs/security-spec.md",
+          kind: "spec",
+          content: "All path inputs must be restricted to the workspace root."
+        },
+        {
+          id: "test-1",
+          source: "test/api/security.test.js",
+          kind: "test",
+          content: "Verifies 400 for ../ traversal in suitePath and dataDir."
+        },
+        {
+          id: "code-1",
+          source: "src/api/handlers.js",
+          kind: "code",
+          content: "resolveSafePathWithinWorkspace validates path boundaries."
+        },
+        {
+          id: "noise-1",
+          source: "chat://history",
+          kind: "chat",
+          content: "old conversation notes without actionable detail"
+        }
+      ],
+      profileOverrides: {
+        maxChunks: 3,
+        tokenBudget: 180
+      }
+    });
+
+    assert.equal(selection.mode, "default");
+    assert.equal(selection.selectionApplied, true);
+    assert.equal(selection.sdd.enabled, true);
+    assert.equal(selection.sdd.coverage.spec, true);
+    assert.equal(selection.sdd.coverage.test, true);
+    assert.equal(selection.sdd.coverage.code, true);
+    assert.equal(selection.selectedChunks.length <= 3, true);
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+  }
+});
+
+run("clean context mode supports explicit security SDD profile overrides", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+
+  try {
+    process.env.LCS_CONTEXT_MODE = "clean";
+
+    const selection = selectEndpointContext({
+      endpoint: "chat",
+      query: "Harden JWT middleware against path traversal and auth bypass",
+      sddProfile: "security",
+      chunks: [
+        {
+          id: "spec-1",
+          source: "docs/security/spec.md",
+          kind: "spec",
+          content: "Security spec requires 401 and strict workspace path validation."
+        },
+        {
+          id: "test-1",
+          source: "test/security/auth.test.js",
+          kind: "test",
+          content: "Covers invalid JWT, expired JWT and traversal path attempts."
+        },
+        {
+          id: "code-1",
+          source: "src/api/security-runtime.js",
+          kind: "code",
+          content: "Rate limiter and auth guards enforce request boundary controls."
+        }
+      ],
+      profileOverrides: {
+        maxChunks: 1,
+        tokenBudget: 80
+      }
+    });
+
+    assert.equal(selection.sdd.profile, "security");
+    assert.equal(selection.sdd.profileReason, "explicit");
+    assert.equal(selection.sdd.requiredKinds.includes("spec"), true);
+    assert.equal(selection.sdd.requiredKinds.includes("test"), true);
+    assert.equal(selection.sdd.requiredKinds.includes("code"), true);
+    assert.equal(
+      Object.values(selection.sdd.coverage).some((covered) => covered === false),
+      true
+    );
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+  }
+});
+
+run("clean context mode infers frontend SDD profile from framework hints", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+
+  try {
+    process.env.LCS_CONTEXT_MODE = "clean";
+
+    const selection = selectEndpointContext({
+      endpoint: "chat",
+      query: "Refactor react component state and UI behavior",
+      framework: "react",
+      chunks: [
+        {
+          id: "spec-ui",
+          source: "docs/ui/spec.md",
+          kind: "spec",
+          content: "UI spec defines loading skeleton and error banner behavior."
+        },
+        {
+          id: "code-ui",
+          source: "src/ui/LoginView.tsx",
+          kind: "code",
+          content: "React component renders loading state and action buttons."
+        },
+        {
+          id: "test-ui",
+          source: "test/ui/LoginView.test.tsx",
+          kind: "test",
+          content: "Component test checks rendering contract for loading and errors."
+        }
+      ],
+      profileOverrides: {
+        maxChunks: 2,
+        tokenBudget: 140
+      }
+    });
+
+    assert.equal(selection.sdd.profile, "frontend");
+    assert.equal(selection.sdd.profileReason, "framework-frontend");
+    assert.equal(selection.sdd.requiredKinds.includes("code"), true);
+    assert.equal(selection.sdd.requiredKinds.includes("spec"), true);
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+  }
+});
+
+run("clean context mode supports source budgets by origin", () => {
+  const previousMode = process.env.LCS_CONTEXT_MODE;
+
+  try {
+    process.env.LCS_CONTEXT_MODE = "clean";
+
+    const selection = selectEndpointContext({
+      endpoint: "chat",
+      query: "auth middleware validation boundary",
+      chunks: [
+        {
+          id: "workspace-1",
+          source: "src/auth/middleware.js",
+          kind: "code",
+          content: "Auth middleware validates JWT issuer and expiration before handlers."
+        },
+        {
+          id: "memory-1",
+          source: "memory://auth-note",
+          kind: "memory",
+          content: "Memory note: maintain 401 response contract for expired tokens."
+        },
+        {
+          id: "chat-1",
+          source: "chat://turn-1",
+          kind: "chat",
+          content: "auth middleware validation boundary auth middleware validation boundary"
+        }
+      ],
+      profileOverrides: {
+        tokenBudget: 120,
+        maxChunks: 3,
+        minScore: 0,
+        sourceBudgets: {
+          workspace: 0.8,
+          memory: 0.2,
+          chat: 0
+        }
+      }
+    });
+
+    assert.equal(selection.profile.sourceBudgets?.chat, 0);
+    assert.equal(selection.selectedChunks.some((chunk) => chunk.id === "workspace-1"), true);
+    assert.equal(selection.selectedChunks.some((chunk) => chunk.id === "chat-1"), false);
+    assert.equal(
+      selection.suppressedChunks.some(
+        (chunk) => chunk.id === "chat-1" && chunk.reason === "origin-budget-exceeded"
+      ),
+      true
+    );
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousMode;
+    }
+  }
+});
+
+run("conversation manager compacts old turns into summary with retention policy", () => {
+  const previousSummaryEvery = process.env.LCS_CONVERSATION_SUMMARY_EVERY;
+  const previousSummaryKeep = process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS;
+  const previousMaxTurns = process.env.LCS_CONVERSATION_MAX_TURNS;
+  const previousTtl = process.env.LCS_CONVERSATION_SESSION_TTL_MS;
+
+  try {
+    process.env.LCS_CONVERSATION_SUMMARY_EVERY = "4";
+    process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS = "2";
+    process.env.LCS_CONVERSATION_MAX_TURNS = "4";
+    process.env.LCS_CONVERSATION_SESSION_TTL_MS = "3600000";
+    resetAllSessions();
+
+    const session = createConversationSession("nexus");
+    addConversationTurn(session.sessionId, "user", "Primera intención sobre middleware JWT.");
+    addConversationTurn(session.sessionId, "system", "Respuesta inicial del sistema.");
+    addConversationTurn(session.sessionId, "user", "Segundo pedido para validar sesiones.");
+    addConversationTurn(session.sessionId, "system", "Segunda respuesta con enfoque en seguridad.");
+    addConversationTurn(session.sessionId, "user", "Tercer pedido con foco en errores 401.");
+
+    const stored = getConversationSession(session.sessionId);
+    assert.ok(stored);
+    assert.equal(stored.turns.length <= 4, true);
+    assert.equal(typeof stored.context.conversationSummary, "string");
+    assert.match(String(stored.context.conversationSummary ?? ""), /\[user\]/i);
+
+    const context = buildConversationContext(session.sessionId, 10);
+    assert.match(context, /\[summary\]/i);
+    assert.match(context, /\[user\]/i);
+  } finally {
+    resetAllSessions();
+    if (previousSummaryEvery === undefined) {
+      delete process.env.LCS_CONVERSATION_SUMMARY_EVERY;
+    } else {
+      process.env.LCS_CONVERSATION_SUMMARY_EVERY = previousSummaryEvery;
+    }
+    if (previousSummaryKeep === undefined) {
+      delete process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS;
+    } else {
+      process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS = previousSummaryKeep;
+    }
+    if (previousMaxTurns === undefined) {
+      delete process.env.LCS_CONVERSATION_MAX_TURNS;
+    } else {
+      process.env.LCS_CONVERSATION_MAX_TURNS = previousMaxTurns;
+    }
+    if (previousTtl === undefined) {
+      delete process.env.LCS_CONVERSATION_SESSION_TTL_MS;
+    } else {
+      process.env.LCS_CONVERSATION_SESSION_TTL_MS = previousTtl;
+    }
+  }
+});
+
+run("conversation manager detects contradictions between summary memory and recent turns", () => {
+  const previousSummaryEvery = process.env.LCS_CONVERSATION_SUMMARY_EVERY;
+  const previousSummaryKeep = process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS;
+  const previousMaxTurns = process.env.LCS_CONVERSATION_MAX_TURNS;
+  const previousLookback = process.env.LCS_CONVERSATION_CONTRADICTION_LOOKBACK_TURNS;
+  const previousInclude = process.env.LCS_CONVERSATION_INCLUDE_CONTRADICTIONS;
+
+  try {
+    process.env.LCS_CONVERSATION_SUMMARY_EVERY = "2";
+    process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS = "1";
+    process.env.LCS_CONVERSATION_MAX_TURNS = "12";
+    process.env.LCS_CONVERSATION_CONTRADICTION_LOOKBACK_TURNS = "8";
+    process.env.LCS_CONVERSATION_INCLUDE_CONTRADICTIONS = "true";
+    resetAllSessions();
+
+    const session = createConversationSession("nexus");
+    addConversationTurn(session.sessionId, "user", "Session revocation is enabled for risky logins.");
+    addConversationTurn(session.sessionId, "system", "Tomado, lo resumo en contexto.");
+    addConversationTurn(session.sessionId, "user", "Session revocation is disabled for risky logins.");
+
+    const context = buildConversationContext(session.sessionId, 6);
+    const telemetry = getConversationNoiseTelemetry(session.sessionId);
+
+    assert.match(context, /\[contradictions\]/i);
+    assert.equal(telemetry.contradiction_count >= 1, true);
+    assert.equal(telemetry.contradiction_ratio > 0, true);
+    assert.equal(Array.isArray(telemetry.contradictions), true);
+  } finally {
+    resetAllSessions();
+    if (previousSummaryEvery === undefined) {
+      delete process.env.LCS_CONVERSATION_SUMMARY_EVERY;
+    } else {
+      process.env.LCS_CONVERSATION_SUMMARY_EVERY = previousSummaryEvery;
+    }
+    if (previousSummaryKeep === undefined) {
+      delete process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS;
+    } else {
+      process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS = previousSummaryKeep;
+    }
+    if (previousMaxTurns === undefined) {
+      delete process.env.LCS_CONVERSATION_MAX_TURNS;
+    } else {
+      process.env.LCS_CONVERSATION_MAX_TURNS = previousMaxTurns;
+    }
+    if (previousLookback === undefined) {
+      delete process.env.LCS_CONVERSATION_CONTRADICTION_LOOKBACK_TURNS;
+    } else {
+      process.env.LCS_CONVERSATION_CONTRADICTION_LOOKBACK_TURNS = previousLookback;
+    }
+    if (previousInclude === undefined) {
+      delete process.env.LCS_CONVERSATION_INCLUDE_CONTRADICTIONS;
+    } else {
+      process.env.LCS_CONVERSATION_INCLUDE_CONTRADICTIONS = previousInclude;
+    }
+  }
+});
+
+run("conversation manager emits anti-noise telemetry and preserves anchor context", () => {
+  const previousSummaryEvery = process.env.LCS_CONVERSATION_SUMMARY_EVERY;
+  const previousSummaryKeep = process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS;
+  const previousMaxTurns = process.env.LCS_CONVERSATION_MAX_TURNS;
+
+  try {
+    process.env.LCS_CONVERSATION_SUMMARY_EVERY = "6";
+    process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS = "2";
+    process.env.LCS_CONVERSATION_MAX_TURNS = "20";
+    resetAllSessions();
+
+    const session = createConversationSession("nexus");
+    addConversationTurn(session.sessionId, "user", "Anchor JWT middleware must validate issuer before routing.");
+    addConversationTurn(session.sessionId, "system", "Tomado: validar issuer antes de pasar al handler.");
+    addConversationTurn(session.sessionId, "user", "Anchor JWT middleware must validate issuer before routing.");
+    addConversationTurn(session.sessionId, "system", "Respuesta adicional de seguridad y control de sesión.");
+    addConversationTurn(session.sessionId, "user", "Confirmar además expiración de token y respuesta 401.");
+    addConversationTurn(session.sessionId, "system", "Queda registrado en resumen incremental.");
+
+    const telemetry = getConversationNoiseTelemetry(session.sessionId);
+    const context = buildConversationContext(session.sessionId, 10);
+
+    assert.equal(telemetry.available, true);
+    assert.equal(telemetry.noise_ratio > 0, true);
+    assert.equal(telemetry.redundancy_ratio > 0, true);
+    assert.equal(telemetry.context_half_life < 1, true);
+    assert.equal(telemetry.source_entropy >= 0, true);
+    assert.match(context, /Anchor JWT middleware/i);
+  } finally {
+    resetAllSessions();
+    if (previousSummaryEvery === undefined) {
+      delete process.env.LCS_CONVERSATION_SUMMARY_EVERY;
+    } else {
+      process.env.LCS_CONVERSATION_SUMMARY_EVERY = previousSummaryEvery;
+    }
+    if (previousSummaryKeep === undefined) {
+      delete process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS;
+    } else {
+      process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS = previousSummaryKeep;
+    }
+    if (previousMaxTurns === undefined) {
+      delete process.env.LCS_CONVERSATION_MAX_TURNS;
+    } else {
+      process.env.LCS_CONVERSATION_MAX_TURNS = previousMaxTurns;
+    }
+  }
+});
+
+run("conversation manager cleanup expires idle sessions using TTL policy", () => {
+  const previousTtl = process.env.LCS_CONVERSATION_SESSION_TTL_MS;
+
+  try {
+    process.env.LCS_CONVERSATION_SESSION_TTL_MS = "1000";
+    resetAllSessions();
+    const session = createConversationSession("nexus");
+    const stored = getConversationSession(session.sessionId);
+    assert.ok(stored);
+    stored.updatedAt = "2020-01-01T00:00:00.000Z";
+
+    const removed = cleanupExpiredSessions(Date.parse("2020-01-01T00:00:02.500Z"));
+    assert.equal(removed >= 1, true);
+    assert.equal(getConversationSession(session.sessionId), undefined);
+  } finally {
+    resetAllSessions();
+    if (previousTtl === undefined) {
+      delete process.env.LCS_CONVERSATION_SESSION_TTL_MS;
+    } else {
+      process.env.LCS_CONVERSATION_SESSION_TTL_MS = previousTtl;
+    }
+  }
+});
+
+run("conversation recall query includes accumulated context and respects budget", () => {
+  const previousBudget = process.env.LCS_CONVERSATION_RECALL_QUERY_MAX_CHARS;
+
+  try {
+    process.env.LCS_CONVERSATION_RECALL_QUERY_MAX_CHARS = "180";
+    const query = buildConversationRecallQuery(
+      "Necesito corregir validación de sesión expirada",
+      "[user] Primera pista técnica\n[system] Resumen previo con señales útiles para recall"
+    );
+
+    assert.match(query, /Conversation context:/);
+    assert.match(query, /Necesito corregir validación/i);
+    assert.equal(query.length <= 180, true);
+  } finally {
+    if (previousBudget === undefined) {
+      delete process.env.LCS_CONVERSATION_RECALL_QUERY_MAX_CHARS;
+    } else {
+      process.env.LCS_CONVERSATION_RECALL_QUERY_MAX_CHARS = previousBudget;
+    }
+  }
+});
+
 run("builds a learning packet with teaching scaffolding", () => {
   const packet = buildLearningPacket({
     task: "Improve auth middleware",
@@ -520,6 +1269,56 @@ run("builds a learning packet with teaching scaffolding", () => {
   assert.equal(packet.teachingChecklist.length, 4);
   assert.equal(packet.teachingSections.codeFocus?.source, "src/auth.js");
   assert.equal(packet.teachingSections.relatedTests.length, 0);
+});
+
+run("buildLearningPacket marks selector diagnostics as ok on endpoint selection", () => {
+  const packet = buildLearningPacket({
+    task: "Improve auth middleware",
+    objective: "Teach selector diagnostics",
+    changedFiles: ["src/auth.js"],
+    chunks: [
+      {
+        id: "code-auth",
+        source: "src/auth.js",
+        kind: "code",
+        content: "JWT validation now runs before route handlers.",
+        certainty: 0.95,
+        recency: 0.9,
+        teachingValue: 0.9,
+        priority: 0.95
+      }
+    ]
+  });
+
+  assert.equal(packet.diagnostics.selectorStatus, "ok");
+  assert.equal(packet.diagnostics.summary.selectedCount >= 1, true);
+});
+
+run("buildLearningPacket falls back when endpoint selector fails", () => {
+  const packet = buildLearningPacket({
+    task: "Fallback selector",
+    objective: "Teach legacy selector fallback",
+    changedFiles: ["src/auth.js"],
+    selector: () => {
+      throw new Error("selector timeout");
+    },
+    chunks: [
+      {
+        id: "code-auth",
+        source: "src/auth.js",
+        kind: "code",
+        content: "JWT validation now runs before route handlers.",
+        certainty: 0.95,
+        recency: 0.9,
+        teachingValue: 0.9,
+        priority: 0.95
+      }
+    ]
+  });
+
+  assert.equal(packet.diagnostics.selectorStatus, "degraded");
+  assert.equal(packet.diagnostics.selectorReason, "timeout");
+  assert.equal(packet.selectedContext.length >= 1, true);
 });
 
 run("implementation flows prioritize changed code and related tests over generic docs", () => {
@@ -931,6 +1730,7 @@ run("cli teach works end-to-end on the TypeScript backend vertical", async () =>
   assert.equal(parsed.teachingSections.relatedTests[0].source, "test/auth/middleware.test.ts");
   assert.equal(parsed.selectedContext.some((chunk) => chunk.source === "logs/server.log"), false);
   assert.equal(parsed.selectedContext.some((chunk) => chunk.source === "chat/history.md"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed.teachingSections, "relevantAxioms"), false);
 });
 
 run("cli teach debug exposes recall ids and selection diagnostics", async () => {
@@ -1059,6 +1859,86 @@ run("workspace scanning honors configurable ignore directories", async () => {
       maxRetries: 5,
       retryDelay: 50
     });
+  }
+});
+
+run("workspace scanning uses fastScanner sidecar when configured", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-fastscan-sidecar-"));
+
+  try {
+    await mkdir(path.join(tempRoot, "vendor-cache"), { recursive: true });
+    await mkdir(path.join(tempRoot, "src"), { recursive: true });
+    await writeFile(path.join(tempRoot, "src", "keep.js"), "export const keep = true;\n", "utf8");
+    await writeFile(
+      path.join(tempRoot, "vendor-cache", "noise.js"),
+      "export const noise = true;\n",
+      "utf8"
+    );
+
+    const sidecarScript = path.join(tempRoot, "fastscan-success.mjs");
+    await writeFile(
+      sidecarScript,
+      [
+        "import { readFileSync } from 'node:fs';",
+        "const request = JSON.parse(readFileSync(0, 'utf8'));",
+        "if (!request || !Array.isArray(request.ignoreDirs)) { process.exit(1); }",
+        "process.stdout.write(JSON.stringify({",
+        "  version: '1.0.0',",
+        "  files: ['src/keep.js', 'vendor-cache/noise.js', '../escape.js']",
+        "}));"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const result = await loadWorkspaceChunks(tempRoot, {
+      scan: {
+        ignoreDirs: ["vendor-cache"],
+        fastScanner: {
+          enabled: true,
+          binaryPath: process.execPath,
+          arguments: [sidecarScript],
+          timeoutMs: 3000
+        }
+      }
+    });
+
+    assert.equal(result.payload.chunks.some((chunk) => chunk.source === "src/keep.js"), true);
+    assert.equal(result.payload.chunks.some((chunk) => chunk.source.includes("vendor-cache")), false);
+    assert.equal(result.payload.chunks.some((chunk) => chunk.source.includes("escape.js")), false);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("workspace scanning falls back to native walk when fastScanner fails", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-fastscan-fallback-"));
+
+  try {
+    await mkdir(path.join(tempRoot, "src"), { recursive: true });
+    await writeFile(path.join(tempRoot, "src", "fallback.js"), "export const ok = true;\n", "utf8");
+
+    const failingScript = path.join(tempRoot, "fastscan-fail.mjs");
+    await writeFile(
+      failingScript,
+      ["process.stderr.write('simulated fastscan failure');", "process.exit(1);"].join("\n"),
+      "utf8"
+    );
+
+    const result = await loadWorkspaceChunks(tempRoot, {
+      scan: {
+        fastScanner: {
+          enabled: true,
+          binaryPath: process.execPath,
+          arguments: [failingScript],
+          timeoutMs: 3000
+        }
+      }
+    });
+
+    assert.equal(result.payload.chunks.some((chunk) => chunk.source === "src/fallback.js"), true);
+    assert.equal(result.stats.discoveredFiles >= 1, true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -1218,7 +2098,13 @@ run("project config parses security policy overrides", () => {
         extraSensitivePathFragments: ["fixtures/private"]
       },
       scan: {
-        ignoreDirs: [".cache", "vendor-cache"]
+        ignoreDirs: [".cache", "vendor-cache"],
+        fastScanner: {
+          enabled: true,
+          binaryPath: "/tmp/lcs-fastscan",
+          arguments: ["--request-stdin"],
+          timeoutMs: 1200
+        }
       },
       safety: {
         requirePlanForWrite: true,
@@ -1241,6 +2127,10 @@ run("project config parses security policy overrides", () => {
   assert.deepEqual(parsed.security.allowSensitivePaths, [".env.example"]);
   assert.deepEqual(parsed.security.extraSensitivePathFragments, ["fixtures/private"]);
   assert.deepEqual(parsed.scan.ignoreDirs, [".cache", "vendor-cache"]);
+  assert.equal(parsed.scan.fastScanner.enabled, true);
+  assert.equal(parsed.scan.fastScanner.binaryPath, "/tmp/lcs-fastscan");
+  assert.deepEqual(parsed.scan.fastScanner.arguments, ["--request-stdin"]);
+  assert.equal(parsed.scan.fastScanner.timeoutMs, 1200);
   assert.equal(parsed.safety.requirePlanForWrite, true);
   assert.deepEqual(parsed.safety.allowedScopePaths, ["src/auth", "docs"]);
   assert.equal(parsed.safety.maxTokenBudget, 420);
@@ -1302,7 +2192,7 @@ run("cli help documents all supported commands including doctor init sync-knowle
   }
   assert.match(
     result.stdout,
-    /doctor\s+-> checks runtime, config, workspace, semantic tier, and external battery health/
+    /doctor\s+-> checks runtime, config, workspace, local memory, and external battery health/
   );
   assert.match(
     result.stdout,
@@ -1789,6 +2679,24 @@ run("package scripts expose deterministic and full skills doctor strict modes", 
   assert.match(String(pkg?.scripts?.["skills:doctor:strict:full"] ?? ""), /--include-mirror-duplicates/);
 });
 
+run("package scripts expose RAG golden set generation and gate commands", async () => {
+  const packageRaw = await readFile(path.join(process.cwd(), "package.json"), "utf8");
+  const pkg = JSON.parse(packageRaw);
+
+  assert.equal(
+    String(pkg?.scripts?.["benchmark:golden-set:generate"] ?? ""),
+    "node scripts/generate-rag-golden-set.js"
+  );
+  assert.equal(
+    String(pkg?.scripts?.["benchmark:golden-set"] ?? ""),
+    "node benchmark/run-rag-golden-set.js"
+  );
+  assert.equal(
+    String(pkg?.scripts?.["benchmark:memory-poisoning"] ?? ""),
+    "node benchmark/run-memory-poisoning-gate.js"
+  );
+});
+
 run("skill auto-generator telemetry summary and delta compute token/time/error improvements", async () => {
   const telemetry = parseSkillTelemetryJsonl([
     JSON.stringify({
@@ -1973,7 +2881,7 @@ run("doctor reports missing dependencies as actionable warnings", async () => {
     assert.equal(focusSafetyCheck.status, "pass");
     assert.ok(memoryBackendCheck);
     assert.equal(memoryBackendCheck.status, "pass");
-    assert.match(memoryBackendCheck.detail, /ruflo hnsw primary \+ local jsonl fallback/i);
+    assert.match(memoryBackendCheck.detail, /local jsonl primary \+ optional external battery contingency/i);
     assert.ok(installPolicyCheck);
     assert.equal(["pass", "warn"].includes(installPolicyCheck.status), true);
     assert.match(installPolicyCheck.detail, /ignore-scripts/i);
@@ -2110,6 +3018,122 @@ run("doctor warns when npm install scripts are not ignored by default", async ()
   }
 });
 
+run("project doctor avoids cmd.exe wrappers for npm checks on Windows", async () => {
+  const projectOpsJs = await readFile(
+    path.join(process.cwd(), "src/system/project-ops.js"),
+    "utf8"
+  );
+  const projectOpsTs = await readFile(
+    path.join(process.cwd(), "src/system/project-ops.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    !projectOpsJs.includes('tryExec("cmd.exe", ["/c", "npm.cmd"'),
+    "project-ops.js should rely on tryExec('npm', ...) instead of cmd.exe wrappers"
+  );
+  assert.ok(
+    !projectOpsTs.includes('tryExec("cmd.exe", ["/c", "npm.cmd"'),
+    "project-ops.ts should rely on tryExec('npm', ...) instead of cmd.exe wrappers"
+  );
+});
+
+run("code gate keeps shell execution disabled for external tool runners", async () => {
+  const codeGateSource = await readFile(
+    path.join(process.cwd(), "src/guard/code-gate.js"),
+    "utf8"
+  );
+
+  assert.match(
+    codeGateSource,
+    /execFile\(\s*"npx"[\s\S]*?shell:\s*false/iu,
+    "typecheck runner should keep shell disabled"
+  );
+  assert.match(
+    codeGateSource,
+    /execFile\(\s*"npm"[\s\S]*?shell:\s*false/iu,
+    "npm-based code gate runners should keep shell disabled"
+  );
+});
+
+run("interactive shell runner uses execFile without shell interpolation", async () => {
+  const shellCommandSource = await readFile(
+    path.join(process.cwd(), "src/cli/shell-command.js"),
+    "utf8"
+  );
+
+  assert.match(
+    shellCommandSource,
+    /execFile\(input\.command,\s*input\.args,\s*\{/u,
+    "shell command runner should use execFile with structured args"
+  );
+  assert.ok(
+    !/shell\s*:\s*true/iu.test(shellCommandSource),
+    "shell command runner should not enable shell=true"
+  );
+});
+
+run("code gate child env strips unrelated secrets and preserves execution essentials", () => {
+  const previousOpenAi = process.env.OPENAI_API_KEY;
+  const previousPath = process.env.PATH;
+  const previousSystemRoot = process.env.SystemRoot;
+
+  try {
+    process.env.OPENAI_API_KEY = "sk-test-secret";
+    process.env.PATH = "C:\\Windows\\System32";
+    process.env.SystemRoot = "C:\\Windows";
+
+    const env = buildCodeGateEnv({ NODE_ENV: "test" });
+
+    assert.equal(env.OPENAI_API_KEY, undefined);
+    assert.equal(env.NODE_ENV, "test");
+    assert.equal(env.PATH, "C:\\Windows\\System32");
+    assert.equal(env.SystemRoot, "C:\\Windows");
+  } finally {
+    if (previousOpenAi === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = previousOpenAi;
+    }
+
+    if (previousPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = previousPath;
+    }
+
+    if (previousSystemRoot === undefined) {
+      delete process.env.SystemRoot;
+    } else {
+      process.env.SystemRoot = previousSystemRoot;
+    }
+  }
+});
+
+run("engram battery client no longer contains cmd.exe fallback wrappers", async () => {
+  const engramClientJs = await readFile(
+    path.join(process.cwd(), "src/memory/engram-client.js"),
+    "utf8"
+  );
+  const engramClientTs = await readFile(
+    path.join(process.cwd(), "src/memory/engram-client.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    !/process\.env\.ComSpec|runThroughCmd\s*\(|\[\s*"\/d"\s*,\s*"\/s"\s*,\s*"\/c"/iu.test(
+      engramClientJs
+    ),
+    "engram-client.js should not route execution through cmd.exe"
+  );
+  assert.ok(
+    !/process\.env\.ComSpec|runThroughCmd\s*\(|\[\s*"\/d"\s*,\s*"\/s"\s*,\s*"\/c"/iu.test(
+      engramClientTs
+    ),
+    "engram-client.ts should not route execution through cmd.exe"
+  );
+});
+
 run("doctor warns when security protections are relaxed", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-doctor-security-"));
 
@@ -2144,7 +3168,7 @@ run("doctor warns when security protections are relaxed", async () => {
   }
 });
 
-run("doctor reports local-only backend and skips Ruflo semantic tier warnings", async () => {
+run("doctor reports local-only backend without external semantic tier checks", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-doctor-local-only-"));
 
   try {
@@ -2169,15 +3193,11 @@ run("doctor reports local-only backend and skips Ruflo semantic tier warnings", 
     });
 
     const backendCheck = result.checks.find((check) => check.id === "memory-backend");
-    const rufloCheck = result.checks.find((check) => check.id === "ruflo-memory");
     const localMemoryCheck = result.checks.find((check) => check.id === "local-memory");
 
     assert.ok(backendCheck);
     assert.equal(backendCheck.status, "warn");
     assert.match(backendCheck.detail, /local-only/i);
-    assert.ok(rufloCheck);
-    assert.equal(rufloCheck.status, "pass");
-    assert.match(rufloCheck.detail, /skipped because memory\.backend='local-only'/i);
     assert.ok(localMemoryCheck);
     assert.equal(localMemoryCheck.status, "pass");
     assert.match(localMemoryCheck.detail, /\.lcs[\\/]memory/i);
@@ -3150,6 +4170,28 @@ run("engram client wraps timeout errors and keeps stderr detail", async () => {
   );
 });
 
+run("engram client fails closed on Windows permission errors without cmd.exe fallback", async () => {
+  const client = createEngramClient({
+    cwd: "C:/repo",
+    binaryPath: "C:/repo/tools/engram/engram.exe",
+    dataDir: "C:/repo/.engram",
+    async exec() {
+      throw createExecError("spawn EPERM", {
+        code: "EPERM",
+        stderr: "Access is denied."
+      });
+    }
+  });
+
+  await assert.rejects(
+    () =>
+      client.search("auth middleware", {
+        project: "learning-context-system"
+      }),
+    /no longer falls back through cmd\.exe|falling back through cmd\.exe/i
+  );
+});
+
 run("local memory store saves and searches memories with engram-like output", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-local-memory-store-"));
   const store = createLocalMemoryStore({
@@ -3246,16 +4288,16 @@ run("external battery memory client uses Engram battery only after primary chain
     primary: /** @type {any} */ ({
       name: "primary-chain",
       async search() {
-        throw new Error("ruflo/local chain offline");
+        throw new Error("runtime/local chain offline");
       },
       async save() {
-        throw new Error("ruflo/local chain offline");
+        throw new Error("runtime/local chain offline");
       },
       async delete(id) {
         throw new Error(`cannot delete ${id}`);
       },
       async list() {
-        throw new Error("ruflo/local chain offline");
+        throw new Error("runtime/local chain offline");
       },
       async health() {
         return {
@@ -3265,16 +4307,16 @@ run("external battery memory client uses Engram battery only after primary chain
         };
       },
       async recallContext() {
-        throw new Error("ruflo/local chain offline");
+        throw new Error("runtime/local chain offline");
       },
       async search() {
-        throw new Error("ruflo/local chain offline");
+        throw new Error("runtime/local chain offline");
       },
       async save() {
-        throw new Error("ruflo/local chain offline");
+        throw new Error("runtime/local chain offline");
       },
       async closeSession() {
-        throw new Error("ruflo/local chain offline");
+        throw new Error("runtime/local chain offline");
       }
     }),
     battery: /** @type {any} */ ({
@@ -3350,7 +4392,7 @@ run("external battery memory client uses Engram battery only after primary chain
   assert.equal(result.provider, "engram-battery");
   assert.equal(result.degraded, true);
   assert.match(result.warning ?? "", /external battery memory provider/i);
-  assert.match(result.error ?? "", /ruflo\/local chain offline/i);
+  assert.match(result.error ?? "", /runtime\/local chain offline/i);
   assert.match(result.stdout, /Battery result for auth middleware/);
 });
 
@@ -3652,6 +4694,103 @@ run("observability store tracks safety-blocked and prevented-error events", asyn
     assert.equal(report.safety.preventedErrors, 1);
     assert.equal(report.safety.byReason["safety-gate"], 1);
     assert.equal(report.commands[0]?.blockedRuns, 1);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("observability store tracks SDD coverage and skipped reasons metrics", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-observability-sdd-"));
+
+  try {
+    await recordCommandMetric(
+      {
+        command: "api.ask",
+        durationMs: 55,
+        sdd: {
+          enabled: true,
+          requiredKinds: 3,
+          coveredKinds: 2,
+          injectedKinds: 1,
+          skippedReasons: ["token-budget", "no-replaceable-slot"]
+        }
+      },
+      { cwd: tempRoot }
+    );
+
+    await recordCommandMetric(
+      {
+        command: "api.chat",
+        durationMs: 44,
+        sdd: {
+          enabled: true,
+          requiredKinds: 2,
+          coveredKinds: 2,
+          injectedKinds: 0,
+          skippedReasons: []
+        }
+      },
+      { cwd: tempRoot }
+    );
+
+    const report = await getObservabilityReport({ cwd: tempRoot });
+
+    assert.equal(report.sdd.samples, 2);
+    assert.equal(report.sdd.requiredKindsTotal, 5);
+    assert.equal(report.sdd.coveredKindsTotal, 4);
+    assert.equal(report.sdd.injectedKindsTotal, 1);
+    assert.equal(report.sdd.coverageRate, 0.8);
+    assert.equal(report.sdd.bySkippedReason["token-budget"], 1);
+    assert.equal(report.sdd.bySkippedReason["no-replaceable-slot"], 1);
+    assert.equal(report.sdd.metrics.sdd_coverage_rate, 0.8);
+    assert.equal(report.sdd.metrics.sdd_injected_kinds, 1);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("observability store tracks teaching coverage and practice metrics", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-observability-teaching-"));
+
+  try {
+    await recordCommandMetric(
+      {
+        command: "api.ask",
+        durationMs: 40,
+        teaching: {
+          enabled: true,
+          sectionsExpected: 4,
+          sectionsPresent: 3,
+          hasPractice: false
+        }
+      },
+      { cwd: tempRoot }
+    );
+
+    await recordCommandMetric(
+      {
+        command: "api.chat",
+        durationMs: 38,
+        teaching: {
+          enabled: true,
+          sectionsExpected: 4,
+          sectionsPresent: 4,
+          hasPractice: true
+        }
+      },
+      { cwd: tempRoot }
+    );
+
+    const report = await getObservabilityReport({ cwd: tempRoot });
+
+    assert.equal(report.teaching.samples, 2);
+    assert.equal(report.teaching.sectionsPresentTotal, 7);
+    assert.equal(report.teaching.sectionsExpectedTotal, 8);
+    assert.equal(report.teaching.practiceCount, 1);
+    assert.equal(report.teaching.coverageRate, 0.875);
+    assert.equal(report.teaching.practiceRate, 0.5);
+    assert.equal(report.teaching.metrics.teaching_coverage_rate, 0.875);
+    assert.equal(report.teaching.metrics.teaching_practice_rate, 0.5);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
@@ -4069,7 +5208,7 @@ run("cli recall returns a degraded contract when Engram is unavailable", async (
   assert.match(parsed.error, /engram offline/);
 });
 
-run("cli recall can use local fallback memory store when Engram binary is missing", async () => {
+run("cli recall stays local-first when Engram battery is missing", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-recall-fallback-"));
   const fallbackFile = path.join(tempRoot, "fallback-memory.jsonl");
   const memoryBaseDir = path.join(tempRoot, "memory");
@@ -4107,9 +5246,10 @@ run("cli recall can use local fallback memory store when Engram binary is missin
 
     const parsed = JSON.parse(result.stdout);
     assert.equal(result.exitCode, 0);
-    assert.equal(parsed.degraded, true);
+    assert.equal(parsed.degraded, false);
     assert.equal(parsed.provider, "local");
-    assert.match(parsed.warnings[0], /local fallback memory store/i);
+    assert.equal(Array.isArray(parsed.warnings), true);
+    assert.equal(parsed.warnings.length, 0);
     assert.match(parsed.stdout, /Auth boundary memory/);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
@@ -4244,7 +5384,7 @@ run("cli recall degraded mode classifies malformed provider output", async () =>
   assert.match(parsed.fixHint, /doctor/i);
 });
 
-run("cli recall degraded mode classifies missing binary in real subprocess path", async () => {
+run("cli recall ignores missing Engram battery when local runtime is healthy", async () => {
   const result = await runCli([
     "recall",
     "--query",
@@ -4261,9 +5401,10 @@ run("cli recall degraded mode classifies missing binary in real subprocess path"
 
   const parsed = JSON.parse(result.stdout);
   assert.equal(result.exitCode, 0);
-  assert.equal(parsed.degraded, true);
-  assert.equal(parsed.failureKind, "binary-missing");
-  assert.match(parsed.fixHint, /ruflo|local-only|skip-ruflo/i);
+  assert.equal(parsed.degraded, false);
+  assert.equal(parsed.provider, "local");
+  assert.equal(parsed.failureKind ?? "", "");
+  assert.equal(parsed.warnings.length, 0);
 });
 
 run("cli recall debug shows active filter state", async () => {
@@ -4376,7 +5517,7 @@ run("cli remember can be blocked by safety gate when write plan is not approved"
   }
 });
 
-run("cli remember falls back to local store when Engram binary is missing", async () => {
+run("cli remember writes to local-first store when Engram battery is missing", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-remember-fallback-"));
   const fallbackFile = path.join(tempRoot, "fallback-memory.jsonl");
 
@@ -4401,10 +5542,10 @@ run("cli remember falls back to local store when Engram binary is missing", asyn
 
     const parsed = JSON.parse(result.stdout);
     assert.equal(result.exitCode, 0);
-    assert.equal(parsed.degraded, true);
+    assert.equal(parsed.degraded, false);
     assert.equal(parsed.provider, "local");
     assert.match(parsed.stdout, /Saved local memory/i);
-    assert.equal(parsed.warnings.some((entry) => /local fallback/i.test(entry)), true);
+    assert.equal(parsed.warnings.length, 0);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
@@ -4628,13 +5769,14 @@ run("cli memory-stats reports stable health and noise metrics", async () => {
       [
         JSON.stringify({
           id: "decision-1",
-          title: "Guard order is fixed",
-          content: "Guard runs before the LLM to block unsafe prompts without wasting tokens.",
+          title: "Decision: guard runs before provider calls in src/cli/app.js",
+          content:
+            "Why: src/cli/app.js must run the guard before any provider call so unsafe prompts are blocked without wasting tokens. This project keeps architecture/guard-order protected and validates the path in src/cli/app.js during review before merge.",
           type: "decision",
           project: "learning-context-system",
           scope: "project",
           topic: "architecture/guard-order",
-          createdAt: "2026-03-26T02:10:00.000Z",
+          createdAt: "2026-03-30T02:10:00.000Z",
           reviewStatus: "accepted",
           protected: true,
           signalScore: 0.82,
@@ -5194,7 +6336,8 @@ run("cli teach auto remember quarantines low-signal noisy summaries before save"
 });
 
 run("cli teach can be blocked when token budget exceeds safety max", async () => {
-  const configPath = path.join(process.cwd(), "test-safety-budget-config.json");
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-safety-budget-"));
+  const configPath = path.join(tempRoot, "test-safety-budget-config.json");
   const fakeClient = {
     async recallContext() {
       throw new Error("not used");
@@ -5252,7 +6395,7 @@ run("cli teach can be blocked when token budget exceeds safety max", async () =>
     assert.equal(parsed.details.some((detail) => /maxTokenBudget/i.test(detail)), true);
     assert.equal(parsed.observability.safety.preventedError, true);
   } finally {
-    await rm(configPath, { force: true });
+    await rm(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -5767,7 +6910,128 @@ run("cli teach can persist an automatic memory summary when enabled", async () =
   assert.match(parsed.autoMemory.rememberTitle, /Teach loop/);
   assert.match(saveCalls[0].content, /\[redacted-sensitive-path\]/i);
   assert.match(saveCalls[0].content, /\[REDACTED\]/);
+  assert.match(saveCalls[0].content, /Selector status:/);
+  assert.match(saveCalls[0].content, /Suppression reasons:/);
   assert.equal(parsed.warnings.some((entry) => /redacted/i.test(entry)), true);
+});
+
+run("cli teach injects relevant axioms when threshold is met", async () => {
+  const previousMinMatches = process.env.LCS_TEACH_AXIOM_MIN_MATCHES;
+  process.env.LCS_TEACH_AXIOM_MIN_MATCHES = "1";
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async search(query, options) {
+      return {
+        mode: "search",
+        project: options?.project ?? "",
+        query,
+        stdout: "No memories found for that query.",
+        dataDir: ".engram"
+      };
+    },
+    async save() {
+      return { stdout: "saved", dataDir: ".engram" };
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  try {
+    const result = await runCli(
+      [
+        "teach",
+        "--input",
+        "examples/auth-context.json",
+        "--task",
+        "Improve auth middleware",
+        "--objective",
+        "Teach why validation runs before route handlers",
+        "--auto-remember",
+        "true",
+        "--format",
+        "json"
+      ],
+      {
+        engramClient: fakeClient,
+        axiomInjector: {
+          async retrieve() {
+            return [
+              {
+                type: "security-rule",
+                title: "Validate JWT before handlers",
+                body: "Reject invalid/expired tokens at the request boundary.",
+                tags: ["auth", "jwt"]
+              }
+            ];
+          }
+        }
+      }
+    );
+
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, 0);
+    assert.equal(parsed.diagnostics.axiomInjection, "injected");
+    assert.equal(parsed.teachingSections.relevantAxioms.length, 1);
+  } finally {
+    if (previousMinMatches === undefined) {
+      delete process.env.LCS_TEACH_AXIOM_MIN_MATCHES;
+    } else {
+      process.env.LCS_TEACH_AXIOM_MIN_MATCHES = previousMinMatches;
+    }
+  }
+});
+
+run("cli teach degrades axiom diagnostics when injector fails", async () => {
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async search(query, options) {
+      return {
+        mode: "search",
+        project: options?.project ?? "",
+        query,
+        stdout: "No memories found for that query.",
+        dataDir: ".engram"
+      };
+    },
+    async save() {
+      return { stdout: "saved", dataDir: ".engram" };
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  const result = await runCli(
+    [
+      "teach",
+      "--input",
+      "examples/auth-context.json",
+      "--task",
+      "Improve auth middleware",
+      "--objective",
+      "Teach why validation runs before route handlers",
+      "--format",
+      "json"
+    ],
+    {
+      engramClient: fakeClient,
+      axiomInjector: {
+        async retrieve() {
+          throw new Error("injector unavailable");
+        }
+      }
+    }
+  );
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.equal(parsed.diagnostics.axiomInjection, "degraded");
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed.teachingSections, "relevantAxioms"), false);
 });
 
 run("cli teach reports degraded output when auto remember write fails", async () => {
@@ -5816,6 +7080,7 @@ run("cli teach reports degraded output when auto remember write fails", async ()
   assert.equal(parsed.degraded, true);
   assert.equal(parsed.autoMemory.rememberSaved, false);
   assert.equal(parsed.autoMemory.rememberAttempted, true);
+  assert.equal(parsed.autoMemory.rememberStatus, "unavailable");
   assert.match(parsed.autoMemory.rememberError, /sqlite is locked/);
   assert.equal(parsed.warnings.some((entry) => /Auto remember failed/i.test(entry)), true);
 });
@@ -6655,6 +7920,111 @@ run("NEXUS:5 pipeline builder runs ingest-process-store-recall end-to-end", asyn
   }
 });
 
+run("NEXUS:5 pipeline storage enforces strict project isolation", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-pipeline-project-"));
+  const executors = createDefaultExecutors({
+    repositoryFilePath: path.join(tempRoot, "chunks.jsonl")
+  });
+
+  try {
+    await executors.store({
+      input: {
+        projectId: "project-alpha",
+        chunks: [
+          {
+            id: "alpha-1",
+            source: "docs/alpha.md",
+            kind: "doc",
+            content: "alpha token validation boundary"
+          }
+        ]
+      }
+    });
+    await executors.store({
+      input: {
+        projectId: "project-beta",
+        chunks: [
+          {
+            id: "beta-1",
+            source: "docs/beta.md",
+            kind: "doc",
+            content: "beta session rotation policy"
+          }
+        ]
+      }
+    });
+
+    const alphaRecall = await executors.recall({
+      input: {
+        projectId: "project-alpha",
+        query: "alpha validation"
+      }
+    });
+    const betaRecall = await executors.recall({
+      input: {
+        projectId: "project-beta",
+        query: "beta rotation"
+      }
+    });
+
+    assert.equal(alphaRecall.projectId, "project-alpha");
+    assert.equal(betaRecall.projectId, "project-beta");
+    assert.equal(alphaRecall.results.some((entry) => entry.id === "alpha-1"), true);
+    assert.equal(alphaRecall.results.some((entry) => entry.id === "beta-1"), false);
+    assert.equal(betaRecall.results.some((entry) => entry.id === "beta-1"), true);
+    assert.equal(betaRecall.results.some((entry) => entry.id === "alpha-1"), false);
+    assert.equal(alphaRecall.isolation.loadedChunks >= alphaRecall.isolation.indexedChunks, true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:5 pipeline store applies hygiene gate before persisting ingested chunks", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-pipeline-hygiene-"));
+  const executors = createDefaultExecutors({
+    repositoryFilePath: path.join(tempRoot, "chunks.jsonl")
+  });
+
+  try {
+    const stored = await executors.store({
+      input: {
+        projectId: "project-hygiene",
+        ingest: {
+          adapter: "markdown"
+        },
+        chunks: [
+          {
+            id: "ingested-noise-1",
+            source: "docs/test-fixture.md",
+            kind: "doc",
+            content: "fallback memory write from fixture smoke test",
+            metadata: {
+              ingestedBy: "adapter:markdown",
+              preChunked: true
+            }
+          }
+        ]
+      }
+    });
+
+    assert.equal(stored.storedCount, 0);
+    assert.equal(stored.quarantinedCount, 1);
+    assert.equal(stored.hygiene.evaluated, 1);
+    assert.equal(Array.isArray(stored.quarantinedChunks), true);
+    assert.equal(stored.quarantinedChunks[0].reasons.length >= 1, true);
+
+    const recall = await executors.recall({
+      input: {
+        projectId: "project-hygiene",
+        query: "fallback fixture"
+      }
+    });
+    assert.equal(recall.results.length, 0);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 run("NEXUS:1+5 ingest executor can read markdown sources through adapters", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-pipeline-adapter-"));
   const workspace = path.join(tempRoot, "workspace");
@@ -6724,6 +8094,326 @@ run("NEXUS:7 consistency scorer and CI gate block low-quality outputs", async ()
   assert.equal(gate.status, "blocked");
   assert.match(reportText, /CI Gate: BLOCKED/);
   assert.match(reportText, /cost/);
+});
+
+run("NEXUS:7 retrieval-first gate computes Recall@k MRR and nDCG@k with pass/fail thresholds", () => {
+  assert.equal(
+    computeRecallAtK(["auth middleware code", "auth boundary spec"], ["auth middleware code", "deploy notes"]),
+    0.5
+  );
+  assert.equal(
+    computeMrr(["auth boundary spec"], ["deploy notes", "auth boundary spec"]),
+    0.5
+  );
+  assert.equal(
+    computeNdcgAtK(["a", "b"], ["a", "x", "b"]) > 0.9,
+    true
+  );
+
+  const report = evaluateRetrievalFirstGate({
+    thresholds: {
+      minCasePassRate: 0.75,
+      minRecallAtK: 0.6,
+      minMrr: 0.5,
+      minNdcgAtK: 0.6,
+      maxErrorRate: 0.1,
+      maxP95LatencyMs: 1500
+    },
+    cases: [
+      {
+        name: "A",
+        endpoint: "ask",
+        expectedSources: ["auth middleware code", "auth boundary spec"],
+        rankedSources: ["auth middleware code", "auth boundary spec", "noise"],
+        latencyMs: 420,
+        error: ""
+      },
+      {
+        name: "B",
+        endpoint: "chat",
+        expectedSources: ["auth incident runbook"],
+        rankedSources: ["auth incident runbook", "noise"],
+        latencyMs: 520,
+        error: ""
+      }
+    ]
+  });
+
+  assert.equal(report.passed, true);
+  assert.equal(report.summary.avgRecallAtK >= 0.75, true);
+  assert.equal(report.summary.avgMrr >= 0.75, true);
+  assert.equal(report.summary.errorRate, 0);
+
+  const failing = evaluateRetrievalFirstGate({
+    thresholds: {
+      minCasePassRate: 1,
+      minRecallAtK: 0.9,
+      minMrr: 0.9,
+      minNdcgAtK: 0.9,
+      maxErrorRate: 0,
+      maxP95LatencyMs: 600
+    },
+    cases: [
+      {
+        name: "fail",
+        endpoint: "ask",
+        expectedSources: ["needed-source"],
+        rankedSources: ["other-source"],
+        latencyMs: 800,
+        error: "empty"
+      }
+    ]
+  });
+
+  assert.equal(failing.passed, false);
+  assert.equal(failing.failures.length >= 1, true);
+});
+
+run("NEXUS:7 RAG golden set parser validates 200 cases and gate passes baseline thresholds", async () => {
+  const filePath = path.join(process.cwd(), "benchmark", "rag-golden-set-200.json");
+  const raw = await readFile(filePath, "utf8");
+  const parsed = parseRagGoldenSetFile(raw, filePath);
+  const report = evaluateRagGoldenSetGate({
+    suite: parsed.suite,
+    documents: parsed.documents,
+    cases: parsed.cases
+  });
+
+  assert.equal(parsed.cases.length >= 200, true);
+  assert.equal(parsed.documents.length >= 40, true);
+  assert.equal(report.passed, true);
+  assert.equal(report.summary.cases, parsed.cases.length);
+  assert.equal(report.summary.documents, parsed.documents.length);
+  assert.equal(report.summary.domains >= 8, true);
+  assert.equal(report.summary.projects >= 8, true);
+});
+
+run("NEXUS:7 RAG golden set parser rejects unknown expected document ids", () => {
+  const payload = {
+    suite: "inline-suite",
+    documents: [
+      {
+        id: "doc-1",
+        project: "proj-1",
+        domain: "domain-1",
+        title: "Doc",
+        content: "Contenido"
+      }
+    ],
+    cases: [
+      {
+        id: "case-1",
+        project: "proj-1",
+        domain: "domain-1",
+        query: "query",
+        expectedDocIds: ["doc-missing"]
+      }
+    ]
+  };
+
+  assert.throws(
+    () => parseRagGoldenSetFile(JSON.stringify(payload), "inline", { minCases: 1 }),
+    /unknown expectedDocId/
+  );
+});
+
+run("NEXUS:7 benchmark runner for RAG golden set returns pass", async () => {
+  const filePath = path.join(process.cwd(), "benchmark", "rag-golden-set-200.json");
+  const { stdout } = await execFile(process.execPath, [
+    "benchmark/run-rag-golden-set.js",
+    "--file",
+    filePath,
+    "--format",
+    "json"
+  ]);
+
+  const report = JSON.parse(stdout);
+  assert.equal(report.passed, true);
+  assert.equal(report.summary.cases >= 200, true);
+  assert.equal(report.summary.domains >= 8, true);
+});
+
+run("NEXUS:7 memory poisoning gate blocks poisoned ingestion and keeps clean acceptance", () => {
+  const passing = evaluateMemoryPoisoningGate({
+    suite: "memory-poisoning-test",
+    thresholds: {
+      minPoisonQuarantineRate: 1,
+      maxPoisonLeakRate: 0,
+      minCleanAcceptanceRate: 0.9,
+      maxFalsePositiveRate: 0.1,
+      maxPoisonRecallLeakHits: 0,
+      maxPoisonRecallLeakRate: 0
+    },
+    summary: {
+      cleanTotal: 10,
+      cleanAccepted: 10,
+      cleanQuarantined: 0,
+      poisonedTotal: 10,
+      poisonedAccepted: 0,
+      poisonedQuarantined: 10,
+      poisonedRecallLeakHits: 0
+    }
+  });
+
+  assert.equal(passing.passed, true);
+  assert.equal(passing.summary.poisonQuarantineRate, 1);
+  assert.equal(passing.summary.poisonLeakRate, 0);
+
+  const failing = evaluateMemoryPoisoningGate({
+    suite: "memory-poisoning-test-fail",
+    thresholds: {
+      minPoisonQuarantineRate: 1,
+      maxPoisonLeakRate: 0,
+      minCleanAcceptanceRate: 0.95,
+      maxFalsePositiveRate: 0.05,
+      maxPoisonRecallLeakHits: 0,
+      maxPoisonRecallLeakRate: 0
+    },
+    summary: {
+      cleanTotal: 10,
+      cleanAccepted: 8,
+      cleanQuarantined: 2,
+      poisonedTotal: 10,
+      poisonedAccepted: 2,
+      poisonedQuarantined: 8,
+      poisonedRecallLeakHits: 2
+    }
+  });
+
+  assert.equal(failing.passed, false);
+  assert.equal(failing.failures.length >= 3, true);
+});
+
+run("NEXUS:7 benchmark runner for memory poisoning gate returns pass", async () => {
+  const filePath = path.join(process.cwd(), "benchmark", "memory-poisoning-benchmark.json");
+  const { stdout } = await execFile(process.execPath, [
+    "benchmark/run-memory-poisoning-gate.js",
+    "--file",
+    filePath,
+    "--format",
+    "json"
+  ]);
+
+  const report = JSON.parse(stdout);
+  assert.equal(report.passed, true);
+  assert.equal(report.summary.poisonLeakRate, 0);
+  assert.equal(report.summary.poisonedRecallLeakHits, 0);
+});
+
+run("NEXUS:7 fine-tuning readiness gate blocks dataset with secrets and low pedagogical coverage", () => {
+  const healthy = evaluateFineTuningReadinessGate({
+    datasetName: "ft-healthy",
+    thresholds: {
+      minSamples: 2,
+      maxDuplicateRate: 0.2,
+      maxSecretRate: 0,
+      minSectionCoverage: 0.9,
+      minPracticeRate: 0.9,
+      minIntentLabels: 2
+    },
+    samples: [
+      {
+        id: "ok-1",
+        intent: "formatting",
+        input: "Explica hardening",
+        output:
+          "Change:\nSe agregó validación.\nReason:\nEvita bypass.\nConcepts:\n- fail-fast\nPractice:\nEscribe un test 401."
+      },
+      {
+        id: "ok-2",
+        intent: "routing",
+        input: "¿Qué endpoint uso?",
+        output:
+          "Change:\nSe eligió /api/ask.\nReason:\nMejor trazabilidad.\nConcepts:\n- retrieval-first\nPractice:\nCompara ask vs chat."
+      }
+    ]
+  });
+
+  assert.equal(healthy.passed, true);
+  assert.equal(healthy.metrics.secretRate, 0);
+
+  const risky = evaluateFineTuningReadinessGate({
+    datasetName: "ft-risky",
+    thresholds: {
+      minSamples: 2,
+      maxDuplicateRate: 0.2,
+      maxSecretRate: 0,
+      minSectionCoverage: 0.8,
+      minPracticeRate: 0.8,
+      minIntentLabels: 1
+    },
+    samples: [
+      {
+        id: "bad-1",
+        intent: "formatting",
+        input: "Haz algo",
+        output: "Solo texto libre sin estructura"
+      },
+      {
+        id: "bad-2",
+        intent: "formatting",
+        input: "Haz algo con token",
+        output: "Change:\nusa token sk-1234567890ABCDEF123456\nReason:\nprueba\nConcepts:\n- x\nPractice:\n- y"
+      }
+    ]
+  });
+
+  assert.equal(risky.passed, false);
+  assert.equal(risky.metrics.secretRate > 0, true);
+});
+
+run("NEXUS:7 conversation noise gate validates 100-turn stress and A/B reduction signals", () => {
+  const passing = evaluateConversationNoiseGate({
+    baseline: {
+      turns: 100,
+      contextP95Tokens: 1800,
+      anchorHitRate: 0.98,
+      noiseRatio: 0.1,
+      redundancyRatio: 0.2,
+      contextHalfLife: 0.92
+    },
+    optimized: {
+      turns: 100,
+      contextP95Tokens: 1100,
+      anchorHitRate: 0.96,
+      noiseRatio: 0.35,
+      redundancyRatio: 0.72,
+      contextHalfLife: 0.31
+    },
+    thresholds: {
+      minTokenReduction: 0.25,
+      minOptimizedAnchorHitRate: 0.9,
+      maxAnchorHitRateDrop: 0.05,
+      minRedundancyRatio: 0.6
+    }
+  });
+
+  assert.equal(passing.passed, true);
+  assert.equal(passing.summary.tokenReduction >= 0.25, true);
+  assert.equal(passing.summary.optimized.anchorHitRate >= 0.9, true);
+  assert.equal(passing.summary.optimized.redundancyRatio >= 0.6, true);
+
+  const failing = evaluateConversationNoiseGate({
+    baseline: {
+      turns: 100,
+      contextP95Tokens: 1600,
+      anchorHitRate: 0.95,
+      noiseRatio: 0.1,
+      redundancyRatio: 0.2,
+      contextHalfLife: 0.9
+    },
+    optimized: {
+      turns: 100,
+      contextP95Tokens: 1500,
+      anchorHitRate: 0.7,
+      noiseRatio: 0.2,
+      redundancyRatio: 0.3,
+      contextHalfLife: 0.8
+    }
+  });
+
+  assert.equal(failing.passed, false);
+  assert.equal(failing.failures.length >= 2, true);
 });
 
 run("NEXUS:8 dashboard data aggregates observability metrics", async () => {
@@ -6857,6 +8547,707 @@ run("NEXUS:10 auth middleware validates API key and JWT token", async () => {
   assert.equal(jwtAuth.authorized, true);
   assert.equal(expired.authorized, false);
   assert.match(expired.error ?? "", /expired/i);
+});
+
+run("NEXUS:10 auth middleware rejects JWT tokens with non-HS256 alg header", async () => {
+  const middleware = createAuthMiddleware({
+    jwtSecret: "super-secret"
+  });
+  const token = createHs256Jwt(
+    {
+      sub: "user-1",
+      exp: Math.floor(Date.now() / 1000) + 120
+    },
+    "super-secret",
+    { alg: "HS512" }
+  );
+
+  const result = middleware.authorize({
+    headers: {
+      authorization: `Bearer ${token}`
+    }
+  });
+
+  assert.equal(result.authorized, false);
+  assert.match(result.error ?? "", /invalid-algorithm/i);
+});
+
+run("NEXUS:10 auth middleware enforces configured issuer and audience", async () => {
+  const middleware = createAuthMiddleware({
+    jwtSecret: "super-secret",
+    jwtIssuer: "nexus-api",
+    jwtAudience: ["nexus-web", "nexus-cli"]
+  });
+  const validToken = createHs256Jwt(
+    {
+      sub: "user-1",
+      iss: "nexus-api",
+      aud: "nexus-cli",
+      iat: Math.floor(Date.now() / 1000) - 10,
+      nbf: Math.floor(Date.now() / 1000) - 10,
+      exp: Math.floor(Date.now() / 1000) + 120
+    },
+    "super-secret"
+  );
+  const invalidAudienceToken = createHs256Jwt(
+    {
+      sub: "user-1",
+      iss: "nexus-api",
+      aud: "foreign-service",
+      exp: Math.floor(Date.now() / 1000) + 120
+    },
+    "super-secret"
+  );
+
+  const valid = middleware.authorize({
+    headers: {
+      authorization: `Bearer ${validToken}`
+    }
+  });
+  const invalidAudience = middleware.authorize({
+    headers: {
+      authorization: `Bearer ${invalidAudienceToken}`
+    }
+  });
+
+  assert.equal(valid.authorized, true);
+  assert.equal(invalidAudience.authorized, false);
+  assert.match(invalidAudience.error ?? "", /invalid-audience/i);
+});
+
+run("NEXUS:10 auth middleware rejects JWT tokens before nbf or with future iat beyond skew", async () => {
+  const middleware = createAuthMiddleware({
+    jwtSecret: "super-secret",
+    jwtClockSkewSeconds: 5
+  });
+  const notBeforeToken = createHs256Jwt(
+    {
+      sub: "user-1",
+      nbf: Math.floor(Date.now() / 1000) + 30,
+      exp: Math.floor(Date.now() / 1000) + 120
+    },
+    "super-secret"
+  );
+  const futureIssuedToken = createHs256Jwt(
+    {
+      sub: "user-1",
+      iat: Math.floor(Date.now() / 1000) + 30,
+      exp: Math.floor(Date.now() / 1000) + 120
+    },
+    "super-secret"
+  );
+
+  const notBefore = middleware.authorize({
+    headers: {
+      authorization: `Bearer ${notBeforeToken}`
+    }
+  });
+  const futureIssued = middleware.authorize({
+    headers: {
+      authorization: `Bearer ${futureIssuedToken}`
+    }
+  });
+
+  assert.equal(notBefore.authorized, false);
+  assert.equal(futureIssued.authorized, false);
+  assert.match(notBefore.error ?? "", /token-not-active/i);
+  assert.match(futureIssued.error ?? "", /invalid-issued-at/i);
+});
+
+run("NEXUS:10 sanitized CLI error payload omits raw process output and runtime metadata", () => {
+  const payload = createSanitizedCliErrorPayload(
+    {
+      message: "Guard blocked the request.",
+      code: "guard_blocked",
+      degraded: true,
+      warning: "Use a narrower query.",
+      stdout: "internal stdout that must stay private",
+      stderr: "internal stderr that must stay private",
+      meta: {
+        cwd: "C:/repo",
+        generatedAt: "2026-03-30T12:00:00.000Z"
+      },
+      config: {
+        found: true,
+        path: "C:/repo/learning-context.config.json"
+      },
+      details: {
+        blockedBy: "guard",
+        stdout: "nested stdout",
+        stderr: "nested stderr"
+      }
+    },
+    1
+  );
+
+  assert.equal(payload.message, "Guard blocked the request.");
+  assert.deepEqual(payload.details, {
+    code: "guard_blocked",
+    degraded: true,
+    warning: "Use a narrower query.",
+    details: {
+      blockedBy: "guard"
+    }
+  });
+});
+
+run("NEXUS:10 resolveCorsOrigin stays local-first by default and honors explicit override", () => {
+  assert.equal(resolveCorsOrigin(undefined, "127.0.0.1", 3100), "http://127.0.0.1:3100");
+  assert.equal(resolveCorsOrigin(undefined, "0.0.0.0", 3100), "http://127.0.0.1:3100");
+  assert.equal(resolveCorsOrigin("https://app.example.com", "0.0.0.0", 3100), "https://app.example.com");
+});
+
+run("NEXUS:10 rate limiter ignores X-Forwarded-For unless trust proxy is enabled", async () => {
+  const request = {
+    headers: {
+      "x-forwarded-for": "203.0.113.10"
+    },
+    socket: {
+      remoteAddress: "127.0.0.1"
+    }
+  };
+  const limiterNoProxy = createRateLimiter({
+    maxRequests: 5,
+    heavyMaxRequests: 5,
+    windowMs: 60_000,
+    trustProxy: false
+  });
+  const limiterWithProxy = createRateLimiter({
+    maxRequests: 5,
+    heavyMaxRequests: 5,
+    windowMs: 60_000,
+    trustProxy: true
+  });
+  const noProxyResults = [];
+  const withProxyResults = [];
+
+  for (let index = 0; index < 6; index += 1) {
+    const spoofedRequest = {
+      ...request,
+      headers: {
+        "x-forwarded-for": `198.51.100.${index + 1}`
+      }
+    };
+    noProxyResults.push(limiterNoProxy.check(spoofedRequest, "/api/chat").allowed);
+    withProxyResults.push(limiterWithProxy.check(spoofedRequest, "/api/chat").allowed);
+  }
+
+  assert.equal(noProxyResults.slice(0, 5).every(Boolean), true);
+  assert.equal(noProxyResults[5], false);
+  assert.equal(withProxyResults.every(Boolean), true);
+});
+
+run("NEXUS:10 rate limiter evicts buckets under high IP cardinality pressure", () => {
+  const limiter = createRateLimiter({
+    maxRequests: 5,
+    heavyMaxRequests: 5,
+    windowMs: 60_000,
+    trustProxy: true,
+    maxBuckets: 100
+  });
+
+  for (let index = 0; index < 160; index += 1) {
+    const request = {
+      headers: {
+        "x-forwarded-for": `198.51.100.${(index % 250) + 1}`
+      },
+      socket: {
+        remoteAddress: "127.0.0.1"
+      }
+    };
+    const result = limiter.check(request, "/api/chat");
+    assert.equal(result.allowed, true);
+  }
+
+  const stats = limiter.getStats();
+  assert.equal(limiter.getBucketCount() <= 100, true);
+  assert.equal(stats.capacityEvictions > 0, true);
+});
+
+run("NEXUS:10 base security headers include a CSP baseline", () => {
+  /** @type {Map<string, string>} */
+  const headers = new Map();
+  const response = {
+    setHeader(name, value) {
+      headers.set(String(name), String(value));
+    }
+  };
+
+  applyBaseSecurityHeaders(response);
+
+  assert.match(headers.get("Content-Security-Policy") ?? "", /default-src 'self'/);
+  assert.match(headers.get("Content-Security-Policy") ?? "", /object-src 'none'/);
+  assert.equal(headers.get("X-Frame-Options"), "DENY");
+  assert.equal(headers.get("Cross-Origin-Opener-Policy"), "same-origin");
+  assert.equal(headers.get("Cross-Origin-Resource-Policy"), "same-origin");
+  assert.equal(headers.get("Origin-Agent-Cluster"), "?1");
+  assert.equal(headers.get("X-Permitted-Cross-Domain-Policies"), "none");
+});
+
+run("NEXUS:10 demo page avoids dynamic innerHTML sinks", async () => {
+  const html = await readFile("src/interface/nexus-demo-page.html", "utf8");
+
+  assert.equal(/\.innerHTML\s*=/.test(html), false);
+});
+
+run("NEXUS:10 local agent runtime spawn succeeds without external binaries", async () => {
+  const result = await spawnAgent({
+    agentType: "coder",
+    task: "Harden API auth middleware",
+    context: "Validate headers and return 401 for missing credentials.",
+    format: "json"
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(typeof result.agentId, "string");
+  assert.match(result.output, /"runtime": "local"/);
+});
+
+run("NEXUS:10 bridge spawns NEXUS agent with local runtime", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-agent-runtime-"));
+
+  try {
+    await writeFile(path.join(tempRoot, "README.md"), "# workspace\n", "utf8");
+    const result = await spawnNexusAgent({
+      task: "Review agent security posture",
+      objective: "Ensure no path traversal",
+      workspace: tempRoot,
+      changedFiles: ["src/api/start.js"]
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(typeof result.output, "string");
+    assert.equal(result.output.length > 0, true);
+    assert.equal(result.nexusContext.selectedChunks >= 0, true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:10 bridge enforces SDD fail-fast when runGate=true and coverage is insufficient", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-agent-sdd-fail-"));
+  const longSentence = `${"verylongtoken ".repeat(80)}.`.trim();
+
+  try {
+    await mkdir(path.join(tempRoot, "src"), { recursive: true });
+    await mkdir(path.join(tempRoot, "test"), { recursive: true });
+    await mkdir(path.join(tempRoot, "docs"), { recursive: true });
+
+    await writeFile(
+      path.join(tempRoot, "src", "auth.js"),
+      `export function auth(){ return "${longSentence}"; }\n`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(tempRoot, "test", "auth.test.js"),
+      `describe("auth", () => { it("works", () => { expect("${longSentence}").toBeTruthy(); }); });\n`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(tempRoot, "docs", "auth.md"),
+      `# Auth Spec\n${longSentence}\n`,
+      "utf8"
+    );
+
+    const result = await spawnNexusAgent({
+      task: "Harden auth boundary with strict SDD gate",
+      objective: "Require spec+test+code evidence",
+      workspace: tempRoot,
+      changedFiles: ["src/auth.js"],
+      tokenBudget: 64,
+      maxChunks: 1,
+      runGate: true
+    });
+
+    assert.equal(result.success, false);
+    assert.match(String(result.error ?? ""), /SDD gate blocked/i);
+    assert.equal(result.nexusContext.sddGate?.enabled, true);
+    assert.equal(result.nexusContext.sddGate?.passed, false);
+    assert.equal((result.nexusContext.sddGate?.missingKinds?.length ?? 0) >= 1, true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:10 bridge keeps SDD gate optional when runGate=false", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-agent-sdd-optional-"));
+  const longSentence = `${"verylongtoken ".repeat(80)}.`.trim();
+
+  try {
+    await mkdir(path.join(tempRoot, "src"), { recursive: true });
+    await mkdir(path.join(tempRoot, "test"), { recursive: true });
+    await mkdir(path.join(tempRoot, "docs"), { recursive: true });
+
+    await writeFile(
+      path.join(tempRoot, "src", "auth.js"),
+      `export function auth(){ return "${longSentence}"; }\n`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(tempRoot, "test", "auth.test.js"),
+      `describe("auth", () => { it("works", () => { expect("${longSentence}").toBeTruthy(); }); });\n`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(tempRoot, "docs", "auth.md"),
+      `# Auth Spec\n${longSentence}\n`,
+      "utf8"
+    );
+
+    const result = await spawnNexusAgent({
+      task: "Harden auth boundary without strict gate",
+      objective: "Agent run should continue",
+      workspace: tempRoot,
+      changedFiles: ["src/auth.js"],
+      tokenBudget: 64,
+      maxChunks: 1,
+      runGate: false
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.nexusContext.sddGate?.enabled, false);
+    assert.equal(result.nexusContext.sddGate?.passed, true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:10 /api/eval rejects suitePath outside workspace root", async () => {
+  const route = matchRoute("POST", "/api/eval");
+  assert.ok(route, "Expected /api/eval route to be registered");
+
+  const response = await route.handler({
+    method: "POST",
+    path: "/api/eval",
+    body: {
+      suitePath: "../outside-suite.json"
+    },
+    headers: {},
+    query: {}
+  });
+
+  assert.equal(response.status, 400);
+  assert.match(String(response.body.message ?? ""), /suitePath/i);
+});
+
+run("NEXUS:10 /api/ingest rejects path outside workspace root", async () => {
+  const route = matchRoute("POST", "/api/ingest");
+  assert.ok(route, "Expected /api/ingest route to be registered");
+
+  const response = await route.handler({
+    method: "POST",
+    path: "/api/ingest",
+    body: {
+      source: "markdown",
+      path: "../outside-docs"
+    },
+    headers: {},
+    query: {}
+  });
+
+  assert.equal(response.status, 400);
+  assert.match(String(response.body.message ?? ""), /path/i);
+});
+
+run("NEXUS:10 /api/chat rejects invalid chunks payload contract", async () => {
+  const route = matchRoute("POST", "/api/chat");
+  assert.ok(route, "Expected /api/chat route to be registered");
+
+  const response = await route.handler({
+    method: "POST",
+    path: "/api/chat",
+    body: {
+      query: "hola",
+      chunks: [null]
+    },
+    headers: {},
+    query: {}
+  });
+
+  assert.equal(response.status, 400);
+  assert.match(String(response.body.message ?? ""), /Invalid chunk/i);
+});
+
+run("NEXUS:10 /api/chat runtime records SDD and teaching metrics in observability store", async () => {
+  const route = matchRoute("POST", "/api/chat");
+  assert.ok(route, "Expected /api/chat route to be registered");
+
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-chat-metrics-"));
+  const observabilityFile = path.join(tempRoot, "observability.json");
+  const previousObservability = process.env.LCS_OBSERVABILITY_FILE;
+  const previousContextMode = process.env.LCS_CONTEXT_MODE;
+
+  process.env.LCS_OBSERVABILITY_FILE = observabilityFile;
+  process.env.LCS_CONTEXT_MODE = "clean";
+
+  try {
+    const response = await route.handler({
+      method: "POST",
+      path: "/api/chat",
+      body: {
+        query: "Explica el hardening del auth middleware",
+        withContext: true,
+        chunks: [
+          {
+            id: "spec-1",
+            source: "docs/auth-spec.md",
+            kind: "spec",
+            content: "Spec: validar token y expiracion antes de ejecutar handlers."
+          },
+          {
+            id: "test-1",
+            source: "test/auth.test.js",
+            kind: "test",
+            content: "Test: should reject expired token with 401."
+          },
+          {
+            id: "code-1",
+            source: "src/auth/middleware.js",
+            kind: "code",
+            content: "if (!token || isExpired(token)) { return unauthorized(); }"
+          }
+        ]
+      },
+      headers: {},
+      query: {}
+    });
+
+    assert.equal([200, 503].includes(response.status), true);
+
+    const report = await getObservabilityReport({ filePath: observabilityFile });
+    assert.equal(report.sdd.samples, 1);
+    assert.equal(report.teaching.samples, 1);
+    assert.equal(report.teaching.sectionsExpectedTotal, 4);
+    assert.equal(report.teaching.sectionsPresentTotal >= 1, true);
+  } finally {
+    if (previousObservability === undefined) {
+      delete process.env.LCS_OBSERVABILITY_FILE;
+    } else {
+      process.env.LCS_OBSERVABILITY_FILE = previousObservability;
+    }
+    if (previousContextMode === undefined) {
+      delete process.env.LCS_CONTEXT_MODE;
+    } else {
+      process.env.LCS_CONTEXT_MODE = previousContextMode;
+    }
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:10 /api/chat and /api/ask enforce shared chunk validation in server runtime", async () => {
+  const apiKey = "nexus-test-key";
+  const server = createNexusApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    auth: {
+      requireAuth: true,
+      apiKeys: [apiKey]
+    },
+    llm: {
+      defaultProvider: "mock",
+      providers: [
+        {
+          provider: "mock",
+          async generate() {
+            return { content: "ok" };
+          }
+        }
+      ]
+    },
+    sync: {
+      autoStart: false
+    }
+  });
+
+  let started = false;
+
+  try {
+    const start = await server.start();
+    started = true;
+    const baseUrl = `http://127.0.0.1:${start.port}`;
+
+    const invalidChat = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        query: "hola",
+        chunks: [null]
+      })
+    });
+    const invalidChatPayload = await invalidChat.json();
+
+    const invalidAsk = await fetch(`${baseUrl}/api/ask`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        question: "hola",
+        chunks: [null]
+      })
+    });
+    const invalidAskPayload = await invalidAsk.json();
+
+    assert.equal(invalidChat.status, 400);
+    assert.equal(invalidChatPayload.errorCode, "invalid_chunks");
+    assert.match(String(invalidChatPayload.error ?? ""), /Invalid chunk/i);
+
+    assert.equal(invalidAsk.status, 400);
+    assert.equal(invalidAskPayload.errorCode, "invalid_chunks");
+    assert.match(String(invalidAskPayload.error ?? ""), /Invalid chunk/i);
+  } finally {
+    if (started) {
+      await server.stop();
+    }
+  }
+});
+
+run("NEXUS:10 /api/evals/domain-suite blocks suitePath traversal in server runtime", async () => {
+  const apiKey = "nexus-test-key";
+  const server = createNexusApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    auth: {
+      requireAuth: true,
+      apiKeys: [apiKey]
+    },
+    llm: {
+      defaultProvider: "mock",
+      providers: [
+        {
+          provider: "mock",
+          async generate() {
+            return { content: "ok" };
+          }
+        }
+      ]
+    },
+    sync: {
+      autoStart: false
+    }
+  });
+
+  let started = false;
+
+  try {
+    const start = await server.start();
+    started = true;
+    const baseUrl = `http://127.0.0.1:${start.port}`;
+    const response = await fetch(`${baseUrl}/api/evals/domain-suite`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        suitePath: "../x.json"
+      })
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(payload.errorCode, "invalid_suite_path");
+    assert.equal(/\\\\|[A-Za-z]:\\/u.test(String(payload.error ?? "")), false);
+  } finally {
+    if (started) {
+      await server.stop();
+    }
+  }
+});
+
+run("NEXUS:10 /api/pipeline/run blocks adapter sourcePath traversal and accepts in-workspace paths", async () => {
+  const apiKey = "nexus-test-key";
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-pipeline-path-"));
+  const server = createNexusApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    auth: {
+      requireAuth: true,
+      apiKeys: [apiKey]
+    },
+    llm: {
+      defaultProvider: "mock",
+      providers: [
+        {
+          provider: "mock",
+          async generate() {
+            return { content: "ok" };
+          }
+        }
+      ]
+    },
+    sync: {
+      rootPath: tempRoot,
+      autoStart: false
+    },
+    repositoryFilePath: path.join(tempRoot, "pipeline-chunks.jsonl")
+  });
+
+  let started = false;
+
+  try {
+    await mkdir(path.join(tempRoot, "docs"), { recursive: true });
+    await writeFile(
+      path.join(tempRoot, "docs", "guide.md"),
+      "# Guide\nValidate tokens before business logic.\n",
+      "utf8"
+    );
+
+    const start = await server.start();
+    started = true;
+    const baseUrl = `http://127.0.0.1:${start.port}`;
+
+    const blocked = await fetch(`${baseUrl}/api/pipeline/run`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        input: {
+          sourceAdapter: "markdown",
+          sourcePath: "../outside.md",
+          query: "tokens"
+        }
+      })
+    });
+    const blockedPayload = await blocked.json();
+
+    const allowed = await fetch(`${baseUrl}/api/pipeline/run`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        input: {
+          sourceAdapter: "markdown",
+          sourcePath: "docs",
+          query: "validate tokens"
+        }
+      })
+    });
+    const allowedPayload = await allowed.json();
+
+    assert.equal(blocked.status, 400);
+    assert.equal(blockedPayload.errorCode, "invalid_pipeline_source_path");
+    assert.match(String(blockedPayload.error ?? ""), /sourcePath/i);
+
+    assert.equal(allowed.status, 200);
+    assert.equal(allowedPayload.status, "ok");
+    assert.equal(allowedPayload.pipeline.summary.totalSteps >= 4, true);
+    assert.equal(allowedPayload.pipeline.state.steps.ingest.ingest.adapter, "markdown");
+    assert.equal(allowedPayload.pipeline.state.steps.ingest.ingest.totalChunks >= 1, true);
+  } finally {
+    if (started) {
+      await server.stop();
+    }
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 });
 
 run("NEXUS benchmark compares raw context versus selected context on real workspace cases", async () => {
@@ -7080,6 +9471,105 @@ run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () 
   }
 });
 
+run("NEXUS:10 API routes and metrics require auth while health stays public", async () => {
+  const apiKey = "nexus-test-key";
+  const server = createNexusApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    auth: {
+      requireAuth: true,
+      apiKeys: [apiKey]
+    },
+    llm: {
+      defaultProvider: "mock",
+      providers: [
+        {
+          provider: "mock",
+          async generate() {
+            return { content: "ok" };
+          }
+        }
+      ]
+    },
+    sync: {
+      autoStart: false
+    }
+  });
+
+  let started = false;
+
+  try {
+    const start = await server.start();
+    started = true;
+    const baseUrl = `http://127.0.0.1:${start.port}`;
+
+    const health = await fetch(`${baseUrl}/api/health`);
+    const routesBlocked = await fetch(`${baseUrl}/api/routes`);
+    const metricsBlocked = await fetch(`${baseUrl}/api/metrics`);
+    const routesAllowed = await fetch(`${baseUrl}/api/routes`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+    const metricsAllowed = await fetch(`${baseUrl}/api/metrics`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+
+    const routesBlockedPayload = await routesBlocked.json();
+    const metricsBlockedPayload = await metricsBlocked.json();
+    const routesAllowedPayload = await routesAllowed.json();
+    const metricsAllowedPayload = await metricsAllowed.json();
+
+    assert.equal(health.status, 200);
+    assert.equal(routesBlocked.status, 401);
+    assert.equal(metricsBlocked.status, 401);
+    assert.equal(routesBlockedPayload.errorCode, "auth_unauthorized");
+    assert.equal(metricsBlockedPayload.errorCode, "auth_unauthorized");
+    assert.equal(routesAllowed.status, 200);
+    assert.equal(metricsAllowed.status, 200);
+    assert.equal(routesAllowedPayload.status, "ok");
+    assert.equal(Array.isArray(routesAllowedPayload.routes), true);
+    assert.equal(typeof metricsAllowedPayload.totalRequests, "number");
+  } finally {
+    if (started) {
+      await server.stop();
+    }
+  }
+});
+
+run("NEXUS:10 API server respects explicit CORS origin without wildcard fallback", async () => {
+  const server = createNexusApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    corsOrigin: "https://app.example.com",
+    auth: {
+      requireAuth: false
+    }
+  });
+
+  let started = false;
+
+  try {
+    const address = await server.start();
+    started = true;
+
+    const response = await fetch(`http://${address.host}:${address.port}/api/health`, {
+      headers: {
+        Origin: "https://app.example.com"
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("access-control-allow-origin"), "https://app.example.com");
+  } finally {
+    if (started) {
+      await server.stop();
+    }
+  }
+});
+
 run("NEXUS:10 API ask degrades gracefully and reports context impact without provider", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-api-ask-degraded-"));
   const server = createNexusApiServer({
@@ -7129,6 +9619,176 @@ run("NEXUS:10 API ask degrades gracefully and reports context impact without pro
     assert.equal(payload.impact.withoutNexus.tokens >= payload.impact.withNexus.tokens, true);
     assert.equal(typeof payload.impact.savings.percent, "number");
     assert.match(payload.generation.content, /modo degradado/i);
+  } finally {
+    if (started) {
+      await server.stop();
+    }
+
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:10 API ask auto-retrieves RAG context when chunks are omitted", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-api-ask-rag-auto-"));
+  const server = createNexusApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    auth: {
+      requireAuth: false
+    },
+    llm: {
+      defaultProvider: "mock",
+      providers: [
+        {
+          provider: "mock",
+          async generate() {
+            return {
+              content: [
+                "Change: Updated auth flow.",
+                "Reason: JWT validation now runs at request boundary.",
+                "Concepts: request-boundary validation, fail-fast auth, 401 contract",
+                "Practice: Add a test for expired token handling."
+              ].join("\n")
+            };
+          }
+        }
+      ]
+    },
+    sync: {
+      rootPath: tempRoot,
+      autoStart: false
+    },
+    repositoryFilePath: path.join(tempRoot, "chunks.jsonl")
+  });
+
+  let started = false;
+
+  try {
+    const start = await server.start();
+    started = true;
+    const baseUrl = `http://127.0.0.1:${start.port}`;
+    await fetch(`${baseUrl}/api/remember`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        title: "Auth boundary note",
+        content: "Validate JWT signature before route handlers and return 401 on failure.",
+        project: "rag-auto"
+      })
+    });
+
+    const ask = await fetch(`${baseUrl}/api/ask`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        question: "How should auth middleware validate JWT?",
+        project: "rag-auto",
+        provider: "mock"
+      })
+    });
+    const payload = await ask.json();
+
+    assert.equal(ask.status, 200);
+    assert.equal(payload.status, "ok");
+    assert.equal(payload.context.rag.enabled, true);
+    assert.equal(payload.context.rag.autoRetrieve, true);
+    assert.equal(payload.context.rag.retrievedChunks >= 1, true);
+    assert.equal(payload.context.rawChunks >= 1, true);
+    assert.equal(payload.context.rag.quality.mrr >= 0, true);
+  } finally {
+    if (started) {
+      await server.stop();
+    }
+
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:10 API chat runs RAG reranker on auto-retrieved chunks", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-api-chat-rag-rerank-"));
+  const server = createNexusApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    auth: {
+      requireAuth: false
+    },
+    llm: {
+      defaultProvider: "mock",
+      providers: [
+        {
+          provider: "mock",
+          async generate() {
+            return {
+              content: "Change: Applied auth hardening.\nReason: Better JWT boundary checks."
+            };
+          }
+        }
+      ]
+    },
+    sync: {
+      rootPath: tempRoot,
+      autoStart: false
+    },
+    repositoryFilePath: path.join(tempRoot, "chunks.jsonl")
+  });
+
+  let started = false;
+
+  try {
+    const start = await server.start();
+    started = true;
+    const baseUrl = `http://127.0.0.1:${start.port}`;
+    await fetch(`${baseUrl}/api/remember`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        title: "Auth middleware",
+        content: "Auth middleware must validate JWT issuer, signature and exp before handler execution.",
+        project: "rag-chat"
+      })
+    });
+    await fetch(`${baseUrl}/api/remember`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        title: "Unrelated css note",
+        content: "Use dark mode CSS variables in frontend docs.",
+        project: "rag-chat"
+      })
+    });
+
+    const chat = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        query: "How do we validate JWT in middleware?",
+        project: "rag-chat",
+        provider: "mock",
+        rag: {
+          force: true,
+          rerank: true,
+          rerankTopK: 6
+        }
+      })
+    });
+    const payload = await chat.json();
+
+    assert.equal(chat.status, 200);
+    assert.equal(payload.status, "ok");
+    assert.equal(payload.context.rag.autoRetrieve, true);
+    assert.equal(payload.context.rag.retrievedChunks >= 1, true);
+    assert.equal(payload.context.rag.rerankApplied, true);
+    assert.equal(payload.context.rag.quality.ndcgAtK >= 0, true);
   } finally {
     if (started) {
       await server.stop();
@@ -7967,6 +10627,72 @@ run("NEXUS:4 code gate runs typecheck and reports pass on clean cwd", async () =
   assert.equal(syntheticResult.tools.length, 1);
   assert.equal(syntheticResult.tools[0].tool, "typecheck");
   assert.equal(syntheticResult.tools[0].status, "pass");
+});
+
+run("NEXUS:4 repair loop validates target candidate code and restores workspace file", async () => {
+  const tempRoot = await mkdtemp(path.join(process.cwd(), "tmp-repair-loop-"));
+  const sourceDir = path.join(tempRoot, "src");
+  const targetFile = path.join(sourceDir, "sample.ts");
+  const originalCode = 'export const value: number = \"oops\";\\n';
+  const repairedCode = "export const value: number = 1;\\n";
+  /** @type {string[]} */
+  const gateSnapshots = [];
+
+  try {
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(targetFile, originalCode, "utf8");
+
+    const result = await runRepairLoop({
+      code: repairedCode,
+      cwd: tempRoot,
+      targetPath: "src/sample.ts",
+      tools: ["typecheck"],
+      maxIterations: 1,
+      useRuntimeAgent: false,
+      gateRunner: async () => {
+        const candidate = await readFile(targetFile, "utf8");
+        gateSnapshots.push(candidate);
+        const passed = candidate === repairedCode;
+        return {
+          status: passed ? "pass" : "fail",
+          tools: [
+            {
+              tool: "typecheck",
+              status: passed ? "pass" : "fail",
+              errors: passed
+                ? []
+                : [
+                    {
+                      file: "src/sample.ts",
+                      line: 1,
+                      column: 1,
+                      severity: "error",
+                      code: "TS2322",
+                      message: "Type mismatch",
+                      tool: "typecheck"
+                    }
+                  ],
+              durationMs: 0,
+              raw: passed ? "" : "src/sample.ts(1,1): error TS2322: Type mismatch"
+            }
+          ],
+          errorCount: passed ? 0 : 1,
+          warningCount: 0,
+          durationMs: 0,
+          passed
+        };
+      }
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.reason, "pass");
+    assert.equal(result.finalGateResult?.passed, true);
+    assert.equal(result.totalAttempts, 1);
+    assert.deepEqual(gateSnapshots, [repairedCode]);
+    assert.equal(await readFile(targetFile, "utf8"), originalCode);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
 });
 
 run("NEXUS:4 getGateErrors returns only error-severity items", () => {

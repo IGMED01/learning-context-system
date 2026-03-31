@@ -279,12 +279,17 @@ See `docs/security-model.md` for the exact policy and limits.
 - `security.allowSensitivePaths`
 - `security.extraSensitivePathFragments`
 - `scan.ignoreDirs`
+- `scan.fastScanner.enabled`
+- `scan.fastScanner.binaryPath`
+- `scan.fastScanner.arguments`
+- `scan.fastScanner.timeoutMs`
 
 Use those fields carefully:
 
 - `allowSensitivePaths` is for known-safe fixtures such as teaching examples
 - `extraSensitivePathFragments` is for custom repo zones that should never be scanned
 - `scan.ignoreDirs` is for local noise directories that should never enter context ranking
+- `scan.fastScanner` is an optional acceleration layer; if it fails, scanner falls back to native Node walk
 
 Example:
 
@@ -298,7 +303,13 @@ Example:
     "extraSensitivePathFragments": ["internal/private-fixtures"]
   },
   "scan": {
-    "ignoreDirs": [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
+    "ignoreDirs": [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"],
+    "fastScanner": {
+      "enabled": false,
+      "binaryPath": "tools/fastscan/lcs-fastscan",
+      "arguments": [],
+      "timeoutMs": 8000
+    }
   }
 }
 ```

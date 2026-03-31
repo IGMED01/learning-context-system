@@ -58,7 +58,17 @@
 
 /**
  * @typedef {{
- *   ignoreDirs: string[]
+ *   enabled: boolean,
+ *   binaryPath: string,
+ *   arguments: string[],
+ *   timeoutMs: number
+ * }} ProjectFastScannerConfig
+ */
+
+/**
+ * @typedef {{
+ *   ignoreDirs: string[],
+ *   fastScanner: ProjectFastScannerConfig
  * }} ProjectScanConfig
  */
 
@@ -250,7 +260,13 @@ export function defaultProjectConfig() {
       extraSensitivePathFragments: []
     },
     scan: {
-      ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
+      ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs", ".claude", ".atl", ".engram"],
+      fastScanner: {
+        enabled: false,
+        binaryPath: "tools/fastscan/lcs-fastscan",
+        arguments: [],
+        timeoutMs: 8000
+      }
     },
     safety: {
       requirePlanForWrite: false,
@@ -347,6 +363,11 @@ export function validateProjectConfig(value) {
 
   const normalizedMemoryBackend =
     memoryBackend === "engram-only" ? "resilient" : memoryBackend;
+
+  const fastScanner =
+    scan && typeof scan.fastScanner === "object" && scan.fastScanner && !Array.isArray(scan.fastScanner)
+      ? /** @type {Record<string, unknown>} */ (scan.fastScanner)
+      : undefined;
 
   return {
     schemaVersion:
@@ -452,7 +473,33 @@ export function validateProjectConfig(value) {
     scan: {
       ignoreDirs:
         optionalStringArray(scan?.ignoreDirs, "Project config.scan.ignoreDirs") ??
-        defaults.scan.ignoreDirs
+        defaults.scan.ignoreDirs,
+      fastScanner: {
+        enabled:
+          optionalBoolean(
+            fastScanner?.enabled,
+            "Project config.scan.fastScanner.enabled"
+          ) ?? defaults.scan.fastScanner.enabled,
+        binaryPath:
+          optionalString(
+            fastScanner?.binaryPath,
+            "Project config.scan.fastScanner.binaryPath"
+          ) ?? defaults.scan.fastScanner.binaryPath,
+        arguments:
+          optionalStringArray(
+            fastScanner?.arguments,
+            "Project config.scan.fastScanner.arguments"
+          ) ?? defaults.scan.fastScanner.arguments,
+        timeoutMs:
+          optionalNumber(
+            fastScanner?.timeoutMs,
+            "Project config.scan.fastScanner.timeoutMs",
+            {
+              min: 200,
+              integer: true
+            }
+          ) ?? defaults.scan.fastScanner.timeoutMs
+      }
     },
     safety: {
       requirePlanForWrite:

@@ -74,6 +74,7 @@ npm run e2e:nexus
 - Context selection with noise suppression.
 - Teaching packet generation tied to changed files and tests.
 - Durable memory via Engram with resilient fallback.
+- Optional Go FastScan sidecar for faster workspace file discovery (safe fallback to native scan).
 - Internal SYNC runtime (detect → chunk → dedup → version → persist) via `src/sync`.
 - HTTP API + SDK + OpenAPI + demo UI.
 - Guard, observability, versioning, and eval gates in CI.

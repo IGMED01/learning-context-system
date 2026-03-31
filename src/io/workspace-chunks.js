@@ -1,7 +1,8 @@
 // @ts-check
 
 import { readFile, readdir } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import { chunkDocument } from "../processing/chunker.js";
 import {
   extractCodeSymbols,
@@ -42,7 +43,17 @@ import {
 /**
  * @typedef {{
  *   ignoreDirs?: string[]
+ *   fastScanner?: WorkspaceFastScannerOptions
  * }} WorkspaceScanOptions
+ */
+
+/**
+ * @typedef {{
+ *   enabled?: boolean,
+ *   binaryPath?: string,
+ *   arguments?: string[],
+ *   timeoutMs?: number
+ * }} WorkspaceFastScannerOptions
  */
 
 /**
@@ -64,6 +75,9 @@ import {
 const DEFAULT_IGNORED_DIRS = [
   ".git",
   ".codex",
+  ".claude",
+  ".atl",
+  ".engram",
   ".lcs",
   ".tmp",
   "node_modules",
@@ -91,6 +105,9 @@ const ALLOWED_EXTENSIONS = new Set([
 ]);
 
 const MAX_FILE_CHARS = 32000;
+const FAST_SCANNER_RESPONSE_VERSION = "1.0.0";
+const FAST_SCANNER_MIN_TIMEOUT_MS = 200;
+const ALLOWED_FILE_NAMES = new Set(["README.md", "AGENTS.md", "agents.md", "package.json"]);
 
 /**
  * @param {WorkspaceScanOptions | undefined} scan
@@ -108,6 +125,32 @@ function resolveIgnoredDirs(scan) {
  */
 function toPosixPath(value) {
   return value.replace(/\\/g, "/");
+}
+
+/**
+ * @param {string} value
+ */
+function normalizeSourcePath(value) {
+  const normalized = toPosixPath(value).replace(/^\.\/+/u, "");
+  return normalized;
+}
+
+/**
+ * @param {string} rootPath
+ * @param {string} targetPath
+ */
+function isPathWithinRoot(rootPath, targetPath) {
+  const rel = toPosixPath(relative(rootPath, targetPath));
+  return rel !== ".." && !rel.startsWith("../");
+}
+
+/**
+ * @param {string} source
+ * @param {Set<string>} ignoredDirs
+ */
+function isSourceInsideIgnoredDir(source, ignoredDirs) {
+  const segments = normalizeSourcePath(source).split("/").filter(Boolean);
+  return segments.some((segment) => ignoredDirs.has(segment));
 }
 
 /**
@@ -205,6 +248,54 @@ function createScanStats(rootPath) {
 }
 
 /**
+ * @param {WorkspaceFile[]} files
+ * @param {ScanStats} stats
+ * @param {ReturnType<typeof resolveSecurityPolicy>} securityPolicy
+ * @param {Set<string>} ignoredDirs
+ * @param {string} source
+ * @param {string} absolutePath
+ */
+function collectWorkspaceFileCandidate(
+  files,
+  stats,
+  securityPolicy,
+  ignoredDirs,
+  source,
+  absolutePath
+) {
+  const normalizedSource = normalizeSourcePath(source);
+  const fileName = basename(normalizedSource);
+  const extension = extname(fileName);
+  const allowlistedSensitivePath = isSensitivePathAllowlisted(normalizedSource, securityPolicy);
+
+  if (isSourceInsideIgnoredDir(normalizedSource, ignoredDirs)) {
+    stats.ignoredFiles += 1;
+    return;
+  }
+
+  if (securityPolicy.ignoreGeneratedFiles && shouldIgnoreGeneratedFile(normalizedSource)) {
+    stats.ignoredFiles += 1;
+    return;
+  }
+
+  if (!allowlistedSensitivePath && shouldIgnoreSensitiveFile(normalizedSource, securityPolicy)) {
+    stats.ignoredFiles += 1;
+    stats.security.ignoredSensitiveFiles += 1;
+    return;
+  }
+
+  if (!allowlistedSensitivePath && !ALLOWED_EXTENSIONS.has(extension) && !ALLOWED_FILE_NAMES.has(fileName)) {
+    stats.ignoredFiles += 1;
+    return;
+  }
+
+  files.push({
+    absolutePath,
+    source: normalizedSource
+  });
+}
+
+/**
  * @param {string} rootPath
  * @param {string} currentPath
  * @param {WorkspaceFile[]} files
@@ -234,35 +325,196 @@ async function walk(rootPath, currentPath, files, stats, securityPolicy, ignored
 
     stats.discoveredFiles += 1;
     const absolutePath = resolve(currentPath, entry.name);
-    const source = toPosixPath(relative(rootPath, absolutePath));
-    const extension = extname(entry.name);
-    const allowlistedSensitivePath = isSensitivePathAllowlisted(source, securityPolicy);
+    const source = relative(rootPath, absolutePath);
 
-    if (securityPolicy.ignoreGeneratedFiles && shouldIgnoreGeneratedFile(source)) {
-      stats.ignoredFiles += 1;
-      continue;
-    }
-
-    if (!allowlistedSensitivePath && shouldIgnoreSensitiveFile(source, securityPolicy)) {
-      stats.ignoredFiles += 1;
-      stats.security.ignoredSensitiveFiles += 1;
-      continue;
-    }
-
-    if (
-      !allowlistedSensitivePath &&
-      !ALLOWED_EXTENSIONS.has(extension) &&
-      !["README.md", "AGENTS.md", "agents.md", "package.json"].includes(entry.name)
-    ) {
-      stats.ignoredFiles += 1;
-      continue;
-    }
-
-    files.push({
-      absolutePath,
-      source
-    });
+    collectWorkspaceFileCandidate(
+      files,
+      stats,
+      securityPolicy,
+      ignoredDirs,
+      source,
+      absolutePath
+    );
   }
+}
+
+/**
+ * @param {WorkspaceScanOptions | undefined} scan
+ */
+function resolveFastScannerOptions(scan) {
+  const configured = scan?.fastScanner;
+
+  if (!configured || configured.enabled !== true) {
+    return null;
+  }
+
+  const binaryPath = typeof configured.binaryPath === "string" ? configured.binaryPath.trim() : "";
+
+  if (!binaryPath) {
+    return null;
+  }
+
+  const argumentsList = Array.isArray(configured.arguments)
+    ? configured.arguments.filter((value) => typeof value === "string" && value.trim() !== "")
+    : [];
+  const timeoutMs =
+    Number.isInteger(configured.timeoutMs) && Number(configured.timeoutMs) >= FAST_SCANNER_MIN_TIMEOUT_MS
+      ? Number(configured.timeoutMs)
+      : 8000;
+
+  return {
+    binaryPath,
+    arguments: argumentsList,
+    timeoutMs
+  };
+}
+
+/**
+ * @param {string} rootPath
+ * @param {string} binaryPath
+ */
+function resolveFastScannerBinaryPath(rootPath, binaryPath) {
+  return isAbsolute(binaryPath) ? binaryPath : resolve(rootPath, binaryPath);
+}
+
+/**
+ * @param {string} rootPath
+ * @param {Set<string>} ignoredDirs
+ * @param {ReturnType<typeof resolveFastScannerOptions>} fastScanner
+ * @returns {Promise<string[] | null>}
+ */
+async function runFastScanner(rootPath, ignoredDirs, fastScanner) {
+  if (!fastScanner) {
+    return null;
+  }
+
+  const binaryPath = resolveFastScannerBinaryPath(rootPath, fastScanner.binaryPath);
+  const request = JSON.stringify({
+    version: FAST_SCANNER_RESPONSE_VERSION,
+    rootPath,
+    ignoreDirs: Array.from(ignoredDirs.values())
+  });
+  const args = [...fastScanner.arguments];
+
+  if (!args.includes("--request-stdin")) {
+    args.push("--request-stdin");
+  }
+
+  return new Promise((resolveResult) => {
+    const child = spawn(binaryPath, args, {
+      cwd: rootPath,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let settled = false;
+    let timedOut = false;
+
+    const settle = (value) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      resolveResult(value);
+    };
+
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, fastScanner.timeoutMs);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.on("error", () => {
+      clearTimeout(timeoutHandle);
+      settle(null);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timeoutHandle);
+
+      if (timedOut || code !== 0) {
+        settle(null);
+        return;
+      }
+
+      const raw = stdout.trim();
+
+      if (!raw) {
+        settle(null);
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(raw);
+
+        if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.files)) {
+          settle(null);
+          return;
+        }
+
+        const files = /** @type {unknown[]} */ (parsed.files)
+          .map((value) => (typeof value === "string" ? normalizeSourcePath(value) : ""))
+          .filter(Boolean)
+          .sort((left, right) => left.localeCompare(right));
+
+        settle(files);
+      } catch {
+        settle(null);
+      }
+    });
+
+    child.stdin.write(request);
+    child.stdin.end();
+  });
+}
+
+/**
+ * @param {string} rootPath
+ * @param {WorkspaceFile[]} files
+ * @param {ScanStats} stats
+ * @param {ReturnType<typeof resolveSecurityPolicy>} securityPolicy
+ * @param {Set<string>} ignoredDirs
+ * @param {WorkspaceScanOptions | undefined} scanOptions
+ */
+async function discoverWorkspaceFiles(
+  rootPath,
+  files,
+  stats,
+  securityPolicy,
+  ignoredDirs,
+  scanOptions
+) {
+  const fastScanner = resolveFastScannerOptions(scanOptions);
+  const sidecarSources = await runFastScanner(rootPath, ignoredDirs, fastScanner);
+
+  if (Array.isArray(sidecarSources)) {
+    for (const source of sidecarSources) {
+      const absolutePath = resolve(rootPath, source);
+
+      if (!isPathWithinRoot(rootPath, absolutePath)) {
+        stats.ignoredFiles += 1;
+        continue;
+      }
+
+      stats.discoveredFiles += 1;
+      collectWorkspaceFileCandidate(
+        files,
+        stats,
+        securityPolicy,
+        ignoredDirs,
+        source,
+        absolutePath
+      );
+    }
+
+    return;
+  }
+
+  await walk(rootPath, rootPath, files, stats, securityPolicy, ignoredDirs);
 }
 
 /**
@@ -277,7 +529,14 @@ export async function loadWorkspaceChunks(rootPath, options = {}) {
   const securityPolicy = resolveSecurityPolicy(options.security);
   const ignoredDirs = resolveIgnoredDirs(options.scan);
 
-  await walk(resolvedRoot, resolvedRoot, files, stats, securityPolicy, ignoredDirs);
+  await discoverWorkspaceFiles(
+    resolvedRoot,
+    files,
+    stats,
+    securityPolicy,
+    ignoredDirs,
+    options.scan
+  );
 
   /** @type {Chunk[]} */
   const chunks = [];
