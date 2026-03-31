@@ -53,12 +53,13 @@
           <input id="baseUrl" />
         </label>
         <label>API key (x-api-key)
-          <input id="apiKey" placeholder="optional" />
+          <input id="apiKey" placeholder="required for secured API routes" />
         </label>
         <label>Prompt key
           <input id="promptKey" value="ask/default" />
         </label>
       </div>
+      <p>Only <code>/api/health</code> is public by default. Demo, OpenAPI, dashboard, routes, metrics, and guard policy endpoints require API auth in the secured runtime.</p>
       <div class="row" style="margin-top:8px">
         <button id="btnHealth">Check health</button>
         <button id="btnDashboard">Load dashboard</button>

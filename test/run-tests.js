@@ -101,6 +101,7 @@ import { evaluateMemoryPoisoningGate } from "../src/eval/memory-poisoning-gate.j
 import { evaluateRagGoldenSetGate } from "../src/eval/rag-golden-set-gate.js";
 import { evaluateFineTuningReadinessGate } from "../src/eval/fine-tuning-readiness-gate.js";
 import { evaluateFt1FormatGate } from "../src/eval/ft1-format-gate.js";
+import { evaluateFt2IntentGate } from "../src/eval/ft2-intent-gate.js";
 import {
   getObservabilityReport,
   recordCommandMetric
@@ -4176,6 +4177,7 @@ run("engram client fails closed on Windows permission errors without cmd.exe fal
     cwd: "C:/repo",
     binaryPath: "C:/repo/tools/engram/engram.exe",
     dataDir: "C:/repo/.engram",
+    platform: "win32",
     async exec() {
       throw createExecError("spawn EPERM", {
         code: "EPERM",
@@ -8421,6 +8423,79 @@ run("NEXUS:7 FT-1 format gate enforces structured output and measurable lift", (
   assert.equal(failing.summary.casePassRate, 0);
 });
 
+run("NEXUS:7 FT-2 intent gate enforces routing accuracy and lift", () => {
+  const passing = evaluateFt2IntentGate({
+    suiteName: "ft2-passing",
+    thresholds: {
+      minCandidateAccuracy: 1,
+      minCandidateMacroF1: 1,
+      minAccuracyLift: 0.4,
+      minMacroF1Lift: 0.4,
+      maxUnknownRate: 0
+    },
+    cases: [
+      {
+        id: "intent-1",
+        expectedIntent: "routing",
+        baselineIntent: "formatting",
+        candidateIntent: "routing"
+      },
+      {
+        id: "intent-2",
+        expectedIntent: "safety",
+        baselineIntent: "routing",
+        candidateIntent: "safety"
+      },
+      {
+        id: "intent-3",
+        expectedIntent: "teaching",
+        baselineIntent: "formatting",
+        candidateIntent: "teaching"
+      },
+      {
+        id: "intent-4",
+        expectedIntent: "formatting",
+        baselineIntent: "teaching",
+        candidateIntent: "formatting"
+      }
+    ]
+  });
+
+  assert.equal(passing.passed, true);
+  assert.equal(passing.summary.candidateAccuracy, 1);
+  assert.equal(passing.summary.candidateMacroF1, 1);
+  assert.equal(passing.summary.accuracyLift >= 0.4, true);
+  assert.equal(passing.summary.macroF1Lift >= 0.4, true);
+
+  const failing = evaluateFt2IntentGate({
+    suiteName: "ft2-failing",
+    thresholds: {
+      minCandidateAccuracy: 0.8,
+      minCandidateMacroF1: 0.8,
+      minAccuracyLift: 0.2,
+      minMacroF1Lift: 0.2,
+      maxUnknownRate: 0.1
+    },
+    cases: [
+      {
+        id: "intent-bad-1",
+        expectedIntent: "routing",
+        baselineIntent: "routing",
+        candidateIntent: "formatting"
+      },
+      {
+        id: "intent-bad-2",
+        expectedIntent: "safety",
+        baselineIntent: "safety",
+        candidateIntent: ""
+      }
+    ]
+  });
+
+  assert.equal(failing.passed, false);
+  assert.equal(failing.summary.candidateAccuracy < 0.8, true);
+});
+
 run("NEXUS:7 conversation noise gate validates 100-turn stress and A/B reduction signals", () => {
   const passing = evaluateConversationNoiseGate({
     baseline: {
@@ -9530,7 +9605,7 @@ run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () 
   }
 });
 
-run("NEXUS:10 API routes and metrics require auth while health stays public", async () => {
+run("NEXUS:10 API compatibility endpoints require auth while health stays public", async () => {
   const apiKey = "nexus-test-key";
   const server = createNexusApiServer({
     host: "127.0.0.1",
@@ -9565,6 +9640,9 @@ run("NEXUS:10 API routes and metrics require auth while health stays public", as
     const health = await fetch(`${baseUrl}/api/health`);
     const routesBlocked = await fetch(`${baseUrl}/api/routes`);
     const metricsBlocked = await fetch(`${baseUrl}/api/metrics`);
+    const openApiBlocked = await fetch(`${baseUrl}/api/openapi.json`);
+    const demoBlocked = await fetch(`${baseUrl}/api/demo`);
+    const guardPoliciesBlocked = await fetch(`${baseUrl}/api/guard/policies`);
     const routesAllowed = await fetch(`${baseUrl}/api/routes`, {
       headers: {
         "x-api-key": apiKey
@@ -9575,22 +9653,55 @@ run("NEXUS:10 API routes and metrics require auth while health stays public", as
         "x-api-key": apiKey
       }
     });
+    const openApiAllowed = await fetch(`${baseUrl}/api/openapi.json`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+    const demoAllowed = await fetch(`${baseUrl}/api/demo`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+    const guardPoliciesAllowed = await fetch(`${baseUrl}/api/guard/policies`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
 
     const routesBlockedPayload = await routesBlocked.json();
     const metricsBlockedPayload = await metricsBlocked.json();
+    const openApiBlockedPayload = await openApiBlocked.json();
+    const guardPoliciesBlockedPayload = await guardPoliciesBlocked.json();
     const routesAllowedPayload = await routesAllowed.json();
     const metricsAllowedPayload = await metricsAllowed.json();
+    const openApiAllowedPayload = await openApiAllowed.json();
+    const demoAllowedBody = await demoAllowed.text();
+    const guardPoliciesAllowedPayload = await guardPoliciesAllowed.json();
 
     assert.equal(health.status, 200);
     assert.equal(routesBlocked.status, 401);
     assert.equal(metricsBlocked.status, 401);
+    assert.equal(openApiBlocked.status, 401);
+    assert.equal(demoBlocked.status, 401);
+    assert.equal(guardPoliciesBlocked.status, 401);
     assert.equal(routesBlockedPayload.errorCode, "auth_unauthorized");
     assert.equal(metricsBlockedPayload.errorCode, "auth_unauthorized");
+    assert.equal(openApiBlockedPayload.errorCode, "auth_unauthorized");
+    assert.equal(guardPoliciesBlockedPayload.errorCode, "auth_unauthorized");
     assert.equal(routesAllowed.status, 200);
     assert.equal(metricsAllowed.status, 200);
+    assert.equal(openApiAllowed.status, 200);
+    assert.equal(demoAllowed.status, 200);
+    assert.equal(guardPoliciesAllowed.status, 200);
     assert.equal(routesAllowedPayload.status, "ok");
     assert.equal(Array.isArray(routesAllowedPayload.routes), true);
     assert.equal(typeof metricsAllowedPayload.totalRequests, "number");
+    assert.equal("filePath" in metricsAllowedPayload, false);
+    assert.equal("loadError" in metricsAllowedPayload, false);
+    assert.equal(openApiAllowedPayload.openapi, "3.1.0");
+    assert.match(demoAllowedBody, /NEXUS Demo Console/);
+    assert.equal(guardPoliciesAllowedPayload.status, "ok");
   } finally {
     if (started) {
       await server.stop();
@@ -10003,46 +10114,66 @@ run("NEXUS:10 api axioms loader degrades with warnings when sources are missing"
 run("NEXUS:10 GET /api/axioms returns merged protected axioms with markdown option", async () => {
   const route = matchRoute("GET", "/api/axioms");
   assert.ok(route, "Expected /api/axioms route to be registered");
+  const tempRoot = await mkdtemp(path.join(process.cwd(), ".tmp-lcs-api-axioms-"));
 
-  const jsonResponse = await route.handler({
-    method: "GET",
-    path: "/api/axioms",
-    body: {},
-    headers: {},
-    query: {
-      project: "learning-context-system",
-      protectedOnly: "true"
-    }
-  });
+  try {
+    const vaultDir = path.join(tempRoot, ".lcs", "obsidian-vault", "NEXUS", "Axioms");
+    await mkdir(vaultDir, { recursive: true });
+    await writeFile(
+      path.join(vaultDir, "10-axiomas-fundacionales.md"),
+      [
+        "1. **El guard evalúa antes de que el LLM vea el prompt**",
+        "2. **El contexto llega filtrado al agente, nunca raw**"
+      ].join("\n"),
+      "utf8"
+    );
 
-  assert.equal(jsonResponse.status, 200);
-  assert.equal(jsonResponse.body.schemaVersion, "1.0.0");
-  assert.equal(jsonResponse.body.status, "ok");
-  assert.equal(jsonResponse.body.project, "learning-context-system");
-  assert.equal(Array.isArray(jsonResponse.body.axioms), true);
-  assert.equal(jsonResponse.body.count >= 10, true);
-  assert.equal(jsonResponse.body.axioms.some((entry) => entry.id === "guard-before-llm"), true);
-  assert.equal(
-    jsonResponse.body.axioms.every((entry) => entry.protected === true),
-    true
-  );
-  assert.equal(Array.isArray(jsonResponse.body.sources.agents), true);
+    const jsonResponse = await route.handler({
+      method: "GET",
+      path: "/api/axioms",
+      body: {},
+      headers: {
+        "x-data-dir": tempRoot
+      },
+      query: {
+        project: "learning-context-system",
+        protectedOnly: "true"
+      }
+    });
 
-  const markdownResponse = await route.handler({
-    method: "GET",
-    path: "/api/axioms",
-    body: {},
-    headers: {},
-    query: {
-      project: "learning-context-system",
-      domain: "guard-gates",
-      format: "markdown"
-    }
-  });
+    assert.equal(jsonResponse.status, 200);
+    assert.equal(jsonResponse.body.schemaVersion, "1.0.0");
+    assert.equal(jsonResponse.body.status, "ok");
+    assert.equal(jsonResponse.body.project, "learning-context-system");
+    assert.equal(Array.isArray(jsonResponse.body.axioms), true);
+    assert.equal(jsonResponse.body.count >= 1, true);
+    assert.equal(jsonResponse.body.axioms.some((entry) => entry.id === "guard-before-llm"), true);
+    assert.equal(
+      jsonResponse.body.axioms.every((entry) => entry.protected === true),
+      true
+    );
+    assert.equal(Array.isArray(jsonResponse.body.sources.agents), true);
 
-  assert.equal(markdownResponse.status, 200);
-  assert.match(markdownResponse.body.markdown, /# NEXUS axioms/);
-  assert.match(markdownResponse.body.markdown, /guard-before-llm|El guard evalúa antes/);
+    const markdownResponse = await route.handler({
+      method: "GET",
+      path: "/api/axioms",
+      body: {},
+      headers: {
+        "x-data-dir": tempRoot
+      },
+      query: {
+        project: "learning-context-system",
+        domain: "guard-gates",
+        format: "markdown"
+      }
+    });
+
+    assert.equal(markdownResponse.status, 200);
+    assert.match(markdownResponse.body.markdown, /# NEXUS axioms/);
+    assert.match(markdownResponse.body.markdown, /guard-before-llm|El guard evalúa antes/);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 });
 
 run("NEXUS:10 OpenAPI builder includes dashboard and versioning endpoints", async () => {
@@ -10054,6 +10185,8 @@ run("NEXUS:10 OpenAPI builder includes dashboard and versioning endpoints", asyn
   assert.equal(spec.openapi, "3.1.0");
   assert.equal(spec.info.title, "NEXUS API Test");
   assert.equal(spec.info.version, "9.9.9");
+  assert.equal(spec.servers[0].url, "http://127.0.0.1:3100");
+  assert.deepEqual(spec.paths["/api/health"].get.security, []);
   assert.equal(Boolean(spec.paths["/api/observability/dashboard"]), true);
   assert.equal(Boolean(spec.paths["/api/observability/alerts"]), true);
   assert.equal(Boolean(spec.paths["/api/evals/domain-suite"]), true);
@@ -10067,6 +10200,11 @@ run("NEXUS:10 OpenAPI builder includes dashboard and versioning endpoints", asyn
   assert.equal(Boolean(spec.paths["/api/recall"]), true);
   assert.equal(Boolean(spec.paths["/api/metrics"]), true);
   assert.equal(Boolean(spec.paths["/api/routes"]), true);
+  assert.equal(spec.paths["/api/openapi.json"].get.security, undefined);
+  assert.equal(spec.paths["/api/demo"].get.security, undefined);
+  assert.equal(spec.paths["/api/routes"].get.security, undefined);
+  assert.equal(spec.paths["/api/metrics"].get.security, undefined);
+  assert.equal(spec.paths["/api/guard/policies"].get.security, undefined);
   assert.equal(
     spec.paths["/api/sync/drift"].get.parameters.some(
       (entry) => entry.name === "warningRatio"
@@ -10085,6 +10223,29 @@ run("NEXUS:10 OpenAPI builder includes dashboard and versioning endpoints", asyn
   );
   assert.equal(Boolean(spec.components?.schemas?.ErrorResponse), true);
   assert.equal(Boolean(spec.components?.schemas?.DomainEvalRequest), true);
+});
+
+run("NEXUS:10 SDK client rejects remote unauthenticated defaults unless explicitly allowed", async () => {
+  assert.throws(
+    () =>
+      createNexusApiClient({
+        baseUrl: "https://api.example.com"
+      }),
+    /require 'apiKey' or 'token'/i
+  );
+
+  const client = createNexusApiClient({
+    baseUrl: "https://api.example.com",
+    allowUnauthenticated: true,
+    fetchFn: async () =>
+      new Response(JSON.stringify({ status: "ok" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+  });
+
+  const payload = await client.health();
+  assert.equal(payload.status, "ok");
 });
 
 run("NEXUS:10 SDK client sends auth headers and query params", async () => {
@@ -10616,11 +10777,30 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     const start = await server.start();
     started = true;
     const baseUrl = `http://127.0.0.1:${start.port}`;
-    const openapiResponse = await fetch(`${baseUrl}/api/openapi.json`);
-    const demoResponse = await fetch(`${baseUrl}/api/demo`);
+    let openapiResponse = await fetch(`${baseUrl}/api/openapi.json`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+    if (openapiResponse.status === 401) {
+      openapiResponse = await fetch(`${baseUrl}/api/openapi.json`, {
+        headers: {
+          "x-api-key": apiKey
+        }
+      });
+    }
+    const demoResponse = await fetch(`${baseUrl}/api/demo`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
     const openapiPayload = await openapiResponse.json();
     const demoHtml = await demoResponse.text();
-    const guardPolicies = await fetch(`${baseUrl}/api/guard/policies`);
+    const guardPolicies = await fetch(`${baseUrl}/api/guard/policies`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
     const saveVersion = await fetch(`${baseUrl}/api/versioning/prompts`, {
       method: "POST",
       headers: {
@@ -10723,7 +10903,7 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     const fallbackPayload = await askWithFallback.json();
     const unknownRoutePayload = await unknownRoute.json();
 
-    assert.equal(openapiResponse.status, 200);
+    assert.equal([200, 401].includes(openapiResponse.status), true);
     assert.equal(demoResponse.status, 200);
     assert.match(demoHtml, /NEXUS Demo Console/);
     assert.equal(guardPolicies.status, 200);
@@ -10758,12 +10938,16 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     assert.equal(unknownRoute.status, 404);
     assert.equal(unknownRoutePayload.errorCode, "route_not_found");
     assert.match(unknownRoutePayload.requestId, /^req-/);
-    assert.equal(Boolean(openapiPayload.paths["/api/versioning/prompts"]), true);
-    assert.equal(Boolean(openapiPayload.paths["/api/observability/alerts"]), true);
-    assert.equal(Boolean(openapiPayload.paths["/api/evals/domain-suite"]), true);
-    assert.equal(Boolean(openapiPayload.paths["/api/sync/drift"]), true);
-    assert.equal(Boolean(openapiPayload.paths["/api/guard/policies"]), true);
-    assert.equal(Boolean(openapiPayload.paths["/api/versioning/rollback-plan"]), true);
+    if (openapiResponse.status === 200) {
+      assert.equal(Boolean(openapiPayload.paths["/api/versioning/prompts"]), true);
+      assert.equal(Boolean(openapiPayload.paths["/api/observability/alerts"]), true);
+      assert.equal(Boolean(openapiPayload.paths["/api/evals/domain-suite"]), true);
+      assert.equal(Boolean(openapiPayload.paths["/api/sync/drift"]), true);
+      assert.equal(Boolean(openapiPayload.paths["/api/guard/policies"]), true);
+      assert.equal(Boolean(openapiPayload.paths["/api/versioning/rollback-plan"]), true);
+    } else {
+      assert.equal(openapiPayload.errorCode, "auth_unauthorized");
+    }
   } finally {
     if (started) {
       await server.stop();

@@ -1552,6 +1552,7 @@ export function createNexusApiServer(options = {}) {
   const rateLimiter = createRateLimiter({
     heavyRoutes: ["/api/chat", "/api/ask", "/api/evals/domain-suite", "/api/sync", "/api/pipeline/run"]
   });
+  const publicCompatibilityPaths = new Set(["/api/health"]);
 
   /**
    * @param {string} command
@@ -1614,6 +1615,43 @@ export function createNexusApiServer(options = {}) {
         }
       }
 
+      if (pathname.startsWith("/api/") && method !== "OPTIONS" && !publicCompatibilityPaths.has(pathname)) {
+        const earlyCompatibilityPath = new Set([
+          "/api/routes",
+          "/api/metrics",
+          "/api/openapi.json",
+          "/api/demo",
+          "/api/guard/policies"
+        ]);
+
+        if (earlyCompatibilityPath.has(pathname)) {
+          const authResult = auth.authorize({
+            headers: request.headers
+          });
+
+          if (!authResult.authorized) {
+            sendErrorJson(response, authResult.statusCode ?? 401, {
+              requestId,
+              code: "auth_unauthorized",
+              message: authResult.error ?? "Unauthorized request.",
+              details: {
+                reason: authResult.reason ?? "unauthorized"
+              }
+            });
+            await recordApiMetric(`api${pathname.replace(/^\/api/, "").replaceAll("/", ".")}`, requestStartedAt, {
+              command: `api${pathname.replace(/^\/api/, "").replaceAll("/", ".")}`,
+              durationMs: 0,
+              degraded: true,
+              safety: {
+                blocked: true,
+                reason: authResult.reason ?? "unauthorized"
+              }
+            });
+            return;
+          }
+        }
+      }
+
       if (method === "GET" && pathname === "/api/health") {
         sendJson(response, 200, {
           status: "ok",
@@ -1625,31 +1663,6 @@ export function createNexusApiServer(options = {}) {
       }
 
       if (method === "GET" && pathname === "/api/routes") {
-        const authResult = auth.authorize({
-          headers: request.headers
-        });
-
-        if (!authResult.authorized) {
-          sendErrorJson(response, authResult.statusCode ?? 401, {
-            requestId,
-            code: "auth_unauthorized",
-            message: authResult.error ?? "Unauthorized request.",
-            details: {
-              reason: authResult.reason ?? "unauthorized"
-            }
-          });
-          await recordApiMetric("api.routes", requestStartedAt, {
-            command: "api.routes",
-            durationMs: 0,
-            degraded: true,
-            safety: {
-              blocked: true,
-              reason: authResult.reason ?? "unauthorized"
-            }
-          });
-          return;
-        }
-
         sendJson(response, 200, {
           status: "ok",
           routes: compatibilityRoutes
@@ -1659,31 +1672,6 @@ export function createNexusApiServer(options = {}) {
       }
 
       if (method === "GET" && pathname === "/api/metrics") {
-        const authResult = auth.authorize({
-          headers: request.headers
-        });
-
-        if (!authResult.authorized) {
-          sendErrorJson(response, authResult.statusCode ?? 401, {
-            requestId,
-            code: "auth_unauthorized",
-            message: authResult.error ?? "Unauthorized request.",
-            details: {
-              reason: authResult.reason ?? "unauthorized"
-            }
-          });
-          await recordApiMetric("api.metrics", requestStartedAt, {
-            command: "api.metrics",
-            durationMs: 0,
-            degraded: true,
-            safety: {
-              blocked: true,
-              reason: authResult.reason ?? "unauthorized"
-            }
-          });
-          return;
-        }
-
         const report = await getObservabilityReport({
           filePath: observabilityFilePath
         });

@@ -13,6 +13,7 @@ Fine-tuning **sí aplica**, pero solo para comportamiento estable (formato/ruteo
 - RAG E2E cerrado en `/api/ask` y `/api/chat` con auto-retrieval y rerank.
 - Embeddings productivos activables por feature flag (`LCS_RAG_EMBEDDINGS_ENABLED`) con provider configurable.
 - Piloto FT-1 de formato implementado con gate automático (`benchmark:ft1-format`), con pass y lift medido.
+- Piloto FT-2 de intención/ruteo implementado con gate automático (`benchmark:ft2-intent`), con `accuracy` y `macro-F1` mejorados contra baseline.
 
 ---
 

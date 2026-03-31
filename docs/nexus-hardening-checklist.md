@@ -1,7 +1,7 @@
 # NEXUS Hardening + SDD + Noise/RAG/FT Checklist (v5)
 
 **Fecha base:** 2026-03-30  
-**Última revisión:** 2026-03-31 (piloto FT-1 + gate automático de formato)
+**Última revisión:** 2026-03-31 (piloto FT-2 + gate automático de intent routing)
 
 ---
 
@@ -13,6 +13,14 @@
 - [x] `suitePath` traversal bloqueado en rutas JS y TS (`/api/eval`, `/api/rollback-check`, `/api/evals/domain-suite`).
 - [x] Error body demasiado grande devuelve `413` (`readJsonBody` y `router.parseRequestBody`).
 - [x] Runtime de `/api/agent` local-first operativo (sin dependencia externa obligatoria).
+- [x] `/api/ingest` queda confinado al workspace root.
+- [x] `/api/routes`, `/api/metrics`, `/api/openapi.json`, `/api/demo` y `/api/guard/policies` requieren auth en runtimes protegidos.
+- [x] CSP base + COOP/CORP/OAC/X-Permitted headers activos en el borde HTTP.
+- [x] JWT endurecido con `iss`/`aud`/`nbf`/`iat` + skew configurable.
+- [x] errores HTTP del CLI salen sanitizados (sin `stdout`/`stderr`/`stack` crudos).
+- [x] compatibilidad Windows sin `cmd.exe` en `project-ops` y batería legacy Engram.
+- [x] `code-gate` usa allowlist mínima de env para procesos hijos.
+- [x] OpenAPI/demo/SDK alineados con el modelo auth-first del runtime.
 
 ### Contexto limpio + SDD
 - [x] Feature flag `LCS_CONTEXT_MODE=clean`.
@@ -107,7 +115,7 @@ Reducir degradación por acumulación temporal y mantener señal estable en sesi
 
 ### Sí aplicar FT
 - [x] **FT-1 (Alta):** piloto de formato estable (Change/Reason/Concepts/Practice) con gate automático (`benchmark:ft1-format`) + thresholds de lift.
-- [ ] **FT-2 (Alta):** clasificador de intención/ruteo.
+- [x] **FT-2 (Alta):** piloto de clasificador de intención/ruteo con gate automático (`benchmark:ft2-intent`) y métricas de `accuracy` + `macro-F1` + `lift`.
 - [ ] **FT-3 (Media):** clasificador de riesgo previo al guard.
 - [ ] **FT-4 (Media):** query rewriting controlado para retrieval.
 
@@ -146,7 +154,7 @@ Reducir degradación por acumulación temporal y mantener señal estable en sesi
 - [x] P1-15.
 
 ### Fase C (evolución)
-- [ ] Cerrar pendientes de evolución: FT-2, FT-3, FT-4 y pipeline de etiquetado versionado.
+- [ ] Cerrar pendientes de evolución: FT-3, FT-4 y pipeline de etiquetado versionado.
 
 ---
 

@@ -113,6 +113,10 @@ jobs:
         if: matrix.node-version == 20
         run: npm run benchmark:ft1-format
 
+      - name: Run FT-2 intent routing gate
+        if: matrix.node-version == 20
+        run: npm run benchmark:ft2-intent
+
       - name: Run security pipeline quality gate
         run: npm run security:pipeline:example
 

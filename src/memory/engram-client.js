@@ -36,11 +36,19 @@ const execFile = promisify(execFileCallback);
  */
 export function resolveEngramConfig(options = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
+  const windowsAbsolutePattern = /^[a-zA-Z]:[\\/]/u;
+  const binaryInput = options.binaryPath ?? process.env.ENGRAM_BIN ?? "tools/engram/engram.exe";
+  const dataDirInput = options.dataDir ?? process.env.ENGRAM_DATA_DIR ?? ".engram";
   const binaryPath = path.resolve(
-    cwd,
-    options.binaryPath ?? process.env.ENGRAM_BIN ?? "tools/engram/engram.exe"
+    path.isAbsolute(binaryInput) || windowsAbsolutePattern.test(binaryInput)
+      ? binaryInput
+      : path.join(cwd, binaryInput)
   );
-  const dataDir = path.resolve(cwd, options.dataDir ?? process.env.ENGRAM_DATA_DIR ?? ".engram");
+  const dataDir = path.resolve(
+    path.isAbsolute(dataDirInput) || windowsAbsolutePattern.test(dataDirInput)
+      ? dataDirInput
+      : path.join(cwd, dataDirInput)
+  );
 
   return {
     cwd,
@@ -249,12 +257,14 @@ export function searchOutputToChunks(raw, options = {}) {
  *   cwd?: string,
  *   binaryPath?: string,
  *   dataDir?: string,
- *   exec?: ExecFunction
+ *   exec?: ExecFunction,
+ *   platform?: NodeJS.Platform
  * }} [options]
  */
 export function createEngramClient(options = {}) {
   const config = resolveEngramConfig(options);
   const runCommand = options.exec ?? defaultExec;
+  const runtimePlatform = options.platform ?? process.platform;
 
   /**
    * @param {string[]} args
@@ -274,7 +284,7 @@ export function createEngramClient(options = {}) {
       try {
         result = await runCommand(config.binaryPath, args, executionOptions);
       } catch (error) {
-        if (process.platform !== "win32" || !isSpawnPermissionError(error)) {
+        if (runtimePlatform !== "win32" || !isSpawnPermissionError(error)) {
           throw error;
         }
         const permissionError = new Error(
@@ -311,7 +321,7 @@ export function createEngramClient(options = {}) {
           ? normalizeExecText(error.stderr)
           : "";
       const permissionFix =
-        process.platform === "win32" && isSpawnPermissionError(error)
+        runtimePlatform === "win32" && isSpawnPermissionError(error)
           ? "Fix: unblock or reauthorize the Engram battery binary; NEXUS no longer falls back through cmd.exe."
           : "";
 
