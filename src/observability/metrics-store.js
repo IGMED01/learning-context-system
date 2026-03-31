@@ -15,6 +15,19 @@ const DEFAULT_OBSERVABILITY_FILE = ".lcs/observability.json";
  *     selectedCount?: number,
  *     suppressedCount?: number
  *   },
+ *   sdd?: {
+ *     enabled?: boolean,
+ *     requiredKinds?: number,
+ *     coveredKinds?: number,
+ *     injectedKinds?: number,
+ *     skippedReasons?: string[]
+ *   },
+ *   teaching?: {
+ *     enabled?: boolean,
+ *     sectionsPresent?: number,
+ *     sectionsExpected?: number,
+ *     hasPractice?: boolean
+ *   },
  *   recall?: {
  *     attempted?: boolean,
  *     status?: string,
@@ -74,6 +87,19 @@ function defaultStore() {
       suppressedTotal: 0,
       samples: 0
     },
+    sdd: {
+      samples: 0,
+      requiredKindsTotal: 0,
+      coveredKindsTotal: 0,
+      injectedKindsTotal: 0,
+      bySkippedReason: {}
+    },
+    teaching: {
+      samples: 0,
+      sectionsPresentTotal: 0,
+      sectionsExpectedTotal: 0,
+      practiceCount: 0
+    },
     safety: {
       blockedRuns: 0,
       preventedErrors: 0,
@@ -99,6 +125,8 @@ function normalizedStore(record) {
   const totals = asRecord(record.totals);
   const recall = asRecord(record.recall);
   const selection = asRecord(record.selection);
+  const sdd = asRecord(record.sdd);
+  const teaching = asRecord(record.teaching);
   const safety = asRecord(record.safety);
   const commands = asRecord(record.commands);
 
@@ -129,6 +157,19 @@ function normalizedStore(record) {
       selectedTotal: toFiniteNumber(selection.selectedTotal),
       suppressedTotal: toFiniteNumber(selection.suppressedTotal),
       samples: toFiniteNumber(selection.samples)
+    },
+    sdd: {
+      samples: toFiniteNumber(sdd.samples),
+      requiredKindsTotal: toFiniteNumber(sdd.requiredKindsTotal),
+      coveredKindsTotal: toFiniteNumber(sdd.coveredKindsTotal),
+      injectedKindsTotal: toFiniteNumber(sdd.injectedKindsTotal),
+      bySkippedReason: asRecord(sdd.bySkippedReason)
+    },
+    teaching: {
+      samples: toFiniteNumber(teaching.samples),
+      sectionsPresentTotal: toFiniteNumber(teaching.sectionsPresentTotal),
+      sectionsExpectedTotal: toFiniteNumber(teaching.sectionsExpectedTotal),
+      practiceCount: toFiniteNumber(teaching.practiceCount)
     },
     safety: {
       blockedRuns: toFiniteNumber(safety.blockedRuns),
@@ -224,6 +265,56 @@ function applyMetric(store, metric) {
     store.selection.samples += 1;
     store.selection.selectedTotal += selectedCount;
     store.selection.suppressedTotal += suppressedCount;
+  }
+
+  if (metric.sdd?.enabled) {
+    const requiredKinds = Math.max(
+      0,
+      Math.round(toFiniteNumber(metric.sdd.requiredKinds))
+    );
+    const coveredKinds = Math.max(
+      0,
+      Math.min(requiredKinds, Math.round(toFiniteNumber(metric.sdd.coveredKinds)))
+    );
+    const injectedKinds = Math.max(
+      0,
+      Math.round(toFiniteNumber(metric.sdd.injectedKinds))
+    );
+    const skippedReasons = Array.isArray(metric.sdd.skippedReasons)
+      ? metric.sdd.skippedReasons
+          .filter((entry) => typeof entry === "string" && entry.trim())
+          .map((entry) => entry.trim())
+      : [];
+    const bySkippedReason = asRecord(store.sdd.bySkippedReason);
+
+    store.sdd.samples += 1;
+    store.sdd.requiredKindsTotal += requiredKinds;
+    store.sdd.coveredKindsTotal += coveredKinds;
+    store.sdd.injectedKindsTotal += injectedKinds;
+    store.sdd.bySkippedReason = bySkippedReason;
+
+    for (const reason of skippedReasons) {
+      bySkippedReason[reason] = toFiniteNumber(bySkippedReason[reason]) + 1;
+    }
+  }
+
+  if (metric.teaching?.enabled) {
+    const sectionsExpected = Math.max(
+      0,
+      Math.round(toFiniteNumber(metric.teaching.sectionsExpected))
+    );
+    const sectionsPresent = Math.max(
+      0,
+      Math.min(sectionsExpected, Math.round(toFiniteNumber(metric.teaching.sectionsPresent)))
+    );
+    const hasPractice = metric.teaching.hasPractice === true;
+
+    store.teaching.samples += 1;
+    store.teaching.sectionsPresentTotal += sectionsPresent;
+    store.teaching.sectionsExpectedTotal += sectionsExpected;
+    if (hasPractice) {
+      store.teaching.practiceCount += 1;
+    }
   }
 
   if (metric.recall?.attempted) {
@@ -334,7 +425,18 @@ export async function getObservabilityReport(options = {}) {
   const totals = loaded.store.totals;
   const recall = loaded.store.recall;
   const selection = loaded.store.selection;
+  const sdd = loaded.store.sdd;
+  const teaching = loaded.store.teaching;
   const safety = loaded.store.safety;
+  const sddCoverageRate = sdd.requiredKindsTotal
+    ? round(sdd.coveredKindsTotal / sdd.requiredKindsTotal)
+    : 0;
+  const teachingCoverageRate = teaching.sectionsExpectedTotal
+    ? round(teaching.sectionsPresentTotal / teaching.sectionsExpectedTotal)
+    : 0;
+  const teachingPracticeRate = teaching.samples
+    ? round(teaching.practiceCount / teaching.samples)
+    : 0;
 
   return {
     schemaVersion: OBSERVABILITY_SCHEMA_VERSION,
@@ -369,6 +471,31 @@ export async function getObservabilityReport(options = {}) {
       averageSuppressed: selection.samples
         ? round(selection.suppressedTotal / selection.samples)
         : 0
+    },
+    sdd: {
+      samples: sdd.samples,
+      requiredKindsTotal: sdd.requiredKindsTotal,
+      coveredKindsTotal: sdd.coveredKindsTotal,
+      injectedKindsTotal: sdd.injectedKindsTotal,
+      coverageRate: sddCoverageRate,
+      bySkippedReason: sdd.bySkippedReason,
+      metrics: {
+        sdd_coverage_rate: sddCoverageRate,
+        sdd_injected_kinds: sdd.injectedKindsTotal,
+        sdd_skipped_reason: sdd.bySkippedReason
+      }
+    },
+    teaching: {
+      samples: teaching.samples,
+      sectionsPresentTotal: teaching.sectionsPresentTotal,
+      sectionsExpectedTotal: teaching.sectionsExpectedTotal,
+      practiceCount: teaching.practiceCount,
+      coverageRate: teachingCoverageRate,
+      practiceRate: teachingPracticeRate,
+      metrics: {
+        teaching_coverage_rate: teachingCoverageRate,
+        teaching_practice_rate: teachingPracticeRate
+      }
     },
     safety: {
       blockedRuns: safety.blockedRuns,

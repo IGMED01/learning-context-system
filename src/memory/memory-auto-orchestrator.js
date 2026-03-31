@@ -4,7 +4,7 @@
  * Memory Auto-Orchestrator — provider-agnostic memory recall and auto-remember logic.
  *
  * Previously "engram-auto-orchestrator.js" — now fully decoupled from Engram.
- * Works with any MemoryProvider (Ruflo HNSW, local JSONL, axiom-store, or future vector-store).
+ * Works with any MemoryProvider (local JSONL, axiom-store, semantic tier, or future vector-store).
  */
 
 import {
@@ -38,6 +38,19 @@ import { resolveTeachRecall } from "./teach-recall.js";
  *   selectedSources: string[],
  *   project?: string,
  *   recallState: MemoryRecallState,
+ *   selectionDiagnostics?: {
+ *     selectorStatus?: string,
+ *     selectorReason?: string,
+ *     selectedCount?: number,
+ *     suppressedCount?: number,
+ *     suppressionReasons?: Record<string, number>,
+ *     sdd?: Record<string, unknown>
+ *   },
+ *   axiomDiagnostics?: {
+ *     status?: string,
+ *     count?: number,
+ *     reason?: string
+ *   },
  *   memoryType?: string,
  *   memoryScope?: string,
  *   security?: AutoMemorySecurityOptions
@@ -175,6 +188,26 @@ export function buildTeachAutoRememberPayload(input) {
   const changedFiles = sanitizePathList(input.changedFiles, securityPolicy);
   const topSources = sanitizePathList(input.selectedSources.slice(0, 4), securityPolicy);
   const sensitivePathCount = changedFiles.sensitivePathCount + topSources.sensitivePathCount;
+  const selectionDiagnostics = input.selectionDiagnostics ?? {};
+  const suppressionReasons =
+    selectionDiagnostics.suppressionReasons &&
+    typeof selectionDiagnostics.suppressionReasons === "object"
+      ? Object.entries(selectionDiagnostics.suppressionReasons)
+          .map(([reason, count]) => `${reason}=${count}`)
+          .join(", ")
+      : "none";
+  const axiomDiagnostics = input.axiomDiagnostics ?? {};
+  const sddCoverage =
+    selectionDiagnostics.sdd &&
+    typeof selectionDiagnostics.sdd === "object" &&
+    selectionDiagnostics.sdd !== null &&
+    typeof selectionDiagnostics.sdd.coverage === "object"
+      ? Object.entries(
+          /** @type {{ coverage?: Record<string, boolean> }} */ (selectionDiagnostics.sdd).coverage ?? {}
+        )
+          .map(([kind, covered]) => `${kind}=${covered ? "yes" : "no"}`)
+          .join(", ") || "none"
+      : "none";
 
   const rawContent = [
     "## Teach Auto Memory",
@@ -186,7 +219,16 @@ export function buildTeachAutoRememberPayload(input) {
     `- Recall query: ${recall.query || "none"}`,
     `- Recovered chunks: ${recall.recoveredChunks}`,
     `- Selected recalled chunks: ${recall.selectedChunks}`,
-    `- Top selected context sources: ${topSources.values.join(", ") || "none"}`
+    `- Top selected context sources: ${topSources.values.join(", ") || "none"}`,
+    `- Selector status: ${selectionDiagnostics.selectorStatus || "unknown"}`,
+    `- Selector reason: ${selectionDiagnostics.selectorReason || "none"}`,
+    `- Selected context count: ${selectionDiagnostics.selectedCount ?? "n/a"}`,
+    `- Suppressed context count: ${selectionDiagnostics.suppressedCount ?? "n/a"}`,
+    `- Suppression reasons: ${suppressionReasons}`,
+    `- SDD coverage: ${sddCoverage}`,
+    `- Axiom injection: ${axiomDiagnostics.status || "none"}`,
+    `- Axiom count: ${axiomDiagnostics.count ?? 0}`,
+    `- Axiom reason: ${axiomDiagnostics.reason || "none"}`
   ].join("\n");
 
   const redaction = redactSensitiveContent(rawContent, securityPolicy);

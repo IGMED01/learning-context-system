@@ -1,0 +1,62 @@
+{
+  "suite": "ft1-format-pilot-v1",
+  "thresholds": {
+    "minCasePassRate": 0.9,
+    "minCandidateSectionCoverage": 0.95,
+    "minCandidatePracticeRate": 0.95,
+    "minCandidateHeadingCoverage": 0.95,
+    "minCoverageLift": 0.45,
+    "minPracticeLift": 0.45
+  },
+  "cases": [
+    {
+      "id": "ft1-001",
+      "task": "hardening auth middleware",
+      "baselineOutput": "Se movió la validación JWT al borde de request para cortar sesiones inválidas antes de llegar al handler. Te sugiero agregar un test de token vencido.",
+      "candidateOutput": "Change:\nSe movió la validación JWT al borde de request.\nReason:\nEvita ejecutar lógica de negocio con sesiones inválidas.\nConcepts:\n- request boundary\n- fail-fast auth\nPractice:\nAgrega un test que valide 401 cuando el token está expirado."
+    },
+    {
+      "id": "ft1-002",
+      "task": "unificar contratos api ask/chat",
+      "baselineOutput": "Se unificó la validación de chunks para evitar drift entre ask y chat. Debes validar un caso con payload inválido.",
+      "candidateOutput": "Change:\nSe unificó la validación de chunks entre /api/ask y /api/chat.\nReason:\nReduce drift contractual y evita errores 500 por payload inválido.\nConcepts:\n- contrato de entrada\n- validación defensiva\nPractice:\nEnvía chunks inválidos a ambos endpoints y confirma status 400."
+    },
+    {
+      "id": "ft1-003",
+      "task": "routing q&a con memoria",
+      "baselineOutput": "Para Q&A conviene /api/ask con RAG porque da mejor trazabilidad; revisa el contexto y métricas.",
+      "candidateOutput": "Change:\nSe recomienda usar /api/ask para Q&A con memoria.\nReason:\nEntrega respuesta estructurada y trazabilidad de contexto recuperado.\nConcepts:\n- endpoint fit\n- retrieval-first\nPractice:\nCompara /api/ask y /api/chat con la misma consulta y revisa context.rag."
+    },
+    {
+      "id": "ft1-004",
+      "task": "path traversal suitePath",
+      "baselineOutput": "Bloqueamos traversal fuera del workspace para evitar lectura arbitraria. Probar con ../x.json.",
+      "candidateOutput": "Change:\nSe bloqueó suitePath fuera del workspace.\nReason:\nEvita path traversal y lectura arbitraria del filesystem.\nConcepts:\n- canonicalización de path\n- frontera de workspace\nPractice:\nLlama POST /api/eval con suitePath '../x.json' y valida 400."
+    },
+    {
+      "id": "ft1-005",
+      "task": "body gigante",
+      "baselineOutput": "Ahora hay límite de tamaño de body para reducir riesgo de abuso. Hacer prueba con payload grande.",
+      "candidateOutput": "Change:\nSe limitó el tamaño máximo del body por request.\nReason:\nMitiga abuso de recursos y ataques básicos de saturación.\nConcepts:\n- request size limits\n- resiliencia API\nPractice:\nEnvía un body gigante al endpoint y confirma respuesta 413."
+    },
+    {
+      "id": "ft1-006",
+      "task": "summary incremental conversación",
+      "baselineOutput": "Se compacta el historial por lotes para reducir ruido y mantener contexto útil con el tiempo.",
+      "candidateOutput": "Change:\nSe activó summary incremental cada N turnos.\nReason:\nReduce acumulación de ruido sin perder información ancla.\nConcepts:\n- context half-life\n- compresión incremental\nPractice:\nSimula 40 turnos y compara noise_ratio antes y después."
+    },
+    {
+      "id": "ft1-007",
+      "task": "reranker rag",
+      "baselineOutput": "El reranker prioriza chunks más relevantes antes del prompt final. Mide recall con y sin rerank.",
+      "candidateOutput": "Change:\nSe aplica reranker semántico antes del prompt final.\nReason:\nSube la relevancia de chunks y mejora grounding de respuesta.\nConcepts:\n- retrieval score\n- semantic rerank\nPractice:\nEjecuta benchmark retrieval-first con rerank on/off y compara nDCG@k."
+    },
+    {
+      "id": "ft1-008",
+      "task": "sdd fail fast",
+      "baselineOutput": "Con runGate=true se bloquea ejecución cuando cobertura SDD es insuficiente; conviene subir umbral para casos críticos.",
+      "candidateOutput": "Change:\nSe habilitó fail-fast SDD con runGate=true.\nReason:\nImpide ejecutar agentes con contexto incompleto en tareas críticas.\nConcepts:\n- quality gates\n- coverage threshold\nPractice:\nAumenta LCS_AGENT_SDD_MIN_COVERAGE y valida que el agente quede bloqueado."
+    }
+  ]
+}
+

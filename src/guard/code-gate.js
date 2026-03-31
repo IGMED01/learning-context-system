@@ -31,6 +31,69 @@ const execFile = promisify(execFileCallback);
 /** @typedef {import("../types/core-contracts.d.ts").CodeGateResult} CodeGateResult */
 
 const GATE_TIMEOUT_MS = 60000;
+const CHILD_ENV_ALLOWLIST = [
+  "PATH",
+  "Path",
+  "PATHEXT",
+  "SystemRoot",
+  "SYSTEMROOT",
+  "windir",
+  "WINDIR",
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "TMP",
+  "TEMP",
+  "TMPDIR",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "ProgramFiles",
+  "ProgramFiles(x86)",
+  "ProgramW6432",
+  "TERM",
+  "CI",
+  "FORCE_COLOR",
+  "NO_COLOR",
+  "LANG",
+  "LC_ALL",
+  "npm_execpath",
+  "npm_node_execpath",
+  "npm_config_userconfig",
+  "npm_config_cache",
+  "npm_config_prefix",
+  "npm_config_ignore_scripts",
+  "npm_config_registry"
+];
+
+/**
+ * Build a minimal environment for code-gate child processes.
+ * Keep only execution-critical variables and explicit overrides.
+ *
+ * @param {Record<string, string>} [overrides]
+ * @returns {NodeJS.ProcessEnv}
+ */
+export function buildCodeGateEnv(overrides = {}) {
+  /** @type {NodeJS.ProcessEnv} */
+  const env = {};
+
+  for (const key of CHILD_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.length > 0) {
+      env[key] = value;
+    }
+  }
+
+  for (const [key, value] of Object.entries(overrides)) {
+    if (typeof value === "string" && value.length > 0) {
+      env[key] = value;
+    } else {
+      delete env[key];
+    }
+  }
+
+  return env;
+}
 
 // ── File existence helpers ────────────────────────────────────────────────────
 
@@ -244,7 +307,12 @@ async function runTypecheck(cwd, pkg) {
     const { stdout, stderr } = await execFile(
       "npx",
       ["tsc", "--noEmit", "--pretty", "false"],
-      { cwd, timeout: GATE_TIMEOUT_MS, shell: false }
+      {
+        cwd,
+        timeout: GATE_TIMEOUT_MS,
+        shell: false,
+        env: buildCodeGateEnv()
+      }
     );
 
     const combined = [String(stdout ?? ""), String(stderr ?? "")].join("\n");
@@ -302,7 +370,8 @@ async function runLint(cwd, pkg) {
     const { stdout, stderr } = await execFile("npm", args, {
       cwd,
       timeout: GATE_TIMEOUT_MS,
-      shell: false
+      shell: false,
+      env: buildCodeGateEnv()
     });
 
     const combined = String(stdout ?? "");
@@ -353,7 +422,8 @@ async function runBuild(cwd, pkg) {
     const { stdout, stderr } = await execFile("npm", ["run", "build"], {
       cwd,
       timeout: GATE_TIMEOUT_MS * 2,
-      shell: false
+      shell: false,
+      env: buildCodeGateEnv()
     });
 
     const combined = [String(stdout ?? ""), String(stderr ?? "")].join("\n");
@@ -405,7 +475,7 @@ async function runTests(cwd, pkg) {
       cwd,
       timeout: GATE_TIMEOUT_MS * 3,
       shell: false,
-      env: { ...process.env, NODE_ENV: "test" }
+      env: buildCodeGateEnv({ NODE_ENV: "test" })
     });
 
     const combined = [String(stdout ?? ""), String(stderr ?? "")].join("\n");

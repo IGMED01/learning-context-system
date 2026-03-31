@@ -96,25 +96,6 @@ function isSpawnPermissionError(error) {
 }
 
 /**
- * @param {string} value
- */
-function quoteForCmd(value) {
-  return `"${String(value).replace(/"/g, '""')}"`;
-}
-
-/**
- * @param {string} binaryPath
- * @param {string[]} args
- * @param {import("node:child_process").ExecFileOptions} options
- */
-async function runThroughCmd(binaryPath, args, options) {
-  const cmdPath = process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe";
-  const command = [binaryPath, ...args].map(quoteForCmd).join(" ");
-
-  return defaultExec(cmdPath, ["/d", "/s", "/c", command], options);
-}
-
-/**
  * @param {{ summary: string, learned?: string, next?: string, workspace?: string, closedAt: string }} input
  */
 export function buildCloseSummaryContent(input) {
@@ -296,8 +277,15 @@ export function createEngramClient(options = {}) {
         if (process.platform !== "win32" || !isSpawnPermissionError(error)) {
           throw error;
         }
-
-        result = await runThroughCmd(config.binaryPath, args, executionOptions);
+        const permissionError = new Error(
+          [
+            `Engram binary execution blocked: ${config.binaryPath}`,
+            "Windows denied direct execution for the external battery binary.",
+            "Unblock or reauthorize the binary instead of falling back through cmd.exe."
+          ].join("\n")
+        );
+        permissionError.cause = error;
+        throw permissionError;
       }
 
       return {
@@ -322,13 +310,18 @@ export function createEngramClient(options = {}) {
         "stderr" in error
           ? normalizeExecText(error.stderr)
           : "";
+      const permissionFix =
+        process.platform === "win32" && isSpawnPermissionError(error)
+          ? "Fix: unblock or reauthorize the Engram battery binary; NEXUS no longer falls back through cmd.exe."
+          : "";
 
       throw new Error(
         [
           `Engram command failed: ${config.binaryPath} ${args.join(" ")}`,
           stderr,
           stdout,
-          message
+          message,
+          permissionFix
         ]
           .filter(Boolean)
           .join("\n")

@@ -3,6 +3,14 @@
 import http from "node:http";
 import path from "node:path";
 import { createAuthMiddleware } from "./auth-middleware.js";
+import { selectEndpointContext } from "../context/context-mode.js";
+import {
+  applyBaseSecurityHeaders,
+  applyRateLimitHeaders,
+  createRateLimiter,
+  resolveCorsOrigin,
+  sendRateLimitExceeded
+} from "./security-runtime.js";
 import { enforceOutputGuard } from "../guard/output-guard.js";
 import { checkOutputCompliance } from "../guard/compliance-checker.js";
 import { createOutputAuditor } from "../guard/output-auditor.js";
@@ -14,6 +22,7 @@ import { buildLlmPrompt } from "../llm/prompt-builder.js";
 import { parseLlmResponse } from "../llm/response-parser.js";
 import { createLlmProviderRegistry } from "../llm/provider.js";
 import { createClaudeProvider } from "../llm/claude-provider.js";
+import { createOpenAiProvider } from "../llm/openai-provider.js";
 import { createSyncScheduler } from "../sync/sync-scheduler.js";
 import { createSyncDriftMonitor } from "../sync/drift-monitor.js";
 import { createSyncRuntime } from "../sync/sync-runtime.js";
@@ -32,11 +41,24 @@ import { buildNexusDemoPage } from "../interface/nexus-demo-page.js";
  * @param {http.IncomingMessage} request
  */
 async function readJsonBody(request) {
+  const configuredMaxBytes = Number(process.env.LCS_API_MAX_BODY_BYTES ?? 1024 * 1024);
+  const maxBodyBytes =
+    Number.isFinite(configuredMaxBytes) && configuredMaxBytes > 1024
+      ? Math.trunc(configuredMaxBytes)
+      : 1024 * 1024;
   /** @type {Buffer[]} */
   const chunks = [];
+  let totalBytes = 0;
 
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const normalizedChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += normalizedChunk.length;
+
+    if (totalBytes > maxBodyBytes) {
+      throw new Error(`Request body too large. Max bytes: ${maxBodyBytes}.`);
+    }
+
+    chunks.push(normalizedChunk);
   }
 
   const raw = Buffer.concat(chunks).toString("utf8").trim();
@@ -155,6 +177,688 @@ function buildContextImpact(input) {
 }
 
 /**
+ * @param {unknown} sdd
+ */
+function buildSddMetricSummary(sdd) {
+  const record = asRecord(sdd);
+  if (record.enabled !== true) {
+    return undefined;
+  }
+
+  const requiredKinds = Array.isArray(record.requiredKinds)
+    ? record.requiredKinds.filter((entry) => typeof entry === "string" && entry.trim()).length
+    : 0;
+  const coverage = asRecord(record.coverage);
+  const coveredKinds = Object.entries(coverage).filter(([, covered]) => covered === true).length;
+  const injectedKinds = Array.isArray(record.injectedKinds)
+    ? record.injectedKinds.filter((entry) => typeof entry === "string" && entry.trim()).length
+    : 0;
+  const skippedReasons = Array.isArray(record.skippedKinds)
+    ? record.skippedKinds
+        .map((entry) => asRecord(entry))
+        .map((entry) => (typeof entry.reason === "string" ? entry.reason.trim() : ""))
+        .filter(Boolean)
+    : [];
+
+  return {
+    enabled: true,
+    requiredKinds,
+    coveredKinds,
+    injectedKinds,
+    skippedReasons
+  };
+}
+
+/**
+ * @param {unknown} parsed
+ */
+function buildTeachingMetricSummary(parsed) {
+  const record = asRecord(parsed);
+  const concepts = Array.isArray(record.concepts)
+    ? record.concepts
+        .filter((entry) => typeof entry === "string" && entry.trim())
+        .length
+    : 0;
+  const hasChange = typeof record.change === "string" && record.change.trim().length > 0;
+  const hasReason = typeof record.reason === "string" && record.reason.trim().length > 0;
+  const hasPractice = typeof record.practice === "string" && record.practice.trim().length > 0;
+  const sectionsPresent =
+    (hasChange ? 1 : 0) +
+    (hasReason ? 1 : 0) +
+    (concepts > 0 ? 1 : 0) +
+    (hasPractice ? 1 : 0);
+
+  return {
+    enabled: true,
+    sectionsExpected: 4,
+    sectionsPresent,
+    hasPractice
+  };
+}
+
+const DEFAULT_RAG_LIMIT = 8;
+const DEFAULT_RAG_RERANK_TOP_K = 12;
+const RAG_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "con",
+  "de",
+  "del",
+  "el",
+  "en",
+  "es",
+  "for",
+  "from",
+  "in",
+  "is",
+  "la",
+  "las",
+  "los",
+  "of",
+  "on",
+  "or",
+  "para",
+  "por",
+  "que",
+  "the",
+  "to",
+  "un",
+  "una",
+  "with",
+  "y"
+]);
+
+/**
+ * @param {unknown} value
+ * @param {boolean} fallback
+ */
+function normalizeBooleanFlag(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+/**
+ * @param {number | undefined} value
+ * @param {{ min: number, max: number, fallback: number }} range
+ */
+function clampInteger(value, range) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return range.fallback;
+  }
+
+  const normalized = Math.trunc(value);
+  return Math.max(range.min, Math.min(range.max, normalized));
+}
+
+/**
+ * @param {string} value
+ */
+function tokenizeRagText(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(/\s+/u)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 1 && !RAG_STOPWORDS.has(entry));
+}
+
+/**
+ * @param {string[]} queryTokens
+ * @param {string[]} chunkTokens
+ */
+function overlapScore(queryTokens, chunkTokens) {
+  if (!queryTokens.length || !chunkTokens.length) {
+    return 0;
+  }
+
+  const chunkSet = new Set(chunkTokens);
+  const overlap = queryTokens.filter((token) => chunkSet.has(token)).length;
+
+  return overlap / Math.max(1, queryTokens.length);
+}
+
+/**
+ * @param {string} query
+ * @param {string} content
+ */
+function phraseScore(query, content) {
+  const normalizedQuery = String(query ?? "").toLowerCase().trim();
+  const normalizedContent = String(content ?? "").toLowerCase();
+  if (!normalizedQuery || !normalizedContent) {
+    return 0;
+  }
+
+  if (normalizedContent.includes(normalizedQuery)) {
+    return 1;
+  }
+
+  const queryTerms = tokenizeRagText(normalizedQuery);
+  if (queryTerms.length < 2) {
+    return 0;
+  }
+
+  const bigrams = [];
+  for (let index = 0; index < queryTerms.length - 1; index += 1) {
+    bigrams.push(`${queryTerms[index]} ${queryTerms[index + 1]}`);
+  }
+
+  const matches = bigrams.filter((bigram) => normalizedContent.includes(bigram)).length;
+  return matches / Math.max(1, bigrams.length);
+}
+
+/**
+ * @param {Record<string, unknown>} chunk
+ */
+function ragKindPrior(chunk) {
+  const kind = String(chunk.kind ?? "doc").toLowerCase();
+  if (kind === "spec") {
+    return 1;
+  }
+  if (kind === "test") {
+    return 0.9;
+  }
+  if (kind === "code") {
+    return 0.85;
+  }
+  if (kind === "doc") {
+    return 0.7;
+  }
+  if (kind === "memory") {
+    return 0.65;
+  }
+
+  return 0.5;
+}
+
+/**
+ * @param {Record<string, unknown>} chunk
+ * @param {string} query
+ */
+function scoreRagSemanticChunk(chunk, query) {
+  const queryTokens = tokenizeRagText(query);
+  const contentTokens = tokenizeRagText(String(chunk.content ?? ""));
+  const sourceTokens = tokenizeRagText(String(chunk.source ?? ""));
+  const overlap = overlapScore(queryTokens, contentTokens);
+  const sourceOverlap = overlapScore(queryTokens, sourceTokens);
+  const phrase = phraseScore(query, String(chunk.content ?? ""));
+  const kindPrior = ragKindPrior(chunk);
+
+  return Number(
+    (
+      overlap * 0.5 +
+      phrase * 0.2 +
+      sourceOverlap * 0.1 +
+      kindPrior * 0.2
+    ).toFixed(6)
+  );
+}
+
+/**
+ * @param {Array<Record<string, unknown>>} chunks
+ * @param {string} query
+ * @param {{ rerankTopK: number }} options
+ */
+function rerankRagChunks(chunks, query, options) {
+  if (!chunks.length) {
+    return {
+      chunks: [],
+      applied: false
+    };
+  }
+
+  const rerankTopK = clampInteger(options.rerankTopK, {
+    min: 1,
+    max: 48,
+    fallback: DEFAULT_RAG_RERANK_TOP_K
+  });
+  const candidates = chunks.slice(0, rerankTopK);
+  const rerankedCandidates = candidates
+    .map((chunk, index) => {
+      const retrievalScore =
+        typeof chunk.retrievalScore === "number" && Number.isFinite(chunk.retrievalScore)
+          ? chunk.retrievalScore
+          : typeof chunk.priority === "number" && Number.isFinite(chunk.priority)
+            ? chunk.priority
+            : 0;
+      const semanticScore = scoreRagSemanticChunk(chunk, query);
+      const finalScore = Number((retrievalScore * 0.65 + semanticScore * 0.35).toFixed(6));
+
+      return {
+        chunk: {
+          ...chunk,
+          retrievalScore,
+          semanticScore,
+          priority: finalScore
+        },
+        index,
+        finalScore
+      };
+    })
+    .sort((left, right) => right.finalScore - left.finalScore);
+
+  const tail = chunks.slice(rerankTopK);
+  const reranked = [
+    ...rerankedCandidates.map((entry) => entry.chunk),
+    ...tail
+  ];
+
+  return {
+    chunks: reranked,
+    applied: true
+  };
+}
+
+/**
+ * @param {number[]} left
+ * @param {number[]} right
+ */
+function cosineSimilarity(left, right) {
+  if (!left.length || !right.length) {
+    return 0;
+  }
+
+  const size = Math.min(left.length, right.length);
+  if (!size) {
+    return 0;
+  }
+
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+
+  for (let index = 0; index < size; index += 1) {
+    const leftValue = Number.isFinite(left[index]) ? left[index] : 0;
+    const rightValue = Number.isFinite(right[index]) ? right[index] : 0;
+    dot += leftValue * rightValue;
+    leftNorm += leftValue * leftValue;
+    rightNorm += rightValue * rightValue;
+  }
+
+  if (leftNorm <= 0 || rightNorm <= 0) {
+    return 0;
+  }
+
+  return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
+}
+
+/**
+ * @param {string} value
+ * @param {number} maxChars
+ */
+function clipEmbeddingText(value, maxChars = 1_600) {
+  const normalized = String(value ?? "").trim().replace(/\s+/gu, " ");
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  return normalized.slice(0, Math.max(0, maxChars));
+}
+
+/**
+ * @param {{
+ *   registry: ReturnType<typeof createLlmProviderRegistry>,
+ *   provider: string,
+ *   model?: string,
+ *   query: string,
+ *   chunks: Array<Record<string, unknown>>,
+ *   rerankTopK: number
+ * }} input
+ */
+async function rerankRagChunksWithEmbeddings(input) {
+  const provider = input.registry.get(input.provider);
+
+  if (typeof provider.embed !== "function") {
+    return {
+      chunks: input.chunks,
+      applied: false,
+      provider: provider.provider,
+      model: input.model ?? "",
+      reason: `provider '${provider.provider}' does not support embeddings`
+    };
+  }
+
+  if (!input.chunks.length) {
+    return {
+      chunks: [],
+      applied: false,
+      provider: provider.provider,
+      model: input.model ?? "",
+      reason: "no-chunks"
+    };
+  }
+
+  const rerankTopK = clampInteger(input.rerankTopK, {
+    min: 1,
+    max: 48,
+    fallback: DEFAULT_RAG_RERANK_TOP_K
+  });
+  const candidates = input.chunks.slice(0, rerankTopK);
+  const queryEmbedding = await provider.embed(clipEmbeddingText(input.query, 900), {
+    model: input.model
+  });
+
+  if (!Array.isArray(queryEmbedding.vector) || !queryEmbedding.vector.length) {
+    return {
+      chunks: input.chunks,
+      applied: false,
+      provider: provider.provider,
+      model: input.model ?? "",
+      reason: "empty-query-embedding"
+    };
+  }
+
+  const rerankedCandidates = await Promise.all(
+    candidates.map(async (chunk, index) => {
+      const retrievalScore =
+        typeof chunk.retrievalScore === "number" && Number.isFinite(chunk.retrievalScore)
+          ? chunk.retrievalScore
+          : typeof chunk.priority === "number" && Number.isFinite(chunk.priority)
+            ? chunk.priority
+            : 0;
+      const embeddingInput = clipEmbeddingText(
+        `${String(chunk.source ?? "")}\n${String(chunk.content ?? "")}`,
+        1_600
+      );
+      const chunkEmbedding = await provider.embed(embeddingInput, {
+        model: input.model
+      });
+      const cosine = cosineSimilarity(queryEmbedding.vector, chunkEmbedding.vector);
+      const semanticScore = Number((((cosine + 1) / 2)).toFixed(6));
+      const finalScore = Number((retrievalScore * 0.6 + semanticScore * 0.4).toFixed(6));
+
+      return {
+        chunk: {
+          ...chunk,
+          retrievalScore,
+          vectorScore: semanticScore,
+          semanticScore,
+          priority: finalScore
+        },
+        index,
+        finalScore
+      };
+    })
+  );
+
+  rerankedCandidates.sort((left, right) => right.finalScore - left.finalScore);
+  const tail = input.chunks.slice(rerankTopK);
+
+  return {
+    chunks: [
+      ...rerankedCandidates.map((entry) => entry.chunk),
+      ...tail
+    ],
+    applied: true,
+    provider: provider.provider,
+    model: queryEmbedding.model || input.model || "",
+    reason: ""
+  };
+}
+
+/**
+ * @param {Array<Record<string, unknown>>} chunks
+ */
+function dedupeContextChunks(chunks) {
+  const seen = new Set();
+  /** @type {Array<Record<string, unknown>>} */
+  const deduped = [];
+
+  for (const chunk of chunks) {
+    const id = String(chunk.id ?? "").trim();
+    const source = String(chunk.source ?? "").trim();
+    const content = String(chunk.content ?? "").trim();
+    const key = id || `${source}::${content.slice(0, 160)}`;
+
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(chunk);
+  }
+
+  return deduped;
+}
+
+/**
+ * @param {Array<Record<string, unknown>>} chunks
+ * @param {string} query
+ * @param {number} limit
+ */
+function computeRagQualityProxy(chunks, query, limit) {
+  const top = chunks.slice(0, Math.max(1, limit));
+  if (!top.length) {
+    return {
+      mrr: 0,
+      recallAtK: 0,
+      ndcgAtK: 0
+    };
+  }
+
+  const relevances = top.map((chunk) => scoreRagSemanticChunk(chunk, query));
+  const firstRelevantIndex = relevances.findIndex((score) => score >= 0.2);
+  const mrr = firstRelevantIndex >= 0 ? Number((1 / (firstRelevantIndex + 1)).toFixed(4)) : 0;
+  const recallAtK = Number(
+    (
+      relevances.filter((score) => score >= 0.2).length / Math.max(1, top.length)
+    ).toFixed(4)
+  );
+  const dcg = relevances.reduce((sum, rel, index) => {
+    const gain = Math.pow(2, rel) - 1;
+    const discount = Math.log2(index + 2);
+    return sum + gain / discount;
+  }, 0);
+  const sorted = [...relevances].sort((left, right) => right - left);
+  const idcg = sorted.reduce((sum, rel, index) => {
+    const gain = Math.pow(2, rel) - 1;
+    const discount = Math.log2(index + 2);
+    return sum + gain / discount;
+  }, 0);
+  const ndcgAtK = idcg > 0 ? Number((dcg / idcg).toFixed(4)) : 0;
+
+  return {
+    mrr,
+    recallAtK,
+    ndcgAtK
+  };
+}
+
+/**
+ * @param {Record<string, unknown>} promptRequest
+ * @param {"ask" | "chat"} endpoint
+ * @param {Array<Record<string, unknown>>} explicitChunks
+ * @param {(context: { input: unknown }) => Promise<Record<string, unknown>>} recallExecutor
+ * @param {ReturnType<typeof createLlmProviderRegistry>} registry
+ */
+async function resolveRagAugmentedChunks(
+  promptRequest,
+  endpoint,
+  explicitChunks,
+  recallExecutor,
+  registry
+) {
+  const includeContext = promptRequest.withContext !== false;
+  const rag = asRecord(promptRequest.rag);
+  const enabled = includeContext && normalizeBooleanFlag(rag.enabled, true);
+  const autoRetrieve = normalizeBooleanFlag(rag.autoRetrieve, true);
+  const rerank = normalizeBooleanFlag(rag.rerank, true);
+  const forceRetrieve = normalizeBooleanFlag(rag.force, false);
+  const envAutoRetrieve = process.env.LCS_RAG_AUTO_RETRIEVE !== "false";
+  const envRerank = process.env.LCS_RAG_ENABLE_RERANK !== "false";
+  const envEmbeddingsEnabled = process.env.LCS_RAG_EMBEDDINGS_ENABLED === "true";
+  const project = String(promptRequest.project ?? "default").trim() || "default";
+  const query = `${promptRequest.query ?? ""} ${promptRequest.task ?? ""} ${promptRequest.objective ?? ""}`.trim();
+  const embeddingRequested = normalizeBooleanFlag(rag.embeddings, true);
+  const embeddingProvider = String(
+    rag.embeddingProvider ?? process.env.LCS_RAG_EMBEDDINGS_PROVIDER ?? "openai"
+  )
+    .trim();
+  const embeddingModel = String(
+    rag.embeddingModel ?? process.env.LCS_RAG_EMBEDDINGS_MODEL ?? "text-embedding-3-small"
+  )
+    .trim();
+  const limit = clampInteger(
+    typeof rag.limit === "number" ? rag.limit : undefined,
+    { min: 1, max: 24, fallback: DEFAULT_RAG_LIMIT }
+  );
+  const rerankTopK = clampInteger(
+    typeof rag.rerankTopK === "number" ? rag.rerankTopK : undefined,
+    { min: 1, max: 48, fallback: DEFAULT_RAG_RERANK_TOP_K }
+  );
+  const shouldRetrieve =
+    enabled &&
+    envAutoRetrieve &&
+    autoRetrieve &&
+    Boolean(query) &&
+    (forceRetrieve || explicitChunks.length === 0);
+
+  /** @type {Array<Record<string, unknown>>} */
+  let retrievedChunks = [];
+  let retrievalError = "";
+
+  if (shouldRetrieve) {
+    try {
+      const recallState = await recallExecutor({
+        input: {
+          projectId: project,
+          query,
+          limit
+        }
+      });
+      const results = asArray(asRecord(recallState).results);
+      retrievedChunks = results.map((entry, index) => {
+        const normalized = normalizeLegacyChunk(entry, index);
+        const breakdown = asRecord(asRecord(entry).breakdown);
+        const bm25 = Number(breakdown.bm25 ?? 0);
+        const tfidf = Number(breakdown.tfidf ?? 0);
+        const signal = Number(breakdown.signal ?? 0);
+        return {
+          id: normalized.id,
+          source: normalized.source,
+          kind: normalized.kind,
+          content: normalized.content,
+          priority: normalized.priority,
+          retrievalScore: normalized.score,
+          retrievalBreakdown: {
+            bm25: Number.isFinite(bm25) ? bm25 : 0,
+            tfidf: Number.isFinite(tfidf) ? tfidf : 0,
+            signal: Number.isFinite(signal) ? signal : 0
+          },
+          tags: {
+            origin: "rag-auto"
+          }
+        };
+      });
+    } catch (error) {
+      retrievalError = error instanceof Error ? error.message : String(error);
+      retrievedChunks = [];
+    }
+  }
+
+  const shouldAttemptEmbeddingRerank =
+    retrievedChunks.length > 0 &&
+    rerank &&
+    envRerank &&
+    embeddingRequested &&
+    envEmbeddingsEnabled &&
+    Boolean(embeddingProvider) &&
+    Boolean(query);
+  let embeddingMeta = {
+    requested: embeddingRequested,
+    enabledByEnv: envEmbeddingsEnabled,
+    applied: false,
+    provider: "",
+    model: embeddingModel,
+    error: ""
+  };
+  /** @type {{ chunks: Array<Record<string, unknown>>, applied: boolean }} */
+  let rerankResult;
+
+  if (shouldAttemptEmbeddingRerank) {
+    try {
+      const embeddingRerank = await rerankRagChunksWithEmbeddings({
+        registry,
+        provider: embeddingProvider,
+        model: embeddingModel,
+        query,
+        chunks: retrievedChunks,
+        rerankTopK
+      });
+
+      rerankResult = {
+        chunks: embeddingRerank.chunks,
+        applied: embeddingRerank.applied
+      };
+      embeddingMeta = {
+        ...embeddingMeta,
+        applied: embeddingRerank.applied,
+        provider: embeddingRerank.provider,
+        model: embeddingRerank.model || embeddingModel,
+        error: embeddingRerank.reason || ""
+      };
+    } catch (error) {
+      embeddingMeta = {
+        ...embeddingMeta,
+        provider: embeddingProvider,
+        error: error instanceof Error ? error.message : String(error)
+      };
+      rerankResult = rerankRagChunks(retrievedChunks, query, { rerankTopK });
+    }
+  } else {
+    rerankResult =
+      retrievedChunks.length > 0 && rerank && envRerank
+        ? rerankRagChunks(retrievedChunks, query, { rerankTopK })
+        : { chunks: retrievedChunks, applied: false };
+  }
+  const selectedRetrieved = rerankResult.chunks.slice(0, limit);
+  const mergedChunks = dedupeContextChunks([...explicitChunks, ...selectedRetrieved]);
+  const quality = computeRagQualityProxy(selectedRetrieved, query, limit);
+
+  return {
+    chunks: mergedChunks,
+    rag: {
+      enabled,
+      endpoint,
+      autoRetrieve: shouldRetrieve,
+      project,
+      query,
+      explicitChunks: explicitChunks.length,
+      retrievedChunks: selectedRetrieved.length,
+      mergedChunks: mergedChunks.length,
+      rerankApplied: rerankResult.applied,
+      rerankTopK: rerankResult.applied ? rerankTopK : 0,
+      embeddingRequested: embeddingMeta.requested,
+      embeddingApplied: embeddingMeta.applied,
+      embeddingProvider: embeddingMeta.provider,
+      embeddingModel: embeddingMeta.model,
+      embeddingError: embeddingMeta.error,
+      quality,
+      topSources: selectedRetrieved.slice(0, 5).map((chunk) => String(chunk.source ?? "")),
+      error: retrievalError
+    },
+    recallMetric: {
+      attempted: shouldRetrieve,
+      status: shouldRetrieve
+        ? retrievalError
+          ? "failed"
+          : selectedRetrieved.length
+            ? "recalled"
+            : "empty"
+        : "skipped",
+      recoveredChunks: selectedRetrieved.length,
+      selectedChunks: selectedRetrieved.length,
+      suppressedChunks: Math.max(0, explicitChunks.length + selectedRetrieved.length - mergedChunks.length),
+      hit: selectedRetrieved.length > 0
+    }
+  };
+}
+
+/**
  * @param {unknown} entry
  * @param {number} index
  */
@@ -210,6 +914,397 @@ function getRequestUrl(request) {
 }
 
 /**
+ * @param {string} workspaceRoot
+ * @param {string} candidate
+ * @param {string} label
+ */
+function resolveSafePathWithinWorkspace(workspaceRoot, candidate, label) {
+  const trimmed = candidate.trim();
+  if (!trimmed || trimmed === ".") {
+    return workspaceRoot;
+  }
+
+  const resolved = path.resolve(workspaceRoot, trimmed);
+  if (resolved === workspaceRoot || resolved.startsWith(`${workspaceRoot}${path.sep}`)) {
+    return resolved;
+  }
+
+  throw new Error(`${label} must stay inside workspace root.`);
+}
+
+/**
+ * @param {unknown} input
+ * @param {string} workspaceRoot
+ * @returns {Record<string, unknown>}
+ */
+function normalizePipelineInput(input, workspaceRoot) {
+  const record = asRecord(input);
+  const normalized = {
+    ...record
+  };
+
+  for (const key of ["path", "sourcePath", "inputPath"]) {
+    const value = record[key];
+
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    normalized[key] = resolveSafePathWithinWorkspace(workspaceRoot, value, key);
+  }
+
+  return normalized;
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeOptionalText(value) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} field
+ * @returns {{ ok: true, value: number | undefined } | { ok: false, message: string }}
+ */
+function normalizeOptionalFiniteNumber(value, field) {
+  if (value === undefined) {
+    return {
+      ok: true,
+      value: undefined
+    };
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return {
+      ok: false,
+      message: `Field '${field}' must be a finite number.`
+    };
+  }
+
+  return {
+    ok: true,
+    value
+  };
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} field
+ * @returns {{
+ *   ok: true,
+ *   value: Partial<Record<"workspace" | "memory" | "chat", number>> | undefined
+ * } | {
+ *   ok: false,
+ *   message: string
+ * }}
+ */
+function normalizeOptionalSourceBudgets(value, field) {
+  if (value === undefined) {
+    return {
+      ok: true,
+      value: undefined
+    };
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      ok: false,
+      message: `Field '${field}' must be an object with workspace/memory/chat numeric ratios.`
+    };
+  }
+
+  const record = /** @type {Record<string, unknown>} */ (value);
+  /** @type {Partial<Record<"workspace" | "memory" | "chat", number>>} */
+  const parsed = {};
+
+  for (const key of ["workspace", "memory", "chat"]) {
+    if (!(key in record)) {
+      continue;
+    }
+
+    const numeric = record[key];
+    if (typeof numeric !== "number" || !Number.isFinite(numeric)) {
+      return {
+        ok: false,
+        message: `Field '${field}.${key}' must be a finite number between 0 and 1.`
+      };
+    }
+
+    if (numeric < 0 || numeric > 1) {
+      return {
+        ok: false,
+        message: `Field '${field}.${key}' must be between 0 and 1.`
+      };
+    }
+
+    parsed[/** @type {"workspace" | "memory" | "chat"} */ (key)] = numeric;
+  }
+
+  return {
+    ok: true,
+    value: Object.keys(parsed).length ? parsed : undefined
+  };
+}
+
+/**
+ * @param {unknown} chunksInput
+ * @returns {{ ok: true, chunks: Record<string, unknown>[] } | { ok: false, message: string }}
+ */
+function normalizePromptChunks(chunksInput) {
+  if (!Array.isArray(chunksInput)) {
+    return {
+      ok: true,
+      chunks: []
+    };
+  }
+
+  const chunks = chunksInput.slice(0, 100);
+  /** @type {Record<string, unknown>[]} */
+  const normalized = [];
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+
+    if (typeof chunk === "string") {
+      const content = chunk.trim();
+
+      if (!content) {
+        continue;
+      }
+
+      const id = `chunk-${index + 1}`;
+      normalized.push({
+        id,
+        source: id,
+        kind: "doc",
+        content
+      });
+      continue;
+    }
+
+    if (!chunk || typeof chunk !== "object" || Array.isArray(chunk)) {
+      return {
+        ok: false,
+        message: `Invalid chunk at index ${index}. Expected string or object.`
+      };
+    }
+
+    const record = asRecord(chunk);
+
+    if (record.source !== undefined && typeof record.source !== "string") {
+      return {
+        ok: false,
+        message: `Invalid chunk at index ${index}. Field 'source' must be a string.`
+      };
+    }
+    if (record.id !== undefined && typeof record.id !== "string") {
+      return {
+        ok: false,
+        message: `Invalid chunk at index ${index}. Field 'id' must be a string.`
+      };
+    }
+    if (record.content !== undefined && typeof record.content !== "string") {
+      return {
+        ok: false,
+        message: `Invalid chunk at index ${index}. Field 'content' must be a string.`
+      };
+    }
+    if (record.priority !== undefined && typeof record.priority !== "number") {
+      return {
+        ok: false,
+        message: `Invalid chunk at index ${index}. Field 'priority' must be a number.`
+      };
+    }
+    if (record.score !== undefined && typeof record.score !== "number") {
+      return {
+        ok: false,
+        message: `Invalid chunk at index ${index}. Field 'score' must be a number.`
+      };
+    }
+    if (record.kind !== undefined && typeof record.kind !== "string") {
+      return {
+        ok: false,
+        message: `Invalid chunk at index ${index}. Field 'kind' must be a string.`
+      };
+    }
+
+    const id =
+      typeof record.id === "string" && record.id.trim()
+        ? record.id.trim()
+        : `chunk-${index + 1}`;
+    const source =
+      typeof record.source === "string" && record.source.trim()
+        ? record.source.trim()
+        : id;
+
+    normalized.push({
+      ...record,
+      id,
+      source,
+      kind: typeof record.kind === "string" && record.kind.trim() ? record.kind.trim() : "doc",
+      content: typeof record.content === "string" ? record.content : ""
+    });
+  }
+
+  return {
+    ok: true,
+    chunks: normalized
+  };
+}
+
+/**
+ * @param {Record<string, unknown>} body
+ * @param {"ask" | "chat"} endpoint
+ */
+function normalizePromptRequest(body, endpoint) {
+  const query =
+    endpoint === "ask"
+      ? String(body.question ?? "").trim()
+      : String(body.query ?? body.question ?? "").trim();
+
+  if (!query) {
+    return {
+      ok: false,
+      errorCode: endpoint === "ask" ? "missing_question" : "missing_query",
+      errorMessage:
+        endpoint === "ask"
+          ? "Missing 'question' in request body."
+          : "Missing 'query' in request body."
+    };
+  }
+
+  if (query.length > 4000) {
+    return {
+      ok: false,
+      errorCode: "query_too_long",
+      errorMessage:
+        endpoint === "ask"
+          ? "Field 'question' exceeds max length (4000 chars)."
+          : "Field 'query' exceeds max length (4000 chars)."
+    };
+  }
+
+  const tokenBudget = normalizeOptionalFiniteNumber(body.tokenBudget, "tokenBudget");
+  if (!tokenBudget.ok) {
+    return {
+      ok: false,
+      errorCode: "invalid_token_budget",
+      errorMessage: tokenBudget.message
+    };
+  }
+
+  const maxChunks = normalizeOptionalFiniteNumber(body.maxChunks, "maxChunks");
+  if (!maxChunks.ok) {
+    return {
+      ok: false,
+      errorCode: "invalid_max_chunks",
+      errorMessage: maxChunks.message
+    };
+  }
+
+  const sourceBudgets = normalizeOptionalSourceBudgets(body.sourceBudgets, "sourceBudgets");
+  if (!sourceBudgets.ok) {
+    return {
+      ok: false,
+      errorCode: "invalid_source_budgets",
+      errorMessage: sourceBudgets.message
+    };
+  }
+
+  const chunks = normalizePromptChunks(body.withContext === false ? [] : body.chunks);
+  if (!chunks.ok) {
+    return {
+      ok: false,
+      errorCode: "invalid_chunks",
+      errorMessage: chunks.message
+    };
+  }
+
+  const ragRecord = asRecord(body.rag);
+  const ragLimit = normalizeOptionalFiniteNumber(
+    ragRecord.limit ?? body.ragLimit,
+    "ragLimit"
+  );
+  if (!ragLimit.ok) {
+    return {
+      ok: false,
+      errorCode: "invalid_rag_limit",
+      errorMessage: ragLimit.message
+    };
+  }
+  const ragRerankTopK = normalizeOptionalFiniteNumber(
+    ragRecord.rerankTopK ?? body.ragRerankTopK,
+    "ragRerankTopK"
+  );
+  if (!ragRerankTopK.ok) {
+    return {
+      ok: false,
+      errorCode: "invalid_rag_rerank_top_k",
+      errorMessage: ragRerankTopK.message
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      query,
+      task: normalizeOptionalText(body.task),
+      objective: normalizeOptionalText(body.objective),
+      language: body.language === "es" || body.language === "en" ? body.language : undefined,
+      framework: normalizeOptionalText(body.framework),
+      domain: normalizeOptionalText(body.domain),
+      sddProfile: normalizeOptionalText(body.sddProfile),
+      project: normalizeOptionalText(body.project),
+      provider: normalizeOptionalText(body.provider),
+      fallbackProviders: Array.isArray(body.fallbackProviders)
+        ? body.fallbackProviders
+            .filter((value) => typeof value === "string" && value.trim())
+            .map((value) => value.trim())
+            .slice(0, 8)
+        : [],
+      attemptTimeoutMs:
+        typeof body.attemptTimeoutMs === "number" && Number.isFinite(body.attemptTimeoutMs)
+          ? body.attemptTimeoutMs
+          : undefined,
+      model: normalizeOptionalText(body.model),
+      withContext: body.withContext !== false,
+      chunks: chunks.chunks,
+      tokenBudget: tokenBudget.value,
+      maxChunks: maxChunks.value,
+      sourceBudgets: sourceBudgets.value,
+      rag: {
+        enabled: normalizeBooleanFlag(ragRecord.enabled ?? body.ragEnabled, true),
+        autoRetrieve: normalizeBooleanFlag(
+          ragRecord.autoRetrieve ?? body.ragAutoRetrieve,
+          true
+        ),
+        force: normalizeBooleanFlag(ragRecord.force ?? body.ragForce, false),
+        limit: ragLimit.value,
+        rerank: normalizeBooleanFlag(ragRecord.rerank ?? body.ragRerank, true),
+        rerankTopK: ragRerankTopK.value,
+        embeddings: normalizeBooleanFlag(ragRecord.embeddings ?? body.ragEmbeddings, true),
+        embeddingProvider: normalizeOptionalText(
+          ragRecord.embeddingProvider ?? body.ragEmbeddingProvider
+        ),
+        embeddingModel: normalizeOptionalText(
+          ragRecord.embeddingModel ?? body.ragEmbeddingModel
+        )
+      },
+      guardPolicyProfile: normalizeOptionalText(body.guardPolicyProfile),
+      guard: asRecord(body.guard),
+      compliance: asRecord(body.compliance)
+    }
+  };
+}
+
+/**
  * NEXUS:10 — HTTP server exposing ask/guard/sync orchestration endpoints.
  * @param {{
  *   host?: string,
@@ -223,6 +1318,7 @@ function getRequestUrl(request) {
  *     defaultProvider?: string,
  *     providers?: Array<import("../llm/provider.js").LlmProvider>,
  *     claude?: Parameters<typeof createClaudeProvider>[0],
+ *     openai?: Parameters<typeof createOpenAiProvider>[0],
  *     attemptTimeoutMs?: number,
  *     tokenBudget?: number,
  *     maxChunks?: number
@@ -275,8 +1371,19 @@ export function createNexusApiServer(options = {}) {
     registry.register(createClaudeProvider(options.llm?.claude));
   }
 
+  const hasOpenAiKey = typeof process.env.OPENAI_API_KEY === "string" && process.env.OPENAI_API_KEY.trim();
+  if (hasOpenAiKey && !registry.list().includes("openai")) {
+    registry.register(createOpenAiProvider(options.llm?.openai));
+  }
+
+  const syncRootPath = path.resolve(options.sync?.rootPath ?? process.cwd());
+  const apiWorkspaceRoot = syncRootPath;
   const defaultExecutors = createDefaultExecutors({
-    repositoryFilePath: options.repositoryFilePath
+    repositoryBaseDir: options.sync?.repositoryBaseDir,
+    repositoryFilePath: options.repositoryFilePath,
+    resolveSourcePath(sourcePath) {
+      return resolveSafePathWithinWorkspace(apiWorkspaceRoot, sourcePath, "sourcePath");
+    }
   });
   const pipelineBuilder = createPipelineBuilder({
     executors: {
@@ -286,8 +1393,6 @@ export function createNexusApiServer(options = {}) {
       recall: defaultExecutors.recall
     }
   });
-
-  const syncRootPath = path.resolve(options.sync?.rootPath ?? process.cwd());
   const syncRuntime = createSyncRuntime({
     rootPath: syncRootPath,
     projectId: options.sync?.projectId,
@@ -439,6 +1544,14 @@ export function createNexusApiServer(options = {}) {
 
   const host = options.host ?? "127.0.0.1";
   const port = Math.max(0, Number(options.port ?? 8787));
+  const corsOrigin = resolveCorsOrigin(
+    options.corsOrigin ?? process.env.LCS_API_CORS_ORIGIN ?? process.env.LCS_API_CORS,
+    host,
+    port
+  );
+  const rateLimiter = createRateLimiter({
+    heavyRoutes: ["/api/chat", "/api/ask", "/api/evals/domain-suite", "/api/sync", "/api/pipeline/run"]
+  });
 
   /**
    * @param {string} command
@@ -462,11 +1575,44 @@ export function createNexusApiServer(options = {}) {
     const requestStartedAt = Date.now();
     const requestId = createRequestId();
     response.setHeader("x-request-id", requestId);
+    applyBaseSecurityHeaders(response);
 
     try {
       const method = request.method ?? "GET";
       const requestUrl = getRequestUrl(request);
       const pathname = requestUrl.pathname || "/";
+      response.setHeader("Access-Control-Allow-Origin", corsOrigin);
+      response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      response.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, X-API-Key, X-Project, X-Data-Dir, X-Request-Id"
+      );
+      response.setHeader("Access-Control-Max-Age", "86400");
+
+      if (pathname.startsWith("/api/") && method === "OPTIONS") {
+        response.writeHead(204, { "Content-Type": "application/json" });
+        response.end();
+        return;
+      }
+
+      if (pathname.startsWith("/api/") && method !== "OPTIONS") {
+        const rateLimit = rateLimiter.check(request, pathname);
+        applyRateLimitHeaders(response, rateLimit);
+
+        if (!rateLimit.allowed) {
+          sendRateLimitExceeded(response, rateLimit);
+          await recordApiMetric("api.rate_limited", requestStartedAt, {
+            command: "api.rate_limited",
+            durationMs: 0,
+            degraded: true,
+            safety: {
+              blocked: true,
+              reason: "rate-limited"
+            }
+          });
+          return;
+        }
+      }
 
       if (method === "GET" && pathname === "/api/health") {
         sendJson(response, 200, {
@@ -479,6 +1625,31 @@ export function createNexusApiServer(options = {}) {
       }
 
       if (method === "GET" && pathname === "/api/routes") {
+        const authResult = auth.authorize({
+          headers: request.headers
+        });
+
+        if (!authResult.authorized) {
+          sendErrorJson(response, authResult.statusCode ?? 401, {
+            requestId,
+            code: "auth_unauthorized",
+            message: authResult.error ?? "Unauthorized request.",
+            details: {
+              reason: authResult.reason ?? "unauthorized"
+            }
+          });
+          await recordApiMetric("api.routes", requestStartedAt, {
+            command: "api.routes",
+            durationMs: 0,
+            degraded: true,
+            safety: {
+              blocked: true,
+              reason: authResult.reason ?? "unauthorized"
+            }
+          });
+          return;
+        }
+
         sendJson(response, 200, {
           status: "ok",
           routes: compatibilityRoutes
@@ -488,6 +1659,31 @@ export function createNexusApiServer(options = {}) {
       }
 
       if (method === "GET" && pathname === "/api/metrics") {
+        const authResult = auth.authorize({
+          headers: request.headers
+        });
+
+        if (!authResult.authorized) {
+          sendErrorJson(response, authResult.statusCode ?? 401, {
+            requestId,
+            code: "auth_unauthorized",
+            message: authResult.error ?? "Unauthorized request.",
+            details: {
+              reason: authResult.reason ?? "unauthorized"
+            }
+          });
+          await recordApiMetric("api.metrics", requestStartedAt, {
+            command: "api.metrics",
+            durationMs: 0,
+            degraded: true,
+            safety: {
+              blocked: true,
+              reason: authResult.reason ?? "unauthorized"
+            }
+          });
+          return;
+        }
+
         const report = await getObservabilityReport({
           filePath: observabilityFilePath
         });
@@ -575,12 +1771,13 @@ export function createNexusApiServer(options = {}) {
       }
 
       if (method === "POST" && pathname === "/api/remember") {
-        const body = /** @type {{ title?: string, source?: string, content?: string, text?: string, type?: string, kind?: string }} */ (
+        const body = /** @type {{ title?: string, source?: string, content?: string, text?: string, type?: string, kind?: string, project?: string }} */ (
           await readJsonBody(request)
         );
         const title = String(body.title ?? body.source ?? "document").trim() || "document";
         const content = String(body.content ?? body.text ?? "").trim();
         const kind = String(body.type ?? body.kind ?? "doc").trim() || "doc";
+        const project = String(body.project ?? "").trim();
 
         if (!content) {
           sendErrorJson(response, 400, {
@@ -609,6 +1806,7 @@ export function createNexusApiServer(options = {}) {
                 kind
               }
             ],
+            projectId: project || "default",
             query: "",
             limit: 1
           }
@@ -621,12 +1819,14 @@ export function createNexusApiServer(options = {}) {
         });
         const chunks = asArray(asRecord(processState).chunks);
         const firstChunk = asRecord(chunks[0]);
+        const storedProject = String(asRecord(storeState).projectId ?? project).trim() || "default";
 
         sendJson(response, 200, {
           status: "ok",
           id: String(firstChunk.id ?? requestId),
           title,
           kind,
+          project: storedProject,
           stored: Number(asRecord(storeState).storedCount ?? 0),
           chunks: chunks.length,
           tokens: estimateTokenCount(content),
@@ -637,8 +1837,9 @@ export function createNexusApiServer(options = {}) {
       }
 
       if (method === "POST" && pathname === "/api/recall") {
-        const body = /** @type {{ query?: string, limit?: number }} */ (await readJsonBody(request));
+        const body = /** @type {{ query?: string, limit?: number, project?: string }} */ (await readJsonBody(request));
         const query = String(body.query ?? "").trim();
+        const project = String(body.project ?? "").trim();
         const limit =
           typeof body.limit === "number" && Number.isFinite(body.limit)
             ? Math.max(1, Math.trunc(body.limit))
@@ -672,6 +1873,7 @@ export function createNexusApiServer(options = {}) {
 
         const recallState = await defaultExecutors.recall({
           input: {
+            projectId: project || "default",
             query,
             limit
           }
@@ -679,10 +1881,12 @@ export function createNexusApiServer(options = {}) {
         const recallResults = asArray(asRecord(recallState).results);
         const chunks = recallResults.map((entry, index) => normalizeLegacyChunk(entry, index));
         const tokenTotal = chunks.reduce((sum, chunk) => sum + estimateTokenCount(chunk.content), 0);
+        const recalledProject = String(asRecord(recallState).projectId ?? project).trim() || "default";
 
         sendJson(response, 200, {
           status: "ok",
           query,
+          project: recalledProject,
           chunks,
           total: chunks.length,
           stats: {
@@ -711,32 +1915,16 @@ export function createNexusApiServer(options = {}) {
       }
 
       if (method === "POST" && pathname === "/api/chat") {
-        const body = /** @type {{
-         *   query?: string,
-         *   question?: string,
-         *   task?: string,
-         *   objective?: string,
-         *   language?: "es" | "en",
-         *   provider?: string,
-         *   fallbackProviders?: string[],
-         *   attemptTimeoutMs?: number,
-         *   model?: string,
-         *   chunks?: Array<Record<string, unknown>>,
-         *   withContext?: boolean,
-         *   tokenBudget?: number,
-         *   maxChunks?: number,
-         *   guardPolicyProfile?: string,
-         *   guard?: object,
-         *   compliance?: object
-         * }} */ (await readJsonBody(request));
+        const payload = normalizePromptRequest(
+          asRecord(await readJsonBody(request)),
+          "chat"
+        );
 
-        const query = String(body.query ?? body.question ?? "").trim();
-
-        if (!query) {
+        if (!payload.ok) {
           sendErrorJson(response, 400, {
             requestId,
-            code: "missing_query",
-            message: "Missing 'query' in request body."
+            code: payload.errorCode,
+            message: payload.errorMessage
           });
           await recordApiMetric("api.chat", requestStartedAt, {
             command: "api.chat",
@@ -744,15 +1932,49 @@ export function createNexusApiServer(options = {}) {
             degraded: true,
             safety: {
               blocked: true,
-              reason: "missing-query"
+              reason: payload.errorCode
             }
           });
           return;
         }
 
-        const includeContext = body.withContext !== false;
-        const sourceChunks = includeContext ? asArray(body.chunks) : [];
-        const normalizedChunks = sourceChunks.map((entry, index) => {
+        const promptRequest = payload.value;
+        const includeContext = promptRequest.withContext;
+        const explicitChunks = includeContext ? promptRequest.chunks : [];
+        const ragContext = await resolveRagAugmentedChunks(
+          /** @type {Record<string, unknown>} */ (promptRequest),
+          "chat",
+          explicitChunks,
+          defaultExecutors.recall,
+          registry
+        );
+        const sourceChunks = ragContext.chunks;
+        const contextSelection = selectEndpointContext({
+          endpoint: "chat",
+          query: `${promptRequest.query} ${promptRequest.task ?? ""} ${promptRequest.objective ?? ""}`.trim(),
+          chunks: sourceChunks,
+          language: promptRequest.language,
+          framework: promptRequest.framework,
+          domain: promptRequest.domain,
+          sddProfile: promptRequest.sddProfile,
+          profileOverrides: {
+            tokenBudget:
+              typeof promptRequest.tokenBudget === "number"
+                ? promptRequest.tokenBudget
+                : options.llm?.tokenBudget,
+            maxChunks:
+              typeof promptRequest.maxChunks === "number"
+                ? promptRequest.maxChunks
+                : options.llm?.maxChunks,
+            sourceBudgets:
+              promptRequest.sourceBudgets &&
+              typeof promptRequest.sourceBudgets === "object" &&
+              !Array.isArray(promptRequest.sourceBudgets)
+                ? promptRequest.sourceBudgets
+                : undefined
+          }
+        });
+        const promptChunks = contextSelection.selectedChunks.map((entry, index) => {
           const normalized = normalizeLegacyChunk(entry, index);
           return {
             id: normalized.id,
@@ -762,53 +1984,41 @@ export function createNexusApiServer(options = {}) {
             priority: normalized.priority
           };
         });
-        const rawTokens = sourceChunks.reduce((sum, entry) => {
-          const record = asRecord(entry);
-          const providedTokens = Number(record.tokens ?? 0);
-
-          if (Number.isFinite(providedTokens) && providedTokens > 0) {
-            return sum + Math.round(providedTokens);
-          }
-
-          return sum + estimateTokenCount(String(record.content ?? ""));
-        }, 0);
 
         const builtPrompt = buildLlmPrompt({
-          question: query,
-          task: body.task,
-          objective: body.objective,
-          language: body.language,
-          chunks: normalizedChunks,
-          tokenBudget: body.tokenBudget ?? options.llm?.tokenBudget,
-          maxChunks: body.maxChunks ?? options.llm?.maxChunks
+          question: promptRequest.query,
+          task: promptRequest.task,
+          objective: promptRequest.objective,
+          language: promptRequest.language,
+          chunks: promptChunks,
+          tokenBudget: contextSelection.profile.tokenBudget,
+          maxChunks: contextSelection.profile.maxChunks
         });
         const contextImpact = buildContextImpact({
-          rawChunks: sourceChunks.length,
-          rawTokens,
+          rawChunks: contextSelection.rawChunks,
+          rawTokens: contextSelection.rawTokens,
           selectedChunks: builtPrompt.context.includedChunks.length,
-          selectedTokens: builtPrompt.context.stats.usedTokens,
+          selectedTokens: contextSelection.usedTokens,
           suppressedChunks: builtPrompt.context.suppressedChunks.length
         });
 
         try {
           const generation = await registry.generateWithFallback(builtPrompt.prompt, {
-            provider: body.provider,
-            fallbackProviders: Array.isArray(body.fallbackProviders)
-              ? body.fallbackProviders
-              : [],
+            provider: promptRequest.provider,
+            fallbackProviders: promptRequest.fallbackProviders,
             attemptTimeoutMs: Number(
-              body.attemptTimeoutMs ?? options.llm?.attemptTimeoutMs ?? 0
+              promptRequest.attemptTimeoutMs ?? options.llm?.attemptTimeoutMs ?? 0
             ),
             options: {
-              model: body.model
+              model: promptRequest.model
             }
           });
           const generated = generation.generated;
           const parsed = parseLlmResponse(generated.content);
-          const compliance = checkOutputCompliance(generated.content, /** @type {any} */ (body.compliance ?? {}));
+          const compliance = checkOutputCompliance(generated.content, /** @type {any} */ (promptRequest.compliance));
           const guardPolicy = resolveDomainGuardPolicy(
-            body.guardPolicyProfile,
-            /** @type {Record<string, unknown>} */ (body.guard ?? {})
+            promptRequest.guardPolicyProfile,
+            promptRequest.guard
           );
           const guard = enforceOutputGuard(generated.content, /** @type {any} */ (guardPolicy));
           const isBlocked = !(guard.allowed && compliance.compliant);
@@ -840,8 +2050,12 @@ export function createNexusApiServer(options = {}) {
               suppressedChunks: builtPrompt.context.suppressedChunks.length
             },
             context: {
-              rawChunks: sourceChunks.length,
-              rawTokens,
+              mode: contextSelection.mode,
+              profile: contextSelection.profile.endpoint,
+              rag: ragContext.rag,
+              sdd: contextSelection.sdd,
+              rawChunks: contextSelection.rawChunks,
+              rawTokens: contextSelection.rawTokens,
               selectedChunks: builtPrompt.context.includedChunks.length,
               selectedTokens: builtPrompt.context.stats.usedTokens,
               suppressedChunks: builtPrompt.context.suppressedChunks.length
@@ -863,6 +2077,9 @@ export function createNexusApiServer(options = {}) {
               selectedCount: builtPrompt.context.includedChunks.length,
               suppressedCount: builtPrompt.context.suppressedChunks.length
             },
+            recall: ragContext.recallMetric,
+            sdd: buildSddMetricSummary(contextSelection.sdd),
+            teaching: buildTeachingMetricSummary(parsed),
             safety: {
               blocked: isBlocked,
               reason: guard.reasons[0] ?? compliance.violations[0] ?? ""
@@ -870,7 +2087,7 @@ export function createNexusApiServer(options = {}) {
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          const preview = normalizedChunks
+          const preview = promptChunks
             .slice(0, 2)
             .map((chunk, index) => {
               const source = String(chunk.source ?? `chunk-${index + 1}`);
@@ -880,7 +2097,7 @@ export function createNexusApiServer(options = {}) {
           const fallbackResponse = [
             "⚠ NEXUS está en modo degradado (sin proveedor LLM disponible).",
             "",
-            normalizedChunks.length
+            promptChunks.length
               ? "Resumen de contexto recuperado:"
               : "No hay chunks recuperados para esta consulta.",
             ...preview
@@ -901,8 +2118,12 @@ export function createNexusApiServer(options = {}) {
             blocked: false,
             promptStats: builtPrompt.context.stats,
             context: {
-              rawChunks: sourceChunks.length,
-              rawTokens,
+              mode: contextSelection.mode,
+              profile: contextSelection.profile.endpoint,
+              rag: ragContext.rag,
+              sdd: contextSelection.sdd,
+              rawChunks: contextSelection.rawChunks,
+              rawTokens: contextSelection.rawTokens,
               selectedChunks: builtPrompt.context.includedChunks.length,
               selectedTokens: builtPrompt.context.stats.usedTokens,
               suppressedChunks: builtPrompt.context.suppressedChunks.length
@@ -926,6 +2147,9 @@ export function createNexusApiServer(options = {}) {
               selectedCount: builtPrompt.context.includedChunks.length,
               suppressedCount: builtPrompt.context.suppressedChunks.length
             },
+            recall: ragContext.recallMetric,
+            sdd: buildSddMetricSummary(contextSelection.sdd),
+            teaching: buildTeachingMetricSummary(undefined),
             safety: {
               blocked: false,
               reason: "llm-provider-unavailable"
@@ -1063,11 +2287,60 @@ export function createNexusApiServer(options = {}) {
         const body = /** @type {{ suitePath?: string, suite?: Record<string, unknown> }} */ (
           await readJsonBody(request)
         );
-        const suitePath = String(body.suitePath ?? defaultDomainSuitePath).trim();
-        const sourceSuite =
-          body.suite && typeof body.suite === "object"
-            ? body.suite
-            : await loadDomainEvalSuite(suitePath);
+        const hasInlineSuite = Boolean(body.suite && typeof body.suite === "object");
+        let suitePath = defaultDomainSuitePath;
+
+        if (!hasInlineSuite && typeof body.suitePath === "string" && body.suitePath.trim()) {
+          try {
+            suitePath = resolveSafePathWithinWorkspace(apiWorkspaceRoot, body.suitePath, "suitePath");
+          } catch {
+            sendErrorJson(response, 400, {
+              requestId,
+              code: "invalid_suite_path",
+              message: "Invalid 'suitePath'. Path must stay inside workspace root."
+            });
+            await recordApiMetric("api.evals.domain-suite", requestStartedAt, {
+              command: "api.evals.domain-suite",
+              durationMs: 0,
+              degraded: true,
+              safety: {
+                blocked: true,
+                reason: "invalid-suite-path"
+              }
+            });
+            return;
+          }
+        }
+
+        /** @type {Record<string, unknown>} */
+        let sourceSuite = {};
+        if (hasInlineSuite) {
+          sourceSuite = /** @type {Record<string, unknown>} */ (body.suite);
+        } else {
+          try {
+            const loaded = await loadDomainEvalSuite(suitePath);
+            sourceSuite =
+              loaded && typeof loaded === "object"
+                ? /** @type {Record<string, unknown>} */ (loaded)
+                : {};
+          } catch {
+            sendErrorJson(response, 400, {
+              requestId,
+              code: "suite_load_failed",
+              message: "Unable to load eval suite. Verify path and file format."
+            });
+            await recordApiMetric("api.evals.domain-suite", requestStartedAt, {
+              command: "api.evals.domain-suite",
+              durationMs: 0,
+              degraded: true,
+              safety: {
+                blocked: true,
+                reason: "suite-load-failed"
+              }
+            });
+            return;
+          }
+        }
         const suiteRecord =
           sourceSuite && typeof sourceSuite === "object"
             ? /** @type {Record<string, unknown>} */ (sourceSuite)
@@ -1088,7 +2361,7 @@ export function createNexusApiServer(options = {}) {
 
         sendJson(response, 200, {
           status: report.status,
-          suitePath,
+          suiteSource: hasInlineSuite ? "inline" : "path",
           report
         });
         await recordApiMetric("api.evals.domain-suite", requestStartedAt, {
@@ -1288,7 +2561,30 @@ export function createNexusApiServer(options = {}) {
           await readJsonBody(request)
         );
         const pipeline = body.pipeline ?? buildDefaultNexusPipeline();
-        const result = await pipelineBuilder.runPipeline(pipeline, body.input ?? {});
+        /** @type {Record<string, unknown>} */
+        let pipelineInput;
+
+        try {
+          pipelineInput = normalizePipelineInput(body.input ?? {}, apiWorkspaceRoot);
+        } catch (error) {
+          sendErrorJson(response, 400, {
+            requestId,
+            code: "invalid_pipeline_source_path",
+            message: error instanceof Error ? error.message : String(error)
+          });
+          await recordApiMetric("api.pipeline.run", requestStartedAt, {
+            command: "api.pipeline.run",
+            durationMs: 0,
+            degraded: true,
+            safety: {
+              blocked: true,
+              reason: "invalid-pipeline-source-path"
+            }
+          });
+          return;
+        }
+
+        const result = await pipelineBuilder.runPipeline(pipeline, pipelineInput);
 
         sendJson(response, 200, {
           status: "ok",
@@ -1299,81 +2595,98 @@ export function createNexusApiServer(options = {}) {
       }
 
       if (method === "POST" && pathname === "/api/ask") {
-        const body = /** @type {{
-         *   question?: string,
-         *   task?: string,
-         *   objective?: string,
-         *   language?: "es" | "en",
-         *   provider?: string,
-         *   fallbackProviders?: string[],
-         *   attemptTimeoutMs?: number,
-         *   model?: string,
-         *   chunks?: import("../types/core-contracts.d.ts").Chunk[],
-         *   tokenBudget?: number,
-         *   maxChunks?: number,
-         *   guardPolicyProfile?: string,
-         *   guard?: object,
-         *   compliance?: object
-         * }} */ (await readJsonBody(request));
+        const payload = normalizePromptRequest(
+          asRecord(await readJsonBody(request)),
+          "ask"
+        );
 
-        const question = String(body.question ?? "").trim();
-
-        if (!question) {
+        if (!payload.ok) {
           sendErrorJson(response, 400, {
             requestId,
-            code: "missing_question",
-            message: "Missing 'question' in request body."
+            code: payload.errorCode,
+            message: payload.errorMessage
+          });
+          await recordApiMetric("api.ask", requestStartedAt, {
+            command: "api.ask",
+            durationMs: 0,
+            degraded: true,
+            safety: {
+              blocked: true,
+              reason: payload.errorCode
+            }
           });
           return;
         }
 
-        const builtPrompt = buildLlmPrompt({
-          question,
-          task: body.task,
-          objective: body.objective,
-          language: body.language,
-          chunks: Array.isArray(body.chunks) ? body.chunks : [],
-          tokenBudget: body.tokenBudget ?? options.llm?.tokenBudget,
-          maxChunks: body.maxChunks ?? options.llm?.maxChunks
-        });
-        const requestChunks = Array.isArray(body.chunks) ? body.chunks : [];
-        const rawTokens = requestChunks.reduce((sum, entry) => {
-          const record = asRecord(entry);
-          const providedTokens = Number(record.tokens ?? 0);
-
-          if (Number.isFinite(providedTokens) && providedTokens > 0) {
-            return sum + Math.round(providedTokens);
+        const promptRequest = payload.value;
+        const explicitChunks = promptRequest.withContext ? promptRequest.chunks : [];
+        const ragContext = await resolveRagAugmentedChunks(
+          /** @type {Record<string, unknown>} */ (promptRequest),
+          "ask",
+          explicitChunks,
+          defaultExecutors.recall,
+          registry
+        );
+        const contextSelection = selectEndpointContext({
+          endpoint: "ask",
+          query: `${promptRequest.query} ${promptRequest.task ?? ""} ${promptRequest.objective ?? ""}`.trim(),
+          chunks: ragContext.chunks,
+          language: promptRequest.language,
+          framework: promptRequest.framework,
+          domain: promptRequest.domain,
+          sddProfile: promptRequest.sddProfile,
+          profileOverrides: {
+            tokenBudget:
+              typeof promptRequest.tokenBudget === "number"
+                ? promptRequest.tokenBudget
+                : options.llm?.tokenBudget,
+            maxChunks:
+              typeof promptRequest.maxChunks === "number"
+                ? promptRequest.maxChunks
+                : options.llm?.maxChunks,
+            sourceBudgets:
+              promptRequest.sourceBudgets &&
+              typeof promptRequest.sourceBudgets === "object" &&
+              !Array.isArray(promptRequest.sourceBudgets)
+                ? promptRequest.sourceBudgets
+                : undefined
           }
+        });
 
-          return sum + estimateTokenCount(String(record.content ?? ""));
-        }, 0);
+        const builtPrompt = buildLlmPrompt({
+          question: promptRequest.query,
+          task: promptRequest.task,
+          objective: promptRequest.objective,
+          language: promptRequest.language,
+          chunks: contextSelection.selectedChunks,
+          tokenBudget: contextSelection.profile.tokenBudget,
+          maxChunks: contextSelection.profile.maxChunks
+        });
         const contextImpact = buildContextImpact({
-          rawChunks: requestChunks.length,
-          rawTokens,
+          rawChunks: contextSelection.rawChunks,
+          rawTokens: contextSelection.rawTokens,
           selectedChunks: builtPrompt.context.includedChunks.length,
-          selectedTokens: builtPrompt.context.stats.usedTokens,
+          selectedTokens: contextSelection.usedTokens,
           suppressedChunks: builtPrompt.context.suppressedChunks.length
         });
 
         try {
           const generation = await registry.generateWithFallback(builtPrompt.prompt, {
-            provider: body.provider,
-            fallbackProviders: Array.isArray(body.fallbackProviders)
-              ? body.fallbackProviders
-              : [],
+            provider: promptRequest.provider,
+            fallbackProviders: promptRequest.fallbackProviders,
             attemptTimeoutMs: Number(
-              body.attemptTimeoutMs ?? options.llm?.attemptTimeoutMs ?? 0
+              promptRequest.attemptTimeoutMs ?? options.llm?.attemptTimeoutMs ?? 0
             ),
             options: {
-              model: body.model
+              model: promptRequest.model
             }
           });
           const generated = generation.generated;
           const parsed = parseLlmResponse(generated.content);
-          const compliance = checkOutputCompliance(generated.content, /** @type {any} */ (body.compliance ?? {}));
+          const compliance = checkOutputCompliance(generated.content, /** @type {any} */ (promptRequest.compliance));
           const guardPolicy = resolveDomainGuardPolicy(
-            body.guardPolicyProfile,
-            /** @type {Record<string, unknown>} */ (body.guard ?? {})
+            promptRequest.guardPolicyProfile,
+            promptRequest.guard
           );
           const guard = enforceOutputGuard(generated.content, /** @type {any} */ (guardPolicy));
 
@@ -1403,8 +2716,12 @@ export function createNexusApiServer(options = {}) {
               suppressedChunks: builtPrompt.context.suppressedChunks.length
             },
             context: {
-              rawChunks: requestChunks.length,
-              rawTokens,
+              mode: contextSelection.mode,
+              profile: contextSelection.profile.endpoint,
+              rag: ragContext.rag,
+              sdd: contextSelection.sdd,
+              rawChunks: contextSelection.rawChunks,
+              rawTokens: contextSelection.rawTokens,
               selectedChunks: builtPrompt.context.includedChunks.length,
               selectedTokens: builtPrompt.context.stats.usedTokens,
               suppressedChunks: builtPrompt.context.suppressedChunks.length
@@ -1428,6 +2745,9 @@ export function createNexusApiServer(options = {}) {
               selectedCount: builtPrompt.context.includedChunks.length,
               suppressedCount: builtPrompt.context.suppressedChunks.length
             },
+            recall: ragContext.recallMetric,
+            sdd: buildSddMetricSummary(contextSelection.sdd),
+            teaching: buildTeachingMetricSummary(parsed),
             safety: {
               blocked: !(guard.allowed && compliance.compliant),
               reason: guard.reasons[0] ?? compliance.violations[0] ?? ""
@@ -1464,8 +2784,12 @@ export function createNexusApiServer(options = {}) {
               suppressedChunks: builtPrompt.context.suppressedChunks.length
             },
             context: {
-              rawChunks: requestChunks.length,
-              rawTokens,
+              mode: contextSelection.mode,
+              profile: contextSelection.profile.endpoint,
+              rag: ragContext.rag,
+              sdd: contextSelection.sdd,
+              rawChunks: contextSelection.rawChunks,
+              rawTokens: contextSelection.rawTokens,
               selectedChunks: builtPrompt.context.includedChunks.length,
               selectedTokens: builtPrompt.context.stats.usedTokens,
               suppressedChunks: builtPrompt.context.suppressedChunks.length
@@ -1498,6 +2822,9 @@ export function createNexusApiServer(options = {}) {
               selectedCount: builtPrompt.context.includedChunks.length,
               suppressedCount: builtPrompt.context.suppressedChunks.length
             },
+            recall: ragContext.recallMetric,
+            sdd: buildSddMetricSummary(contextSelection.sdd),
+            teaching: buildTeachingMetricSummary(undefined),
             safety: {
               blocked: false,
               reason: "llm-provider-unavailable"
@@ -1524,22 +2851,33 @@ export function createNexusApiServer(options = {}) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const invalidJson = /Invalid JSON request body\./i.test(message);
-      const statusCode = invalidJson ? 400 : 500;
+      const requestTooLarge = /Request body too large/i.test(message);
+      const statusCode = requestTooLarge ? 413 : invalidJson ? 400 : 500;
+      const clientMessage =
+        requestTooLarge || invalidJson ? message : "Internal server error.";
+
+      if (!requestTooLarge && !invalidJson) {
+        console.error(`[nexus-api] request ${requestId} failed: ${message}`);
+      }
 
       sendErrorJson(response, statusCode, {
         requestId,
-        code: invalidJson ? "invalid_json" : "internal_error",
-        message
+        code: requestTooLarge ? "request_too_large" : invalidJson ? "invalid_json" : "internal_error",
+        message: clientMessage
       });
-      await recordApiMetric(invalidJson ? "api.route.400" : "api.route.500", requestStartedAt, {
-        command: invalidJson ? "api.route.400" : "api.route.500",
-        durationMs: 0,
-        degraded: true,
-        safety: {
-          blocked: true,
-          reason: invalidJson ? "invalid-json" : "internal-error"
+      await recordApiMetric(
+        requestTooLarge ? "api.route.413" : invalidJson ? "api.route.400" : "api.route.500",
+        requestStartedAt,
+        {
+          command: requestTooLarge ? "api.route.413" : invalidJson ? "api.route.400" : "api.route.500",
+          durationMs: 0,
+          degraded: true,
+          safety: {
+            blocked: true,
+            reason: requestTooLarge ? "request-too-large" : invalidJson ? "invalid-json" : "internal-error"
+          }
         }
-      });
+      );
     }
   });
 

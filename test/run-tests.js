@@ -100,6 +100,7 @@ import {
 import { evaluateMemoryPoisoningGate } from "../src/eval/memory-poisoning-gate.js";
 import { evaluateRagGoldenSetGate } from "../src/eval/rag-golden-set-gate.js";
 import { evaluateFineTuningReadinessGate } from "../src/eval/fine-tuning-readiness-gate.js";
+import { evaluateFt1FormatGate } from "../src/eval/ft1-format-gate.js";
 import {
   getObservabilityReport,
   recordCommandMetric
@@ -8362,6 +8363,64 @@ run("NEXUS:7 fine-tuning readiness gate blocks dataset with secrets and low peda
   assert.equal(risky.metrics.secretRate > 0, true);
 });
 
+run("NEXUS:7 FT-1 format gate enforces structured output and measurable lift", () => {
+  const passing = evaluateFt1FormatGate({
+    suiteName: "ft1-passing",
+    thresholds: {
+      minCasePassRate: 1,
+      minCandidateSectionCoverage: 1,
+      minCandidatePracticeRate: 1,
+      minCandidateHeadingCoverage: 1,
+      minCoverageLift: 0.5,
+      minPracticeLift: 0.5
+    },
+    cases: [
+      {
+        id: "case-1",
+        baselineOutput: "Se mejoró el middleware con validaciones al inicio.",
+        candidateOutput:
+          "Change:\nSe movió la validación JWT al borde.\nReason:\nEvita bypass en handlers.\nConcepts:\n- request boundary\nPractice:\nAgrega un test de token expirado."
+      },
+      {
+        id: "case-2",
+        baselineOutput: "Se hizo hardening y hay que probar payloads inválidos.",
+        candidateOutput:
+          "Change:\nSe unificó validación de chunks.\nReason:\nElimina drift entre endpoints.\nConcepts:\n- input contract\nPractice:\nEnvía chunks inválidos y valida 400."
+      }
+    ]
+  });
+
+  assert.equal(passing.passed, true);
+  assert.equal(passing.summary.casePassRate, 1);
+  assert.equal(passing.summary.candidateSectionCoverage, 1);
+  assert.equal(passing.summary.candidateHeadingCoverage, 1);
+  assert.equal(passing.summary.coverageLift >= 0.5, true);
+  assert.equal(passing.summary.practiceLift >= 0.5, true);
+
+  const failing = evaluateFt1FormatGate({
+    suiteName: "ft1-failing",
+    thresholds: {
+      minCasePassRate: 1,
+      minCandidateSectionCoverage: 1,
+      minCandidatePracticeRate: 1,
+      minCandidateHeadingCoverage: 1,
+      minCoverageLift: 0.2,
+      minPracticeLift: 0.2
+    },
+    cases: [
+      {
+        id: "case-bad",
+        baselineOutput:
+          "Change:\nSe unificó validación.\nReason:\nEvita drift.\nConcepts:\n- contrato\nPractice:\nPrueba payload inválido.",
+        candidateOutput: "Respuesta libre sin secciones ni práctica accionable."
+      }
+    ]
+  });
+
+  assert.equal(failing.passed, false);
+  assert.equal(failing.summary.casePassRate, 0);
+});
+
 run("NEXUS:7 conversation noise gate validates 100-turn stress and A/B reduction signals", () => {
   const passing = evaluateConversationNoiseGate({
     baseline: {
@@ -9795,6 +9854,127 @@ run("NEXUS:10 API chat runs RAG reranker on auto-retrieved chunks", async () => 
     }
 
     await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:10 API chat applies embedding reranker when enabled with provider support", async () => {
+  const previousEmbeddingsEnabled = process.env.LCS_RAG_EMBEDDINGS_ENABLED;
+  process.env.LCS_RAG_EMBEDDINGS_ENABLED = "true";
+
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-api-chat-rag-embeddings-"));
+  const server = createNexusApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    auth: {
+      requireAuth: false
+    },
+    llm: {
+      defaultProvider: "mock",
+      providers: [
+        {
+          provider: "mock",
+          async generate() {
+            return {
+              content: "Change: Applied auth hardening.\nReason: Better JWT boundary checks."
+            };
+          }
+        },
+        {
+          provider: "embed-mock",
+          async generate() {
+            return {
+              content: "embedding provider generate noop"
+            };
+          },
+          async embed(text, options = {}) {
+            const normalized = String(text ?? "").toLowerCase();
+            const isJwt = /\bjwt\b|\btoken\b|\bauth\b/u.test(normalized);
+            return {
+              vector: isJwt ? [1, 0] : [0, 1],
+              dimensions: 2,
+              model: String(options.model ?? "embed-mock-v1")
+            };
+          }
+        }
+      ]
+    },
+    sync: {
+      rootPath: tempRoot,
+      autoStart: false
+    },
+    repositoryFilePath: path.join(tempRoot, "chunks.jsonl")
+  });
+
+  let started = false;
+
+  try {
+    const start = await server.start();
+    started = true;
+    const baseUrl = `http://127.0.0.1:${start.port}`;
+    await fetch(`${baseUrl}/api/remember`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        title: "Auth middleware",
+        content: "Auth middleware must validate JWT issuer, signature and exp before handler execution.",
+        project: "rag-embeddings"
+      })
+    });
+    await fetch(`${baseUrl}/api/remember`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        title: "Frontend css note",
+        content: "Use dark mode CSS variables in frontend docs.",
+        project: "rag-embeddings"
+      })
+    });
+
+    const chat = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        query: "How do we validate JWT in middleware?",
+        project: "rag-embeddings",
+        provider: "mock",
+        rag: {
+          force: true,
+          rerank: true,
+          embeddings: true,
+          embeddingProvider: "embed-mock",
+          embeddingModel: "embed-mock-v2",
+          rerankTopK: 6
+        }
+      })
+    });
+    const payload = await chat.json();
+
+    assert.equal(chat.status, 200);
+    assert.equal(payload.status, "ok");
+    assert.equal(payload.context.rag.autoRetrieve, true);
+    assert.equal(payload.context.rag.rerankApplied, true);
+    assert.equal(payload.context.rag.embeddingRequested, true);
+    assert.equal(payload.context.rag.embeddingApplied, true);
+    assert.equal(payload.context.rag.embeddingProvider, "embed-mock");
+    assert.equal(payload.context.rag.embeddingModel, "embed-mock-v2");
+    assert.equal(payload.context.rag.embeddingError, "");
+  } finally {
+    if (started) {
+      await server.stop();
+    }
+
+    await rm(tempRoot, { recursive: true, force: true });
+    if (previousEmbeddingsEnabled === undefined) {
+      delete process.env.LCS_RAG_EMBEDDINGS_ENABLED;
+    } else {
+      process.env.LCS_RAG_EMBEDDINGS_ENABLED = previousEmbeddingsEnabled;
+    }
   }
 });
 

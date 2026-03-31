@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { access, readFile } from "node:fs/promises";
 import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
@@ -5,10 +6,10 @@ import { promisify } from "node:util";
 
 import { defaultProjectConfig, parseProjectConfig } from "../contracts/config-contracts.js";
 import { writeTextFile } from "../io/text-file.js";
-import { isRufloAvailable } from "../memory/ruflo-memory-adapter.js";
 import type { DoctorCheck, DoctorResult } from "../types/core-contracts.d.ts";
 
 const execFile = promisify(execFileCallback);
+const require = createRequire(import.meta.url);
 
 interface LoadedConfigInfo {
   found: boolean;
@@ -164,6 +165,48 @@ async function tryExec(command: string, args: string[]): Promise<ExecResult> {
   return { ok: false, stdout: "", stderr: `Unable to execute ${command}` };
 }
 
+async function resolveNpmCliPath(): Promise<string> {
+  const candidates: string[] = [];
+  const npmExecPath =
+    typeof process.env.npm_execpath === "string" ? process.env.npm_execpath.trim() : "";
+
+  if (npmExecPath) {
+    candidates.push(npmExecPath);
+  }
+
+  try {
+    candidates.push(require.resolve("npm/bin/npm-cli.js"));
+  } catch {}
+
+  const nodeDir = path.dirname(process.execPath);
+  candidates.push(path.join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"));
+  candidates.push(path.join(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"));
+
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const normalized = path.resolve(candidate);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    if (await pathExists(normalized)) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+async function tryExecNpm(args: string[]): Promise<ExecResult> {
+  const npmCliPath = await resolveNpmCliPath();
+
+  if (npmCliPath) {
+    return tryExec(process.execPath, [npmCliPath, ...args]);
+  }
+
+  return tryExec("npm", args);
+}
+
 async function readNpmIgnoreScriptsPolicy(npmAvailability: { ok: boolean }): Promise<IgnoreScriptsPolicy> {
   if (!npmAvailability.ok) {
     return {
@@ -173,10 +216,7 @@ async function readNpmIgnoreScriptsPolicy(npmAvailability: { ok: boolean }): Pro
     };
   }
 
-  const configResult =
-    process.platform === "win32"
-      ? await tryExec("cmd.exe", ["/c", "npm.cmd", "config", "get", "ignore-scripts"])
-      : await tryExec("npm", ["config", "get", "ignore-scripts"]);
+  const configResult = await tryExecNpm(["config", "get", "ignore-scripts"]);
 
   if (!configResult.ok) {
     return {
@@ -227,10 +267,7 @@ export async function runProjectDoctor(input: RunProjectDoctorInput): Promise<Do
     fix: nodeMajor >= 20 ? "" : "Install Node.js 20 or newer."
   });
 
-  const npmResult =
-    process.platform === "win32"
-      ? await tryExec("cmd.exe", ["/c", "npm.cmd", "--version"])
-      : await tryExec("npm", ["--version"]);
+  const npmResult = await tryExecNpm(["--version"]);
   checks.push({
     id: "npm",
     label: "npm availability",
@@ -363,29 +400,12 @@ export async function runProjectDoctor(input: RunProjectDoctorInput): Promise<Do
     status: memoryBackend === "resilient" ? "pass" : "warn",
     detail:
       memoryBackend === "resilient"
-        ? "resilient (Ruflo HNSW primary + local JSONL fallback)."
-        : "local-only (Ruflo disabled by config).",
+        ? "resilient (local JSONL primary + optional external battery contingency)."
+        : "local-only (only the local JSONL store is active).",
     fix:
       memoryBackend === "resilient"
         ? ""
-        : "Prefer memory.backend='resilient' for semantic recall with Ruflo plus local fallback."
-  });
-
-  const rufloAvailable = await isRufloAvailable();
-  checks.push({
-    id: "ruflo-memory",
-    label: "Ruflo HNSW memory",
-    status: memoryBackend === "local-only" || rufloAvailable ? "pass" : "warn",
-    detail:
-      memoryBackend === "local-only"
-        ? `Skipped because memory.backend='${memoryBackend}'.`
-        : rufloAvailable
-          ? "Ruflo available — semantic HNSW recall active."
-          : "Ruflo not found — semantic recall will degrade to the local JSONL store.",
-    fix:
-      memoryBackend === "local-only" || rufloAvailable
-        ? ""
-        : "Install Ruflo or run with --memory-backend local-only / --skip-ruflo true until the semantic tier is available."
+        : "Prefer memory.backend='resilient' when you want local-first recall plus optional external battery fallback."
   });
 
   const localMemoryDir = path.resolve(cwd, ".lcs/memory");
@@ -420,7 +440,7 @@ export async function runProjectDoctor(input: RunProjectDoctorInput): Promise<Do
     fix:
       memoryBackend === "local-only" || engramBatteryExists
         ? ""
-        : "Install or place the Engram binary only if you want third-tier contingency memory. NEXUS remains canonical on Ruflo + local."
+              : "Install or place the Engram binary only if you want third-tier contingency memory. NEXUS remains canonical on local JSONL + optional external battery."
   });
 
   const summary = checks.reduce<DoctorResult["summary"]>(

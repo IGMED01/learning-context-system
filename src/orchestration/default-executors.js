@@ -6,6 +6,8 @@ import { tagChunkMetadata } from "../processing/metadata-tagger.js";
 import { getAdapter, listAdapters } from "../io/source-adapter.js";
 import { createChunkRepository } from "../storage/chunk-repository.js";
 import { createHybridRetriever } from "../storage/hybrid-retriever.js";
+import { evaluateMemoryWrite, buildAcceptedMemoryMetadata } from "../memory/memory-hygiene.js";
+import path from "node:path";
 
 // Trigger adapter auto-registration for ingest by path/source.
 import "../io/pdf-adapter.js";
@@ -25,6 +27,146 @@ function asRecord(value) {
  */
 function asText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * @param {unknown} value
+ */
+function asNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * @param {unknown} value
+ */
+function resolveProjectId(value) {
+  return asText(value) || "default";
+}
+
+/**
+ * @param {{ repositoryFilePath?: string, repositoryBaseDir?: string }} options
+ */
+function resolveRepositoryBaseDir(options) {
+  const explicitBaseDir = asText(options.repositoryBaseDir);
+
+  if (explicitBaseDir) {
+    return path.resolve(explicitBaseDir);
+  }
+
+  const repositoryFilePath = asText(options.repositoryFilePath);
+
+  if (!repositoryFilePath) {
+    return undefined;
+  }
+
+  const resolvedRepositoryPath = path.resolve(repositoryFilePath);
+  return path.extname(resolvedRepositoryPath)
+    ? path.dirname(resolvedRepositoryPath)
+    : resolvedRepositoryPath;
+}
+
+/**
+ * @param {Record<string, unknown>} input
+ * @param {Record<string, unknown>} metadata
+ */
+function shouldEvaluateIngestHygiene(input, metadata) {
+  if (input.hygieneGate === false) {
+    return false;
+  }
+
+  if (metadata.preChunked === true) {
+    return true;
+  }
+
+  if (typeof metadata.ingestedBy === "string" && metadata.ingestedBy.trim()) {
+    return true;
+  }
+
+  if (
+    typeof input.sourcePath === "string" ||
+    typeof input.inputPath === "string" ||
+    typeof input.path === "string"
+  ) {
+    return true;
+  }
+
+  return Boolean(input.ingest && typeof input.ingest === "object");
+}
+
+/**
+ * @param {string} kind
+ */
+function mapChunkKindToMemoryType(kind) {
+  if (kind === "test") {
+    return "test";
+  }
+
+  if (kind === "log") {
+    return "generated";
+  }
+
+  return "learning";
+}
+
+/**
+ * @param {Record<string, unknown>} entry
+ * @param {Record<string, unknown>} metadata
+ * @param {string} projectId
+ * @param {ReturnType<typeof evaluateMemoryWrite> | null} evaluation
+ */
+function buildChunkTags(entry, metadata, projectId, evaluation) {
+  const tags = {
+    ...asRecord(metadata.tags),
+    ...asRecord(entry.tags),
+    projectId
+  };
+
+  if (!evaluation) {
+    return tags;
+  }
+
+  return {
+    ...tags,
+    memoryStatus: evaluation.action === "quarantine" ? "quarantined" : "accepted",
+    reviewStatus: evaluation.reviewStatus,
+    reviewReasons: [...evaluation.reasons],
+    signalScore: evaluation.signalScore,
+    duplicateScore: evaluation.duplicateScore,
+    durabilityScore: evaluation.durabilityScore,
+    healthScore: evaluation.healthScore,
+    ...buildAcceptedMemoryMetadata(evaluation, {
+      sourceKind: "pipeline-ingest"
+    })
+  };
+}
+
+/**
+ * @param {Record<string, unknown>} entry
+ * @param {Record<string, unknown>} metadata
+ * @param {string} projectId
+ * @param {ReturnType<typeof evaluateMemoryWrite> | null} evaluation
+ */
+function normalizeChunkForRepository(entry, metadata, projectId, evaluation) {
+  const id = asText(entry.id);
+  const content = String(entry.content ?? "").trim();
+
+  if (!id || !content) {
+    return null;
+  }
+
+  const priority = asNumber(entry.priority ?? entry.score);
+
+  return {
+    id,
+    source: asText(entry.source) || id,
+    kind: asText(entry.kind) || "doc",
+    content,
+    certainty: asNumber(entry.certainty),
+    recency: asNumber(entry.recency),
+    teachingValue: asNumber(entry.teachingValue),
+    priority,
+    tags: buildChunkTags(entry, metadata, projectId, evaluation)
+  };
 }
 
 /**
@@ -58,8 +200,9 @@ function ingestDocuments(payload) {
 
 /**
  * @param {Record<string, unknown>} payload
+ * @param {(sourcePath: string) => string} [resolveSourcePath]
  */
-async function ingestWithAdapter(payload) {
+async function ingestWithAdapter(payload, resolveSourcePath) {
   const adapterName = asText(payload.adapter ?? payload.sourceAdapter ?? payload.ingestAdapter);
   const sourcePath = asText(payload.path ?? payload.sourcePath ?? payload.inputPath);
 
@@ -78,10 +221,12 @@ async function ingestWithAdapter(payload) {
     );
   }
 
-  const project = asText(payload.project);
+  const projectId = resolveProjectId(payload.project);
   const maxContentChars = Number(payload.maxContentChars ?? 0);
-  const readResult = await adapter.read(sourcePath, {
-    project,
+  const safeSourcePath =
+    typeof resolveSourcePath === "function" ? resolveSourcePath(sourcePath) : sourcePath;
+  const readResult = await adapter.read(safeSourcePath, {
+    project: projectId,
     maxContentChars: Number.isFinite(maxContentChars) && maxContentChars > 0
       ? Math.trunc(maxContentChars)
       : undefined
@@ -89,16 +234,17 @@ async function ingestWithAdapter(payload) {
 
   return {
     adapter: adapter.name,
-    sourcePath,
+    sourcePath: safeSourcePath,
+    projectId,
     stats: readResult.stats,
     chunks: readResult.chunks.map((chunk, index) => ({
       id: String(chunk.id ?? `ingested-${index + 1}`),
-      source: String(chunk.source ?? sourcePath),
+      source: String(chunk.source ?? safeSourcePath),
       kind: String(chunk.kind ?? "doc"),
       content: String(chunk.content ?? ""),
       metadata: {
         ingestedBy: `adapter:${adapter.name}`,
-        sourcePath
+        sourcePath: safeSourcePath
       }
     }))
   };
@@ -106,10 +252,16 @@ async function ingestWithAdapter(payload) {
 
 /**
  * NEXUS:5 — register default executors for ingest/process/store/recall pipeline.
- * @param {{ repositoryFilePath?: string }} [options]
+ * @param {{
+ *   repositoryFilePath?: string,
+ *   repositoryBaseDir?: string,
+ *   resolveSourcePath?: (sourcePath: string) => string
+ * }} [options]
  */
 export function createDefaultExecutors(options = {}) {
+  const repositoryBaseDir = resolveRepositoryBaseDir(options);
   const repository = createChunkRepository({
+    baseDir: repositoryBaseDir,
     filePath: options.repositoryFilePath
   });
 
@@ -119,7 +271,13 @@ export function createDefaultExecutors(options = {}) {
      */
     async ingest(context) {
       const payload = asRecord(context.input);
-      const adapterIngest = await ingestWithAdapter(payload);
+      const projectId = resolveProjectId(payload.project ?? payload.projectId);
+      const adapterIngest = await ingestWithAdapter(
+        payload,
+        typeof options.resolveSourcePath === "function"
+          ? options.resolveSourcePath
+          : undefined
+      );
 
       if (adapterIngest) {
         return {
@@ -132,6 +290,7 @@ export function createDefaultExecutors(options = {}) {
             stats: adapterIngest.stats,
             totalChunks: adapterIngest.chunks.length
           },
+          projectId: adapterIngest.projectId,
           query: typeof payload.query === "string" ? payload.query : "",
           limit:
             typeof payload.limit === "number" && Number.isFinite(payload.limit)
@@ -144,6 +303,7 @@ export function createDefaultExecutors(options = {}) {
 
       return {
         documents,
+        projectId,
         query: typeof payload.query === "string" ? payload.query : "",
         limit:
           typeof payload.limit === "number" && Number.isFinite(payload.limit)
@@ -157,6 +317,7 @@ export function createDefaultExecutors(options = {}) {
      */
     async process(context) {
       const input = asRecord(context.input);
+      const projectId = resolveProjectId(input.projectId ?? input.project);
       const skipChunking = input.skipChunking === true;
       const preChunked = Array.isArray(input.chunks) ? input.chunks : [];
       const documents = Array.isArray(input.documents) ? input.documents : [];
@@ -206,6 +367,7 @@ export function createDefaultExecutors(options = {}) {
 
         return {
           ...input,
+          projectId,
           chunks
         };
       }
@@ -246,6 +408,7 @@ export function createDefaultExecutors(options = {}) {
 
       return {
         ...input,
+        projectId,
         chunks
       };
     },
@@ -255,8 +418,13 @@ export function createDefaultExecutors(options = {}) {
      */
     async store(context) {
       const input = asRecord(context.input);
+      const projectId = resolveProjectId(input.projectId ?? input.project);
       const chunks = Array.isArray(input.chunks) ? input.chunks : [];
-      let storedCount = 0;
+      /** @type {Array<import("../types/core-contracts.d.ts").Chunk>} */
+      const acceptedChunks = [];
+      /** @type {Array<{ id: string, source: string, kind: string, reasons: string[], reviewStatus: string }>} */
+      const quarantinedChunks = [];
+      let hygieneEvaluated = 0;
 
       for (const chunk of chunks) {
         if (!chunk || typeof chunk !== "object") {
@@ -264,21 +432,61 @@ export function createDefaultExecutors(options = {}) {
         }
 
         const entry = /** @type {Record<string, unknown>} */ (chunk);
+        const metadata = asRecord(entry.metadata);
+        const shouldGateChunk = shouldEvaluateIngestHygiene(input, metadata);
+        /** @type {ReturnType<typeof evaluateMemoryWrite> | null} */
+        let evaluation = null;
 
-        await repository.upsertChunk({
-          id: String(entry.id ?? ""),
-          source: String(entry.source ?? ""),
-          kind: String(entry.kind ?? "doc"),
-          content: String(entry.content ?? ""),
-          metadata: asRecord(entry.metadata)
-        });
-        storedCount += 1;
+        if (shouldGateChunk) {
+          hygieneEvaluated += 1;
+          evaluation = evaluateMemoryWrite({
+            title:
+              asText(entry.id) ||
+              asText(entry.source).split(/[/\\]/u).at(-1) ||
+              "pipeline-ingest",
+            content: String(entry.content ?? ""),
+            type: mapChunkKindToMemoryType(asText(entry.kind) || "doc"),
+            project: projectId,
+            scope: "project",
+            topic: `pipeline/${asText(entry.kind) || "doc"}`,
+            sourceKind: "pipeline-ingest"
+          });
+
+          if (evaluation.action === "quarantine") {
+            quarantinedChunks.push({
+              id: asText(entry.id) || "unknown",
+              source: asText(entry.source) || "unknown",
+              kind: asText(entry.kind) || "doc",
+              reasons: [...evaluation.reasons],
+              reviewStatus: evaluation.reviewStatus
+            });
+            continue;
+          }
+        }
+
+        const normalizedChunk = normalizeChunkForRepository(entry, metadata, projectId, evaluation);
+
+        if (normalizedChunk) {
+          acceptedChunks.push(
+            /** @type {import("../types/core-contracts.d.ts").Chunk} */ (normalizedChunk)
+          );
+        }
       }
+      const saved = await repository.save(projectId, acceptedChunks);
 
       return {
         ...input,
-        storedCount,
-        repositoryFilePath: repository.filePath
+        projectId,
+        storedCount: saved.saved,
+        quarantinedCount: quarantinedChunks.length,
+        quarantinedChunks,
+        hygiene: {
+          evaluated: hygieneEvaluated,
+          accepted: saved.saved,
+          quarantined: quarantinedChunks.length
+        },
+        repositoryFilePath: repository.filePath,
+        repositoryBaseDir: repositoryBaseDir ?? path.dirname(repository.filePath)
       };
     },
 
@@ -287,12 +495,17 @@ export function createDefaultExecutors(options = {}) {
      */
     async recall(context) {
       const input = asRecord(context.input);
+      const projectId = resolveProjectId(input.projectId ?? input.project);
       const query = typeof input.query === "string" ? input.query : "";
       const limit =
         typeof input.limit === "number" && Number.isFinite(input.limit)
           ? Math.max(1, Math.trunc(input.limit))
           : 5;
-      const indexed = await repository.listChunks({ limit: 1000 });
+      const loadedChunks = await repository.load(projectId);
+      const indexed = loadedChunks.filter((entry) => {
+        const taggedProjectId = asText(asRecord(entry.tags).projectId);
+        return !taggedProjectId || taggedProjectId === projectId;
+      });
       const retriever = createHybridRetriever();
       retriever.index(
         indexed.map((entry) => ({
@@ -318,10 +531,15 @@ export function createDefaultExecutors(options = {}) {
 
       return {
         ...input,
+        projectId,
         query,
         limit,
         results,
-        hit: results.length > 0
+        hit: results.length > 0,
+        isolation: {
+          loadedChunks: loadedChunks.length,
+          indexedChunks: indexed.length
+        }
       };
     }
   };

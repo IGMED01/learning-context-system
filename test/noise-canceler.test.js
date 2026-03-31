@@ -120,6 +120,56 @@ test("buildLearningPacket returns teaching scaffolding with selected context", (
   assert.equal(packet.teachingChecklist.length, 4);
 });
 
+test("buildLearningPacket uses endpoint selector diagnostics for teach context", () => {
+  const packet = buildLearningPacket({
+    task: "Improve auth middleware",
+    objective: "Teach selector diagnostics",
+    changedFiles: ["src/auth.js"],
+    chunks: [
+      {
+        id: "code-auth",
+        source: "src/auth.js",
+        kind: "code",
+        content: "JWT validation runs before handlers.",
+        certainty: 0.95,
+        recency: 0.9,
+        teachingValue: 0.9,
+        priority: 0.95
+      }
+    ]
+  });
+
+  assert.equal(packet.diagnostics.selectorStatus, "ok");
+  assert.equal(packet.diagnostics.summary.selectedCount >= 1, true);
+});
+
+test("buildLearningPacket degrades gracefully when endpoint selector fails", () => {
+  const packet = buildLearningPacket({
+    task: "Fallback selector",
+    objective: "Teach legacy fallback",
+    changedFiles: ["src/auth.js"],
+    selector: () => {
+      throw new Error("selector timeout");
+    },
+    chunks: [
+      {
+        id: "code-auth",
+        source: "src/auth.js",
+        kind: "code",
+        content: "JWT validation runs before handlers.",
+        certainty: 0.95,
+        recency: 0.9,
+        teachingValue: 0.9,
+        priority: 0.95
+      }
+    ]
+  });
+
+  assert.equal(packet.diagnostics.selectorStatus, "degraded");
+  assert.equal(packet.diagnostics.selectorReason, "timeout");
+  assert.equal(packet.selectedContext.length >= 1, true);
+});
+
 // --- Phase 1: recall → selection → teaching sections costura ---
 
 test("memory recall chunks enter teachingSections.historicalMemory", () => {

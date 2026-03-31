@@ -2,12 +2,21 @@
 // @ts-check
 /**
  * Production entry point — serves API + static UI from ui/dist.
+ * This is the canonical boot path for the secured API runtime.
  */
 
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createAuthMiddleware } from "./auth-middleware.js";
+import {
+  applyBaseSecurityHeaders,
+  applyRateLimitHeaders,
+  createRateLimiter,
+  resolveCorsOrigin,
+  sendRateLimitExceeded
+} from "./security-runtime.js";
 
 // Import handlers to register all routes
 import "./handlers.js";
@@ -15,6 +24,21 @@ import { handleRequest } from "./router.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIST = path.resolve(__dirname, "../../ui/dist");
+
+/**
+ * @param {string | undefined} raw
+ * @returns {string[]}
+ */
+function parseCsvEnv(raw) {
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
 
 const MIME_TYPES = {
   ".html": "text/html",
@@ -81,16 +105,94 @@ function serveSpaFallback(res) {
   }
 }
 
-const host = process.env.LCS_API_HOST || "0.0.0.0";
+const host = process.env.LCS_API_HOST || "127.0.0.1";
 const port = Number(process.env.LCS_API_PORT || 3100);
+const corsOrigin = resolveCorsOrigin(
+  process.env.LCS_API_CORS_ORIGIN || process.env.LCS_API_CORS,
+  host,
+  port
+);
+const requireAuth = process.env.LCS_API_REQUIRE_AUTH !== "false";
+const apiKeys = [
+  ...(process.env.LCS_API_KEY ? [process.env.LCS_API_KEY] : []),
+  ...parseCsvEnv(process.env.LCS_API_KEYS)
+];
+const jwtSecret = process.env.LCS_API_JWT_SECRET || "";
+const jwtIssuer = process.env.LCS_API_JWT_ISSUER || "";
+const jwtAudience = parseCsvEnv(process.env.LCS_API_JWT_AUDIENCE);
+const jwtClockSkewSeconds = Number(process.env.LCS_API_JWT_CLOCK_SKEW_SECONDS || 30);
+const auth = createAuthMiddleware({
+  requireAuth,
+  apiKeys,
+  jwtSecret,
+  jwtIssuer,
+  jwtAudience,
+  jwtClockSkewSeconds
+});
+const PUBLIC_API_ROUTES = new Set(["/api/health"]);
+const rateLimiter = createRateLimiter({
+  heavyRoutes: [
+    "/api/agent",
+    "/api/mitosis",
+    "/api/chat",
+    "/api/eval",
+    "/api/rollback-check"
+  ]
+});
+
+/**
+ * @param {http.ServerResponse} res
+ * @param {{ statusCode?: number, message: string, reason?: string }} input
+ */
+function sendAuthError(res, input) {
+  const statusCode = input.statusCode ?? 401;
+  res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(
+    `${JSON.stringify(
+      {
+        error: true,
+        message: input.message,
+        reason: input.reason ?? "unauthorized"
+      },
+      null,
+      2
+    )}\n`
+  );
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const pathname = url.pathname;
+  applyBaseSecurityHeaders(res);
 
   // API routes → router.js (handlers.js registered routes)
   if (pathname.startsWith("/api/")) {
-    await handleRequest(req, res, { corsOrigin: "*" });
+    if (req.method !== "OPTIONS") {
+      const rateLimit = rateLimiter.check(req, pathname);
+      applyRateLimitHeaders(res, rateLimit);
+
+      if (!rateLimit.allowed) {
+        sendRateLimitExceeded(res, rateLimit);
+        return;
+      }
+    }
+
+    if (req.method !== "OPTIONS" && !PUBLIC_API_ROUTES.has(pathname)) {
+      const authResult = auth.authorize({
+        headers: req.headers
+      });
+
+      if (!authResult.authorized) {
+        sendAuthError(res, {
+          statusCode: authResult.statusCode,
+          message: authResult.error ?? "Authentication required.",
+          reason: authResult.reason
+        });
+        return;
+      }
+    }
+
+    await handleRequest(req, res, { corsOrigin });
     return;
   }
 

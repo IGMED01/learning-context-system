@@ -78,7 +78,7 @@ Expected:
 Orden operativo de memoria:
 
 1. local JSONL
-2. Ruflo / semantic tier
+2. tier semantico interno de NEXUS (si esta habilitado)
 3. Engram solo como bateria externa de contingencia
 
 Ver politica completa en `docs/memory-battery-policy.md`.

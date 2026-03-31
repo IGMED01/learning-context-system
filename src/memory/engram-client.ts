@@ -120,21 +120,6 @@ function isSpawnPermissionError(error: unknown): boolean {
   );
 }
 
-function quoteForCmd(value: string): string {
-  return `"${String(value).replace(/"/g, '""')}"`;
-}
-
-async function runThroughCmd(
-  binaryPath: string,
-  args: string[],
-  options: ExecFileOptions
-): Promise<CommandOutput> {
-  const cmdPath = process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe";
-  const command = [binaryPath, ...args].map(quoteForCmd).join(" ");
-
-  return defaultExec(cmdPath, ["/d", "/s", "/c", command], options);
-}
-
 export function buildCloseSummaryContent(input: CloseSummaryInput): string {
   const lines = ["## Session Close Summary", "", `- Summary: ${input.summary}`];
 
@@ -283,8 +268,15 @@ export function createEngramClient(options: CreateEngramClientOptions = {}) {
         if (process.platform !== "win32" || !isSpawnPermissionError(error)) {
           throw error;
         }
-
-        result = await runThroughCmd(config.binaryPath, args, executionOptions);
+        const permissionError = new Error(
+          [
+            `Engram binary execution blocked: ${config.binaryPath}`,
+            "Windows denied direct execution for the external battery binary.",
+            "Unblock or reauthorize the binary instead of falling back through cmd.exe."
+          ].join("\n")
+        );
+        (permissionError as Error & { cause?: unknown }).cause = error;
+        throw permissionError;
       }
 
       return {
@@ -300,9 +292,19 @@ export function createEngramClient(options: CreateEngramClientOptions = {}) {
       const maybeError = typeof error === "object" && error ? (error as ExecErrorLike) : {};
       const stdout = normalizeExecText(maybeError.stdout);
       const stderr = normalizeExecText(maybeError.stderr);
+      const permissionFix =
+        process.platform === "win32" && isSpawnPermissionError(error)
+          ? "Fix: unblock or reauthorize the Engram battery binary; NEXUS no longer falls back through cmd.exe."
+          : "";
 
       throw new Error(
-        [`Engram command failed: ${config.binaryPath} ${args.join(" ")}`, stderr, stdout, message]
+        [
+          `Engram command failed: ${config.binaryPath} ${args.join(" ")}`,
+          stderr,
+          stdout,
+          message,
+          permissionFix
+        ]
           .filter(Boolean)
           .join("\n")
       );

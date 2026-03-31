@@ -16,8 +16,8 @@ La regla del repo pasa a ser esta:
 1. **Local JSONL**  
    Base de continuidad operativa y escritura durable minima.
 
-2. **Ruflo / tier semantico local**  
-   Capa de mejora para recall semantico y ranking.
+2. **Tier semantico interno de NEXUS (opcional)**  
+   Capa de mejora para recall semantico y ranking cuando este habilitada.
 
 3. **Engram (bateria externa)**  
    Se usa solo si la cadena principal falla o si se activa una recuperacion excepcional.
@@ -29,7 +29,7 @@ La regla del repo pasa a ser esta:
 - El path principal no debe volver a parsear `stdout` de Engram como contrato normal.
 - Toda activacion de Engram debe quedar marcada en salida, observabilidad y doctor.
 - `local-only` debe seguir siendo el modo canonico de continuidad.
-- El modo resiliente debe priorizar **Ruflo + local** antes de cualquier bateria externa.
+- El modo resiliente debe priorizar **local + tier semantico interno (si existe)** antes de cualquier bateria externa.
 
 ---
 
@@ -44,7 +44,7 @@ La regla del repo pasa a ser esta:
 
 ### 2. Recuperar las capacidades que se perdieron
 
-- [ ] Restaurar recall semantico real con Ruflo disponible en entorno sano.
+- [ ] Restaurar recall semantico real con tier semantico interno en entorno sano.
 - [ ] Mantener continuidad durable con local JSONL cuando falle el tier semantico.
 - [ ] Recuperar paridad funcional de:
   - [ ] `search`
@@ -75,7 +75,7 @@ La regla del repo pasa a ser esta:
 
 - [ ] Añadir tests para:
   - [ ] `local-only`
-  - [ ] `resilient` con Ruflo sano
+  - [ ] `resilient` con tier semantico interno sano
   - [ ] `resilient` degradando a local
   - [ ] `battery fallback` a Engram
   - [ ] error classification consistente
@@ -110,9 +110,8 @@ La regla del repo pasa a ser esta:
 
 Esto se considera bien cerrado cuando:
 
-- `doctor` deja claro que la cadena canonica es **Ruflo + local**
+- `doctor` deja claro que la cadena canonica es **local + tier semantico interno (si habilitado)**
 - Engram aparece solo como **external battery**
 - el repo ya no comunica Engram como runtime principal
 - los tests cubren el fallback de bateria
 - la memoria esta suficientemente limpia para medir valor real
-

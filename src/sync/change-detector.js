@@ -7,6 +7,9 @@ import path from "node:path";
 const DEFAULT_IGNORE_DIRS = new Set([
   ".git",
   ".codex",
+  ".claude",
+  ".atl",
+  ".engram",
   ".lcs",
   "node_modules",
   "dist",

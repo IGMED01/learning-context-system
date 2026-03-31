@@ -39,9 +39,16 @@
     "agents:list": "node -e \"import('./src/orchestration/agent-synthesizer.js').then(async m => { const a = await m.listAgents({ dataDir: '.' }); a.forEach(x => console.log('[' + x.id + '] ' + x.domain + ' v' + x.version + ' maturity=' + (x.maturityScore*100).toFixed(0) + '%')); })\"",
     "benchmark:foundations": "node benchmark/run-foundations-stress.js",
     "benchmark:recall": "node benchmark/run-recall-benchmark.js",
+    "benchmark:conversation-noise": "node benchmark/run-conversation-noise-benchmark.js",
+    "benchmark:retrieval-gate": "node benchmark/run-retrieval-first-gate.js",
+    "benchmark:golden-set:generate": "node scripts/generate-rag-golden-set.js",
+    "benchmark:golden-set": "node benchmark/run-rag-golden-set.js",
+    "benchmark:memory-poisoning": "node benchmark/run-memory-poisoning-gate.js",
     "benchmark:vertical": "node benchmark/run-vertical-benchmark.js",
     "benchmark:tune": "node benchmark/run-weight-tuning.js",
     "eval:domains": "node benchmark/run-domain-evals.js",
+    "ft:readiness": "node scripts/check-ft-readiness.js",
+    "benchmark:ft1-format": "node benchmark/run-ft1-format-gate.js",
     "openapi:export": "node scripts/export-openapi.js",
     "e2e:nexus": "node scripts/run-nexus-e2e.js",
     "doctor": "node src/cli.js doctor --format text",
@@ -79,8 +86,5 @@
   },
   "dependencies": {
     "pdf-parse": "^2.4.5"
-  },
-  "optionalDependencies": {
-    "ruflo": "^3.5.48"
   }
 }

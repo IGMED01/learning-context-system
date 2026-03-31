@@ -37,6 +37,13 @@ export interface RouterConfig {
 const routes: ApiRoute[] = [];
 const middlewares: Middleware[] = [];
 
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024; // 1MB
+const configuredMaxBodyBytes = Number(process.env.LCS_API_MAX_BODY_BYTES ?? DEFAULT_MAX_BODY_BYTES);
+const MAX_REQUEST_BODY_BYTES =
+  Number.isFinite(configuredMaxBodyBytes) && configuredMaxBodyBytes > 1024
+    ? Math.trunc(configuredMaxBodyBytes)
+    : DEFAULT_MAX_BODY_BYTES;
+
 export function registerRoute(method: "GET" | "POST", path: string, handler: ApiRoute["handler"]): void {
   routes.push({ method, path, handler });
 }
@@ -54,8 +61,29 @@ export function getRegisteredRoutes(): ApiRoute[] {
 export async function parseRequestBody(req: import("node:http").IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let totalBytes = 0;
+    let rejected = false;
+
+    req.on("data", (chunk: Buffer) => {
+      if (rejected) {
+        return;
+      }
+
+      totalBytes += chunk.length;
+
+      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+        rejected = true;
+        reject(new Error(`Request body too large. Max bytes: ${MAX_REQUEST_BODY_BYTES}.`));
+        return;
+      }
+
+      chunks.push(chunk);
+    });
     req.on("end", () => {
+      if (rejected) {
+        return;
+      }
+
       const raw = Buffer.concat(chunks).toString("utf8").trim();
 
       if (!raw) {
@@ -158,7 +186,8 @@ function corsHeaders(origin: string): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-API-Key, X-Project, X-Data-Dir, X-Request-Id",
     "Access-Control-Max-Age": "86400"
   };
 }
@@ -200,7 +229,10 @@ export async function handleRequest(
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    apiResponse = errorResponse(500, message);
+    const invalidJson = /invalid json/i.test(message);
+    const requestTooLarge = /request body too large/i.test(message);
+    const status = requestTooLarge ? 413 : invalidJson ? 400 : 500;
+    apiResponse = errorResponse(status, message);
   }
 
   const responseHeaders: Record<string, string> = {

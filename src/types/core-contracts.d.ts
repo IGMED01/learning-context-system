@@ -72,7 +72,7 @@ export interface ChunkDiagnostics {
 }
 
 export interface SelectedChunk extends Chunk {
-  origin: "memory" | "workspace";
+  origin: "memory" | "workspace" | "chat";
   tokenCount: number;
   score: number;
   diagnostics: ChunkDiagnostics;
@@ -82,11 +82,17 @@ export interface SuppressedChunk {
   id: string;
   source: string;
   kind: ChunkKind;
-  origin?: "memory" | "workspace";
+  origin?: "memory" | "workspace" | "chat";
   tokenCount?: number;
   reason: string;
   score: number;
   diagnostics?: ChunkDiagnostics;
+}
+
+export interface SourceBudgetConfig {
+  workspace?: number;
+  memory?: number;
+  chat?: number;
 }
 
 export interface SelectionSummary {
@@ -129,6 +135,7 @@ export interface SelectionOptions {
   sentenceBudget?: number;
   changedFiles?: string[];
   recallReserveRatio?: number;
+  sourceBudgets?: SourceBudgetConfig;
   scoringProfile?: string;
   scoringWeights?: ScoringWeights;
   customScorers?: Array<(input: {
@@ -223,7 +230,7 @@ export interface PacketChunk {
   score: number;
   content: string;
   memoryType?: string;
-  origin?: "memory" | "workspace";
+  origin?: "memory" | "workspace" | "chat";
   tokenCount?: number;
   diagnostics?: ChunkDiagnostics;
 }
@@ -234,7 +241,7 @@ export interface PacketSuppressedChunk {
   score: number;
   source?: string;
   kind?: ChunkKind;
-  origin?: "memory" | "workspace";
+  origin?: "memory" | "workspace" | "chat";
   tokenCount?: number;
   diagnostics?: ChunkDiagnostics;
 }
@@ -245,6 +252,12 @@ export interface TeachingSections {
   historicalMemory: PacketChunk[];
   supportingContext: PacketChunk[];
   flow: string[];
+  relevantAxioms?: Array<{
+    type: AxiomType;
+    title: string;
+    body: string;
+    tags?: string[];
+  }>;
 }
 
 export interface LearningPacketDiagnostics {
@@ -252,7 +265,33 @@ export interface LearningPacketDiagnostics {
   tokenBudget: number;
   usedTokens: number;
   summary: SelectionSummary;
+  selectorStatus?: "ok" | "degraded";
+  selectorReason?: string;
+  sdd?: {
+    enabled: boolean;
+    profile: "default" | "backend" | "frontend" | "security";
+    profileReason: string;
+    stageOrder: ChunkKind[];
+    requiredKinds: ChunkKind[];
+    availableKinds: Record<string, number>;
+    selectedKinds: Record<string, number>;
+    coverage: Record<string, boolean>;
+    injectedKinds: ChunkKind[];
+    skippedKinds: Array<{ kind: ChunkKind; reason: string }>;
+    reason?: string;
+  };
+  axiomInjection?: "injected" | "skipped" | "degraded";
+  axiomCount?: number;
+  axiomReason?: string;
 }
+
+export type AutoRememberStatus =
+  | "idle"
+  | "accepted"
+  | "quarantined"
+  | "failed"
+  | "unavailable"
+  | "degradedRecall";
 
 export interface LearningPacket {
   objective: string;

@@ -30,6 +30,7 @@
  *     autoRememberEnabled: boolean,
  *     rememberAttempted: boolean,
  *     rememberSaved: boolean,
+ *     rememberStatus?: string,
  *     rememberTitle: string,
  *     rememberError: string,
  *     rememberRedactionCount: number,
@@ -223,6 +224,10 @@ export function formatLearningPacketAsText(packet, options = {}) {
   lines.push(`- Remember redactions: ${packet.autoMemory?.rememberRedactionCount ?? 0}`);
   lines.push(`- Sensitive paths sanitized: ${packet.autoMemory?.rememberSensitivePathCount ?? 0}`);
 
+  if (packet.autoMemory?.rememberStatus) {
+    lines.push(`- Remember status: ${packet.autoMemory.rememberStatus}`);
+  }
+
   if (packet.autoMemory?.rememberTitle) {
     lines.push(`- Remember title: ${packet.autoMemory.rememberTitle}`);
   }
@@ -277,6 +282,15 @@ export function formatLearningPacketAsText(packet, options = {}) {
     `- Soporte principal: ${packet.teachingSections?.supportingContext?.[0] ? `${packet.teachingSections.supportingContext[0].source}` : "none"}`
   );
 
+  if (packet.diagnostics?.selectorStatus || packet.diagnostics?.axiomInjection) {
+    lines.push(
+      `- Diagnostico selector: ${packet.diagnostics?.selectorStatus || "unknown"}${packet.diagnostics?.selectorReason ? ` (${packet.diagnostics.selectorReason})` : ""}`
+    );
+    lines.push(
+      `- Diagnostico axiomas: ${packet.diagnostics?.axiomInjection || "none"} (count=${packet.diagnostics?.axiomCount ?? 0})`
+    );
+  }
+
   if (packet.teachingSections?.flow?.length) {
     lines.push("");
     lines.push("Teaching flow:");
@@ -317,6 +331,17 @@ export function formatLearningPacketAsText(packet, options = {}) {
   } else {
     for (const chunk of packet.teachingSections.supportingContext) {
       lines.push(formatSectionChunk(chunk));
+    }
+  }
+
+  if (packet.teachingSections?.relevantAxioms?.length) {
+    lines.push("Axiomas relevantes:");
+    for (const axiom of packet.teachingSections.relevantAxioms) {
+      lines.push(`- [${axiom.type}] ${axiom.title}`);
+      lines.push(`  ${axiom.body}`);
+      if (Array.isArray(axiom.tags) && axiom.tags.length) {
+        lines.push(`  tags: ${axiom.tags.join(", ")}`);
+      }
     }
   }
 
@@ -861,7 +886,7 @@ export function formatNotionSyncAsText(result) {
 export function usageText() {
   const commandCatalog = [
     "  version  -> prints CLI version",
-    "  doctor   -> checks runtime, config, workspace, semantic tier, and external battery health",
+    "  doctor   -> checks runtime, config, workspace, local memory, and external battery health",
     "  doctor-memory -> audits local memory quality and quarantine candidates",
     "  memory-stats -> reports memory health, noise, duplicate, and durable recall metrics",
     "  prune-memory -> moves suspicious local memories into quarantine",
@@ -905,7 +930,7 @@ export function usageText() {
     "",
     "Notes:",
     "  --version and -v also print the CLI version.",
-    "  doctor validates Node.js, Git, config, workspace, Ruflo semantic tier, local memory, and optional external battery availability.",
+    "  doctor validates Node.js, Git, config, workspace, local memory, and optional external battery availability.",
     "  doctor-memory audits local durable memory, flags duplicates/test noise, and suggests quarantine.",
     "  memory-stats computes health/noise/duplicate metrics for the active memory store.",
     "  prune-memory defaults to dry-run and never deletes silently; --apply moves candidates into .lcs/memory-quarantine.",
@@ -920,7 +945,7 @@ export function usageText() {
     "  teach recalls durable memory automatically unless you pass --no-recall.",
     "  auto recall can be disabled globally with memory.autoRecall or per command with --auto-recall false.",
     "  auto remember can be enabled with --auto-remember true or memory.autoRemember=true.",
-    "  memory backend defaults to resilient (Ruflo semantic tier + local fallback), configurable with memory.backend or --memory-backend.",
+    "  memory backend defaults to resilient (local JSONL + optional external battery), configurable with memory.backend or --memory-backend.",
     "  Engram is treated as an optional external battery only; use --external-battery false to disable that contingency tier.",
     "  auto remember always sanitizes sensitive paths and redacts secret-like fragments before save.",
     "  teach now tries multiple smarter recall queries before giving up.",

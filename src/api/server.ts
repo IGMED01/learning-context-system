@@ -1,5 +1,6 @@
 /**
  * LCS API Server — HTTP entry point.
+ * Compatibility bootstrap only: the canonical secured runtime boots from start.js.
  *
  * Starts a zero-dependency HTTP server that exposes all LCS
  * functionality as REST endpoints. Designed for:
@@ -12,7 +13,7 @@
  *   node src/api/server.js                          → localhost:3100
  *   LCS_API_PORT=8080 node src/api/server.js        → localhost:8080
  *   LCS_API_HOST=0.0.0.0 node src/api/server.js    → all interfaces
- *   LCS_API_CORS=https://app.example.com            → restrict CORS
+ *   LCS_API_CORS_ORIGIN=https://app.example.com     → restrict CORS
  *
  * Available endpoints (after boot):
  *   GET  /api/health   → system health check
@@ -30,6 +31,7 @@ import type { ApiServerConfig } from "../types/core-contracts.d.ts";
 
 import { handleRequest, registerMiddleware } from "./router.js";
 import { createGuardMiddleware } from "./guard-middleware.js";
+import { resolveCorsOrigin } from "./security-runtime.js";
 
 // Side-effect import: registers all route handlers
 import "./handlers.js";
@@ -37,10 +39,16 @@ import "./handlers.js";
 // ── Config from environment ──────────────────────────────────────────
 
 function loadServerConfig(): ApiServerConfig {
+  const port = parseInt(process.env.LCS_API_PORT ?? "3100", 10);
+  const host = process.env.LCS_API_HOST ?? "127.0.0.1";
   return {
-    port: parseInt(process.env.LCS_API_PORT ?? "3100", 10),
-    host: process.env.LCS_API_HOST ?? "127.0.0.1",
-    corsOrigin: process.env.LCS_API_CORS ?? "*",
+    port,
+    host,
+    corsOrigin: resolveCorsOrigin(
+      process.env.LCS_API_CORS_ORIGIN ?? process.env.LCS_API_CORS,
+      host,
+      port
+    ),
     guardEnabled: process.env.LCS_API_GUARD !== "false"
   };
 }

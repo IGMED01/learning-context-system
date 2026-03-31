@@ -30,7 +30,7 @@ import {
   classifyMemoryFailure,
   memoryFailureFixHint
 } from "../memory/resilient-memory-client.js";
-import { createRufloResilientClient } from "../memory/ruflo-resilient-client.js";
+import { createResilientMemoryClient } from "../memory/resilient-memory-client.js";
 import {
   getObservabilityReport,
   recordCommandMetric
@@ -313,6 +313,13 @@ function buildRuntimeMeta(startedAt, options = {}) {
  *     suppressedChunks?: number,
  *     hit?: boolean
  *   },
+ *   sdd?: {
+ *     enabled?: boolean,
+ *     requiredKinds?: number,
+ *     coveredKinds?: number,
+ *     injectedKinds?: number,
+ *     skippedReasons?: string[]
+ *   },
  *   safety?: {
  *     blocked?: boolean,
  *     reason?: string,
@@ -327,6 +334,7 @@ function buildCommandMetric(command, startedAt, extras = {}) {
     degraded: extras.degraded === true,
     selection: extras.selection ?? undefined,
     recall: extras.recall ?? undefined,
+    sdd: extras.sdd ?? undefined,
     safety: extras.safety ?? undefined
   };
 }
@@ -353,6 +361,13 @@ function buildObservabilityEvent(metric) {
       selectedChunks: metric.recall?.selectedChunks ?? 0,
       suppressedChunks: metric.recall?.suppressedChunks ?? 0,
       hit: metric.recall?.hit === true
+    },
+    sdd: {
+      enabled: metric.sdd?.enabled === true,
+      requiredKinds: metric.sdd?.requiredKinds ?? 0,
+      coveredKinds: metric.sdd?.coveredKinds ?? 0,
+      injectedKinds: metric.sdd?.injectedKinds ?? 0,
+      skippedReasons: metric.sdd?.skippedReasons ?? []
     },
     safety: {
       blocked: metric.safety?.blocked === true,
@@ -565,11 +580,11 @@ function getMemoryClient(options, dependencies) {
   const local = getLocalMemoryClient(options, dependencies);
   const fallbackEnabled = booleanOption(options, "local-memory-fallback", true);
   const batteryEnabled = booleanOption(options, "external-battery", true);
-  const primaryChain = createRufloResilientClient({
-    local,
-    project: options.project,
+  const primaryChain = createResilientMemoryClient({
+    primary: /** @type {any} */ (local),
+    fallback: /** @type {any} */ (local),
     enabled: fallbackEnabled,
-    skipRuflo: booleanOption(options, "skip-ruflo", false)
+    fallbackDescription: "local memory store"
   });
 
   if (!batteryEnabled) {

@@ -11,6 +11,7 @@ import {
   buildTeachAutoRememberPayload,
   resolveAutoTeachRecall
 } from "../memory/memory-auto-orchestrator.js";
+import { createAxiomInjector } from "../memory/axiom-injector.js";
 import { formatLearningPacketAsText } from "./formatters.js";
 import {
   assertNumberRules,
@@ -20,6 +21,7 @@ import {
   type CliOptions
 } from "./arg-parser.js";
 import type {
+  AxiomType,
   Chunk,
   CliContractMeta,
   LearningPacket,
@@ -92,6 +94,9 @@ interface MemoryClientLike {
 interface AppDependencies {
   memoryClient?: MemoryClientLike;
   engramClient?: MemoryClientLike;
+  axiomInjector?: {
+    retrieve?: (context?: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
+  };
 }
 
 interface RunTeachCommandInput {
@@ -193,13 +198,20 @@ async function saveMemoryClient(
   throw new Error("save()/saveMemory() not supported by the configured memory client.");
 }
 
-function isMemorySelectionChunk(chunk: {
-  kind?: string;
-  source?: string;
-  origin?: string;
-}): boolean {
+function isRecalledSelectionChunk(
+  chunk: {
+    id?: string;
+    source?: string;
+    origin?: string;
+  },
+  recoveredMemoryIds: Set<string>
+): boolean {
+  const chunkId = String(chunk.id ?? "").trim();
+  if (chunkId && recoveredMemoryIds.has(chunkId)) {
+    return true;
+  }
+
   return (
-    chunk.kind === "memory" ||
     String(chunk.source ?? "").startsWith("engram://") ||
     String(chunk.source ?? "").startsWith("memory://") ||
     chunk.origin === "memory"
@@ -220,6 +232,104 @@ function booleanOption(options: CliOptions, key: string, fallback = false): bool
   return value === "true";
 }
 
+function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["false", "0", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
+function parseIntegerEnv(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.trunc(parsed));
+}
+
+function parseScoreEnv(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function buildAxiomFocusTerms(
+  changedFiles: string[],
+  task: string,
+  objective: string,
+  focus: string
+): string[] {
+  const source = [...changedFiles, task, objective, focus].join(" ").toLowerCase();
+  return Array.from(
+    new Set(
+      source
+        .split(/[^a-z0-9_./-]+/u)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length >= 4)
+    )
+  ).slice(0, 20);
+}
+
+function classifyRememberStatus(message: string): "failed" | "unavailable" | "degradedRecall" {
+  const normalized = String(message || "").toLowerCase();
+  if (
+    normalized.includes("degraded") ||
+    normalized.includes("fallback") ||
+    normalized.includes("partial")
+  ) {
+    return "degradedRecall";
+  }
+
+  if (
+    normalized.includes("unavailable") ||
+    normalized.includes("timeout") ||
+    normalized.includes("locked") ||
+    normalized.includes("refused") ||
+    normalized.includes("econn")
+  ) {
+    return "unavailable";
+  }
+
+  return "failed";
+}
+
+function normalizeAxiomType(value: unknown): AxiomType {
+  const normalized = String(value ?? "").trim();
+  if (
+    normalized === "code-axiom" ||
+    normalized === "library-gotcha" ||
+    normalized === "security-rule" ||
+    normalized === "testing-pattern" ||
+    normalized === "api-contract"
+  ) {
+    return normalized;
+  }
+
+  return "code-axiom";
+}
+
 function buildTeachObservability(
   packet: LearningPacketWithMemory,
   durationMs: number,
@@ -236,10 +346,37 @@ function buildTeachObservability(
     suppressedChunks: number;
     hit: boolean;
   };
+  sdd: {
+    enabled: boolean;
+    requiredKinds: number;
+    coveredKinds: number;
+    injectedKinds: number;
+    skippedReasons: string[];
+  };
 } {
   const selectedCount = packet.diagnostics.summary?.selectedCount ?? packet.selectedContext.length;
   const suppressedCount =
     packet.diagnostics.summary?.suppressedCount ?? packet.suppressedContext.length;
+  const requiredKinds = ["code", "test", "memory"];
+  const selectedKinds = new Set(
+    packet.selectedContext
+      .map((chunk) => String(chunk.kind ?? "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const coveredKinds = requiredKinds.filter((kind) => selectedKinds.has(kind)).length;
+  const skippedReasons: string[] = [];
+
+  if (!selectedKinds.has("code")) {
+    skippedReasons.push("missing-code-anchor");
+  }
+
+  if (!selectedKinds.has("test")) {
+    skippedReasons.push("missing-test-anchor");
+  }
+
+  if (!selectedKinds.has("memory")) {
+    skippedReasons.push("missing-memory-anchor");
+  }
 
   return {
     metricsVersion: "1.0.0",
@@ -259,6 +396,13 @@ function buildTeachObservability(
       selectedChunks: packet.memoryRecall.selectedChunks,
       suppressedChunks: packet.memoryRecall.suppressedChunks,
       hit: packet.memoryRecall.recoveredChunks > 0
+    },
+    sdd: {
+      enabled: true,
+      requiredKinds: requiredKinds.length,
+      coveredKinds,
+      injectedKinds: 0,
+      skippedReasons
     }
   };
 }
@@ -277,6 +421,13 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
       suppressedChunks: number;
       hit: boolean;
     };
+    sdd: {
+      enabled: boolean;
+      requiredKinds: number;
+      coveredKinds: number;
+      injectedKinds: number;
+      skippedReasons: string[];
+    };
   };
 }> {
   const { options, loadedConfig, source, numeric, format, debugEnabled, startedAt } = input;
@@ -286,6 +437,13 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
   const objective = requireOption(options, "objective");
   const changedFiles = listOption(options, "changed-files");
   const focus = options.focus ?? `${task} ${objective}`;
+  const axiomInjectionDisabled = parseBooleanEnv(
+    process.env.LCS_TEACH_AXIOM_INJECTION_DISABLED,
+    false
+  );
+  const axiomMax = parseIntegerEnv(process.env.LCS_TEACH_MAX_AXIOMS, 3);
+  const axiomMinScore = parseScoreEnv(process.env.LCS_TEACH_AXIOM_MIN_MATCH_SCORE, 0.5);
+  const axiomMinMatches = parseIntegerEnv(process.env.LCS_TEACH_AXIOM_MIN_MATCHES, 1);
   const memoryClient = getMemoryClient(options, dependencies);
   const memoryScope = options["memory-scope"] ?? "project";
   const memoryType = options["memory-type"];
@@ -334,11 +492,84 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
     minScore: numeric.minScore,
     debug: debugEnabled
   });
+  const packetDiagnostics = packet.diagnostics ?? {};
+  const axiomDiagnostics: {
+    status: "injected" | "skipped" | "degraded";
+    count: number;
+    reason: string;
+  } = {
+    status: "skipped",
+    count: 0,
+    reason: "below-threshold"
+  };
+
+  if (!axiomInjectionDisabled) {
+    const injector =
+      dependencies.axiomInjector ??
+      createAxiomInjector({
+        project: options.project || loadedConfig.config.project,
+        maxAxioms: axiomMax,
+        minMatchScore: axiomMinScore
+      });
+
+    if (!injector || typeof injector.retrieve !== "function") {
+      axiomDiagnostics.status = "degraded";
+      axiomDiagnostics.reason = "injector-unavailable";
+    } else {
+      try {
+        const axioms = await injector.retrieve({
+          focusTerms: buildAxiomFocusTerms(changedFiles, task, objective, focus),
+          pathScope: changedFiles[0] || undefined
+        });
+        const normalizedAxioms = Array.isArray(axioms)
+          ? axioms
+              .map((entry) => ({
+                type: normalizeAxiomType(entry.type),
+                title: String(entry.title ?? "").trim(),
+                body: String(entry.body ?? "").trim(),
+                tags: Array.isArray(entry.tags)
+                  ? entry.tags.filter((tag) => typeof tag === "string")
+                  : undefined
+              }))
+              .filter((entry) => entry.title && entry.body)
+          : [];
+        axiomDiagnostics.count = normalizedAxioms.length;
+
+        if (normalizedAxioms.length >= axiomMinMatches) {
+          packet.teachingSections = {
+            ...packet.teachingSections,
+            relevantAxioms: normalizedAxioms
+          };
+          axiomDiagnostics.status = "injected";
+          axiomDiagnostics.reason = "threshold-met";
+        }
+      } catch {
+        axiomDiagnostics.status = "degraded";
+        axiomDiagnostics.reason = "injector-failed";
+      }
+    }
+  } else {
+    axiomDiagnostics.reason = "disabled";
+  }
+
+  packet.diagnostics = {
+    ...packetDiagnostics,
+    axiomInjection: axiomDiagnostics.status,
+    axiomCount: axiomDiagnostics.count,
+    axiomReason: axiomDiagnostics.reason
+  };
+  const recoveredMemoryIds = new Set(
+    Array.isArray(teachChunks.memoryRecall.recoveredMemoryIds)
+      ? teachChunks.memoryRecall.recoveredMemoryIds
+          .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+          .map((entry) => entry.trim())
+      : []
+  );
   const selectedMemoryChunkIds = packet.selectedContext
-    .filter((chunk) => isMemorySelectionChunk(chunk))
+    .filter((chunk) => isRecalledSelectionChunk(chunk, recoveredMemoryIds))
     .map((chunk) => chunk.id);
   const suppressedMemoryChunkIds = packet.suppressedContext
-    .filter((chunk) => isMemorySelectionChunk(chunk))
+    .filter((chunk) => isRecalledSelectionChunk(chunk, recoveredMemoryIds))
     .map((chunk) => chunk.id);
   const packetWithMemory = {
     ...packet,
@@ -379,6 +610,19 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
         selectedSources: packet.selectedContext.map((chunk) => chunk.source),
         project: options.project,
         recallState: packetWithMemory.memoryRecall,
+        selectionDiagnostics: {
+          selectorStatus: packet.diagnostics.selectorStatus,
+          selectorReason: packet.diagnostics.selectorReason,
+          selectedCount: packet.diagnostics.summary?.selectedCount,
+          suppressedCount: packet.diagnostics.summary?.suppressedCount,
+          suppressionReasons: packet.diagnostics.summary?.suppressionReasons,
+          sdd: packet.diagnostics.sdd
+        },
+        axiomDiagnostics: {
+          status: packet.diagnostics.axiomInjection,
+          count: packet.diagnostics.axiomCount,
+          reason: packet.diagnostics.axiomReason
+        },
         memoryType,
         memoryScope,
         security: loadedConfig.config.security
@@ -428,12 +672,13 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
             : "";
         if (rememberWarning) {
           packetWithMemory.autoMemory.rememberError = rememberWarning;
+          packetWithMemory.autoMemory.rememberStatus = classifyRememberStatus(rememberWarning);
         }
       }
     } catch (error) {
-      packetWithMemory.autoMemory.rememberStatus = "failed";
-      packetWithMemory.autoMemory.rememberError =
-        error instanceof Error ? error.message : String(error);
+      const rememberError = error instanceof Error ? error.message : String(error);
+      packetWithMemory.autoMemory.rememberStatus = classifyRememberStatus(rememberError);
+      packetWithMemory.autoMemory.rememberError = rememberError;
     }
   }
 
@@ -517,7 +762,8 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
     metrics: {
       degraded,
       selection: observability.selection,
-      recall: observability.recall
+      recall: observability.recall,
+      sdd: observability.sdd
     }
   };
 }
