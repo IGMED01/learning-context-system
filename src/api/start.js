@@ -659,12 +659,7 @@ const jwtClockSkewSeconds = parseTimeoutMs(
 );
 
 if (requireAuth && apiKeys.length === 0 && !jwtSecret) {
-  log("warn", "api auth enabled without configured credentials", {
-    requireAuth,
-    apiKeysFromEnv: apiKeyResolution.sources.env,
-    apiKeysFromFile: apiKeyResolution.sources.file,
-    jwtSecretSource: jwtSecretResolution.source
-  });
+  log("warn", "api auth enabled without configured credentials");
 }
 
 const auth = createAuthMiddleware({
