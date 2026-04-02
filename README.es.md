@@ -143,14 +143,14 @@ Estrategia actual: modularizar primero dentro de un repo; extraer a multi-repo s
 ## Documentación
 
 - Índice de docs: [`docs/README.md`](docs/README.md)
-- Plan de implementación (v3): [`docs/implementation-plan.md`](docs/implementation-plan.md)
-- Checklist de hardening: [`docs/nexus-hardening-checklist.md`](docs/nexus-hardening-checklist.md)
+- Estado actual del proyecto: [`docs/status-actual.md`](docs/status-actual.md)
+- Roadmap público: [`docs/planning/roadmap.md`](docs/planning/roadmap.md)
 - Guía de knowledge backends: [`docs/knowledge-backends.md`](docs/knowledge-backends.md)
-- Plan NEXUS: [`docs/planning/nexus-plan.md`](docs/planning/nexus-plan.md)
 - Guía API NEXUS: [`docs/nexus-api.md`](docs/nexus-api.md)
 - Guía de integración: [`docs/integration.md`](docs/integration.md)
 - Evidencia de valor: [`docs/evidence-of-value.md`](docs/evidence-of-value.md)
-- Checklist de release: [`docs/release-checklist.md`](docs/release-checklist.md)
+
+Los checklists y planes de implementación pasan a ser **artefactos solo locales** y no se publican en GitHub.
 
 ---
 
