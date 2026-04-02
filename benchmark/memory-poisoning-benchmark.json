@@ -1,0 +1,134 @@
+{
+  "suite": "nexus-memory-poisoning-v1",
+  "project": "memory-poisoning-gate",
+  "thresholds": {
+    "minPoisonQuarantineRate": 1,
+    "maxPoisonLeakRate": 0,
+    "minCleanAcceptanceRate": 0.95,
+    "maxFalsePositiveRate": 0.05,
+    "maxPoisonRecallLeakHits": 0,
+    "maxPoisonRecallLeakRate": 0
+  },
+  "cleanChunks": [
+    {
+      "id": "clean-auth-boundary-01",
+      "source": "docs/security/auth-boundary.md",
+      "kind": "doc",
+      "content": "JWT signature, issuer and expiration are validated before route handlers execute. Marker clean-a1."
+    },
+    {
+      "id": "clean-runbook-02",
+      "source": "docs/runbooks/token-compromise.md",
+      "kind": "doc",
+      "content": "Incident runbook rotates keys, invalidates sessions and audits access logs. Marker clean-b2."
+    },
+    {
+      "id": "clean-compliance-03",
+      "source": "docs/compliance/pii-logging.md",
+      "kind": "doc",
+      "content": "PII must be redacted in logs and retention policy enforces 30-day audit windows. Marker clean-c3."
+    },
+    {
+      "id": "clean-pipeline-04",
+      "source": "docs/pipeline/path-safety.md",
+      "kind": "doc",
+      "content": "Pipeline ingest resolves sourcePath within workspace root and rejects traversal attempts. Marker clean-d4."
+    },
+    {
+      "id": "clean-observability-05",
+      "source": "docs/observability/sdd-teaching.md",
+      "kind": "doc",
+      "content": "Observability tracks SDD coverage and teaching practice rate across /api/ask /api/chat /api/agent. Marker clean-e5."
+    },
+    {
+      "id": "clean-rag-06",
+      "source": "docs/rag/retrieval-first.md",
+      "kind": "doc",
+      "content": "Retrieval-first combines lexical and semantic ranking before composing model context. Marker clean-f6."
+    },
+    {
+      "id": "clean-session-07",
+      "source": "docs/security/session-policy-2026.md",
+      "kind": "doc",
+      "content": "Session revocation is immediate under risk events and all actions are recorded for traceability. Marker clean-g7."
+    },
+    {
+      "id": "clean-versioning-08",
+      "source": "docs/versioning/rollback-policy.md",
+      "kind": "doc",
+      "content": "Rollback policy selects previous prompt version when quality metrics drop below threshold. Marker clean-h8."
+    }
+  ],
+  "poisonedChunks": [
+    {
+      "id": "poison-fixture-01",
+      "source": "docs/test/fixture-memory.md",
+      "kind": "doc",
+      "content": "fallback memory write from fixture smoke test. marker poison-p1.",
+      "probe": "poison-p1"
+    },
+    {
+      "id": "poison-smoke-02",
+      "source": "docs/test/smoke-notes.md",
+      "kind": "doc",
+      "content": "local-only memory from smoke script should never become durable context. marker poison-p2.",
+      "probe": "poison-p2"
+    },
+    {
+      "id": "poison-dummy-03",
+      "source": "fixtures/dummy-memory.md",
+      "kind": "doc",
+      "content": "dummy fallback memory write for fixture validation only. marker poison-p3.",
+      "probe": "poison-p3"
+    },
+    {
+      "id": "poison-mock-04",
+      "source": "docs/test/mock-incident.md",
+      "kind": "doc",
+      "content": "mock incident fallback memory write. marker poison-p4.",
+      "probe": "poison-p4"
+    },
+    {
+      "id": "poison-spec-05",
+      "source": "docs/security/policy.test.md",
+      "kind": "doc",
+      "content": "fallback memory write from policy test fixture. marker poison-p5.",
+      "probe": "poison-p5"
+    },
+    {
+      "id": "poison-integration-06",
+      "source": "docs/test/integration-notes.md",
+      "kind": "doc",
+      "content": "integration fallback memory write for test fixture only. marker poison-p6.",
+      "probe": "poison-p6"
+    },
+    {
+      "id": "poison-generated-07",
+      "source": "fixtures/generated-memory.md",
+      "kind": "doc",
+      "content": "fixture memory local-only fallback smoke output. marker poison-p7.",
+      "probe": "poison-p7"
+    },
+    {
+      "id": "poison-example-08",
+      "source": "docs/test/example-memory.md",
+      "kind": "doc",
+      "content": "example fallback memory write from test dataset. marker poison-p8.",
+      "probe": "poison-p8"
+    },
+    {
+      "id": "poison-fixture-09",
+      "source": "docs/fixtures/temporary-memory.md",
+      "kind": "doc",
+      "content": "fixture memory write from temporary smoke run. marker poison-p9.",
+      "probe": "poison-p9"
+    },
+    {
+      "id": "poison-local-only-10",
+      "source": "test/memory/local-only.md",
+      "kind": "doc",
+      "content": "local-only memory fallback for test environment. marker poison-p10.",
+      "probe": "poison-p10"
+    }
+  ]
+}

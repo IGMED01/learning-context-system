@@ -7,7 +7,7 @@
  * @typedef {import("../types/core-contracts.d.ts").OutputAuditor} OutputAuditor
  */
 
-import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 
 // ── Auditor Factory ──────────────────────────────────────────────────
@@ -28,27 +28,29 @@ export function createOutputAuditor(options) {
   let cache = null;
   let cacheStale = true;
 
-  function ensureDir() {
-    if (!existsSync(logDir)) {
-      mkdirSync(logDir, { recursive: true });
-    }
+  async function ensureDir() {
+    await mkdir(logDir, { recursive: true });
   }
 
   /**
-   * @returns {AuditEntry[]}
+   * @returns {Promise<AuditEntry[]>}
    */
-  function loadCache() {
+  async function loadCache() {
     if (cache !== null && !cacheStale) {
       return cache;
     }
 
-    if (!existsSync(logFile)) {
-      cache = [];
-      cacheStale = false;
-      return cache;
+    let raw = "";
+    try {
+      raw = await readFile(logFile, "utf-8");
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") {
+        cache = [];
+        cacheStale = false;
+        return cache;
+      }
+      throw error;
     }
-
-    const raw = readFileSync(logFile, "utf-8");
     const lines = raw.split("\n").filter((line) => line.trim().length > 0);
     /** @type {AuditEntry[]} */
     const entries = [];
@@ -73,9 +75,9 @@ export function createOutputAuditor(options) {
      * @returns {Promise<void>}
      */
     async log(entry) {
-      ensureDir();
+      await ensureDir();
       const line = JSON.stringify(entry) + "\n";
-      appendFileSync(logFile, line, "utf-8");
+      await appendFile(logFile, line, "utf-8");
       cacheStale = true;
     },
 
@@ -84,7 +86,7 @@ export function createOutputAuditor(options) {
      * @returns {Promise<AuditEntry[]>}
      */
     async query(filters) {
-      let entries = loadCache();
+      let entries = await loadCache();
 
       if (!filters) {
         return [...entries];
@@ -114,7 +116,7 @@ export function createOutputAuditor(options) {
      * @returns {Promise<AuditStats>}
      */
     async stats() {
-      const entries = loadCache();
+      const entries = await loadCache();
 
       let blocked = 0;
       let modified = 0;

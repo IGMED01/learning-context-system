@@ -1,6 +1,13 @@
 import { readFile, readdir } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import { smartChunk as chunkDocument } from "../processing/chunker.js";
+import {
+  extractCodeSymbols,
+  summarizeCodeSymbolsForChunk,
+  supportsCodeSymbolExtraction,
+  type ChunkSymbolSummary
+} from "../processing/code-symbol-extractor.js";
 import { extractEntities } from "../processing/entity-extractor.js";
 import { tagChunk as tagChunkMetadata } from "../processing/metadata-tagger.js";
 
@@ -11,6 +18,7 @@ import {
   resolveSecurityPolicy,
   shouldIgnoreSensitiveFile
 } from "../security/secret-redaction.js";
+import { buildSafeEnv } from "../core/safe-env.js";
 import type { Chunk, ChunkKind, ScanStats } from "../types/core-contracts.d.ts";
 
 interface WorkspaceFile {
@@ -28,6 +36,14 @@ export interface WorkspaceSecurityOptions {
 
 export interface WorkspaceScanOptions {
   ignoreDirs?: string[];
+  fastScanner?: WorkspaceFastScannerOptions;
+}
+
+export interface WorkspaceFastScannerOptions {
+  enabled?: boolean;
+  binaryPath?: string;
+  arguments?: string[];
+  timeoutMs?: number;
 }
 
 export interface WorkspaceProcessingOptions {
@@ -49,11 +65,21 @@ interface ChunkSignals {
   priority: number;
 }
 
+interface ChunkProcessingMetadata {
+  section: unknown;
+  tags: unknown;
+  entities: unknown[];
+  symbols?: ChunkSymbolSummary;
+}
+
 type SecurityPolicy = ReturnType<typeof resolveSecurityPolicy>;
 
 const DEFAULT_IGNORED_DIRS = [
   ".git",
   ".codex",
+  ".claude",
+  ".atl",
+  ".engram",
   ".lcs",
   ".tmp",
   "node_modules",
@@ -81,6 +107,8 @@ const ALLOWED_EXTENSIONS = new Set([
 ]);
 
 const MAX_FILE_CHARS = 32000;
+const FAST_SCANNER_MIN_TIMEOUT_MS = 200;
+const ALLOWED_FILE_NAMES = new Set(["README.md", "AGENTS.md", "agents.md", "package.json"]);
 
 function resolveIgnoredDirs(scan: WorkspaceScanOptions | undefined): Set<string> {
   const configured = Array.isArray(scan?.ignoreDirs)
@@ -92,6 +120,20 @@ function resolveIgnoredDirs(scan: WorkspaceScanOptions | undefined): Set<string>
 
 function toPosixPath(value: string): string {
   return value.replace(/\\/g, "/");
+}
+
+function normalizeSourcePath(value: string): string {
+  return toPosixPath(value).replace(/^\.\/+/u, "");
+}
+
+function isPathWithinRoot(rootPath: string, targetPath: string): boolean {
+  const rel = toPosixPath(relative(rootPath, targetPath));
+  return rel !== ".." && !rel.startsWith("../");
+}
+
+function isSourceInsideIgnoredDir(source: string, ignoredDirs: Set<string>): boolean {
+  const segments = normalizeSourcePath(source).split("/").filter(Boolean);
+  return segments.some((segment) => ignoredDirs.has(segment));
 }
 
 function shouldIgnoreGeneratedFile(source: string): boolean {
@@ -174,6 +216,46 @@ function createScanStats(rootPath: string): ScanStats {
   };
 }
 
+function collectWorkspaceFileCandidate(
+  files: WorkspaceFile[],
+  stats: ScanStats,
+  securityPolicy: SecurityPolicy,
+  ignoredDirs: Set<string>,
+  source: string,
+  absolutePath: string
+): void {
+  const normalizedSource = normalizeSourcePath(source);
+  const fileName = basename(normalizedSource);
+  const extension = extname(fileName);
+  const allowlistedSensitivePath = isSensitivePathAllowlisted(normalizedSource, securityPolicy);
+
+  if (isSourceInsideIgnoredDir(normalizedSource, ignoredDirs)) {
+    stats.ignoredFiles += 1;
+    return;
+  }
+
+  if (securityPolicy.ignoreGeneratedFiles && shouldIgnoreGeneratedFile(normalizedSource)) {
+    stats.ignoredFiles += 1;
+    return;
+  }
+
+  if (!allowlistedSensitivePath && shouldIgnoreSensitiveFile(normalizedSource, securityPolicy)) {
+    stats.ignoredFiles += 1;
+    stats.security.ignoredSensitiveFiles += 1;
+    return;
+  }
+
+  if (!allowlistedSensitivePath && !ALLOWED_EXTENSIONS.has(extension) && !ALLOWED_FILE_NAMES.has(fileName)) {
+    stats.ignoredFiles += 1;
+    return;
+  }
+
+  files.push({
+    absolutePath,
+    source: normalizedSource
+  });
+}
+
 async function walk(
   rootPath: string,
   currentPath: string,
@@ -203,35 +285,188 @@ async function walk(
 
     stats.discoveredFiles += 1;
     const absolutePath = resolve(currentPath, entry.name);
-    const source = toPosixPath(relative(rootPath, absolutePath));
-    const extension = extname(entry.name);
-    const allowlistedSensitivePath = isSensitivePathAllowlisted(source, securityPolicy);
+    const source = relative(rootPath, absolutePath);
 
-    if (securityPolicy.ignoreGeneratedFiles && shouldIgnoreGeneratedFile(source)) {
-      stats.ignoredFiles += 1;
-      continue;
-    }
-
-    if (!allowlistedSensitivePath && shouldIgnoreSensitiveFile(source, securityPolicy)) {
-      stats.ignoredFiles += 1;
-      stats.security.ignoredSensitiveFiles += 1;
-      continue;
-    }
-
-    if (
-      !allowlistedSensitivePath &&
-      !ALLOWED_EXTENSIONS.has(extension) &&
-      !["README.md", "AGENTS.md", "agents.md", "package.json"].includes(entry.name)
-    ) {
-      stats.ignoredFiles += 1;
-      continue;
-    }
-
-    files.push({
-      absolutePath,
-      source
-    });
+    collectWorkspaceFileCandidate(
+      files,
+      stats,
+      securityPolicy,
+      ignoredDirs,
+      source,
+      absolutePath
+    );
   }
+}
+
+interface ResolvedFastScannerOptions {
+  binaryPath: string;
+  arguments: string[];
+  timeoutMs: number;
+}
+
+function resolveFastScannerOptions(
+  scan: WorkspaceScanOptions | undefined
+): ResolvedFastScannerOptions | null {
+  const configured = scan?.fastScanner;
+
+  if (!configured || configured.enabled !== true) {
+    return null;
+  }
+
+  const binaryPath = typeof configured.binaryPath === "string" ? configured.binaryPath.trim() : "";
+
+  if (!binaryPath) {
+    return null;
+  }
+
+  const argumentsList = Array.isArray(configured.arguments)
+    ? configured.arguments.filter((value): value is string => typeof value === "string" && value.trim() !== "")
+    : [];
+  const timeoutMs =
+    Number.isInteger(configured.timeoutMs) && Number(configured.timeoutMs) >= FAST_SCANNER_MIN_TIMEOUT_MS
+      ? Number(configured.timeoutMs)
+      : 8000;
+
+  return {
+    binaryPath,
+    arguments: argumentsList,
+    timeoutMs
+  };
+}
+
+function resolveFastScannerBinaryPath(rootPath: string, binaryPath: string): string {
+  return isAbsolute(binaryPath) ? binaryPath : resolve(rootPath, binaryPath);
+}
+
+async function runFastScanner(
+  rootPath: string,
+  ignoredDirs: Set<string>,
+  fastScanner: ResolvedFastScannerOptions | null
+): Promise<string[] | null> {
+  if (!fastScanner) {
+    return null;
+  }
+
+  const binaryPath = resolveFastScannerBinaryPath(rootPath, fastScanner.binaryPath);
+  const request = JSON.stringify({
+    version: "1.0.0",
+    rootPath,
+    ignoreDirs: Array.from(ignoredDirs.values())
+  });
+  const args = [...fastScanner.arguments];
+
+  if (!args.includes("--request-stdin")) {
+    args.push("--request-stdin");
+  }
+
+  return new Promise((resolveResult) => {
+    const child = spawn(binaryPath, args, {
+      cwd: rootPath,
+      windowsHide: true,
+      env: buildSafeEnv(),
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let settled = false;
+    let timedOut = false;
+
+    const settle = (value: string[] | null) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      resolveResult(value);
+    };
+
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, fastScanner.timeoutMs);
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+
+    child.on("error", () => {
+      clearTimeout(timeoutHandle);
+      settle(null);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timeoutHandle);
+
+      if (timedOut || code !== 0) {
+        settle(null);
+        return;
+      }
+
+      const raw = stdout.trim();
+
+      if (!raw) {
+        settle(null);
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(raw);
+
+        if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { files?: unknown }).files)) {
+          settle(null);
+          return;
+        }
+
+        const files = ((parsed as { files: unknown[] }).files)
+          .map((value) => (typeof value === "string" ? normalizeSourcePath(value) : ""))
+          .filter(Boolean)
+          .sort((left, right) => left.localeCompare(right));
+
+        settle(files);
+      } catch {
+        settle(null);
+      }
+    });
+
+    child.stdin.write(request);
+    child.stdin.end();
+  });
+}
+
+async function discoverWorkspaceFiles(
+  rootPath: string,
+  files: WorkspaceFile[],
+  stats: ScanStats,
+  securityPolicy: SecurityPolicy,
+  ignoredDirs: Set<string>,
+  scanOptions: WorkspaceScanOptions | undefined
+): Promise<void> {
+  const fastScanner = resolveFastScannerOptions(scanOptions);
+  const sidecarSources = await runFastScanner(rootPath, ignoredDirs, fastScanner);
+
+  if (Array.isArray(sidecarSources)) {
+    for (const source of sidecarSources) {
+      const absolutePath = resolve(rootPath, source);
+
+      if (!isPathWithinRoot(rootPath, absolutePath)) {
+        stats.ignoredFiles += 1;
+        continue;
+      }
+
+      stats.discoveredFiles += 1;
+      collectWorkspaceFileCandidate(
+        files,
+        stats,
+        securityPolicy,
+        ignoredDirs,
+        source,
+        absolutePath
+      );
+    }
+
+    return;
+  }
+
+  await walk(rootPath, rootPath, files, stats, securityPolicy, ignoredDirs);
 }
 
 export async function loadWorkspaceChunks(
@@ -244,7 +479,14 @@ export async function loadWorkspaceChunks(
   const securityPolicy = resolveSecurityPolicy(options.security);
   const ignoredDirs = resolveIgnoredDirs(options.scan);
 
-  await walk(resolvedRoot, resolvedRoot, files, stats, securityPolicy, ignoredDirs);
+  await discoverWorkspaceFiles(
+    resolvedRoot,
+    files,
+    stats,
+    securityPolicy,
+    ignoredDirs,
+    options.scan
+  );
 
   const chunks: Chunk[] = [];
 
@@ -256,6 +498,13 @@ export async function loadWorkspaceChunks(
       ? `${redaction.content.slice(0, MAX_FILE_CHARS)}\n/* file truncated for context scan */`
       : redaction.content;
     const kind = classifyKind(file.source);
+    const symbolGraph =
+      (kind === "code" || kind === "test") && supportsCodeSymbolExtraction(file.source)
+        ? extractCodeSymbols({
+            source: file.source,
+            content
+          })
+        : undefined;
 
     stats.includedFiles += 1;
     stats.kinds[kind] += 1;
@@ -303,11 +552,7 @@ export async function loadWorkspaceChunks(
       } as Parameters<typeof tagChunkMetadata>[0]);
       const entities: unknown[] = options.processing?.extractEntities === false ? [] : [extractEntities(processed.content)];
       const chunk: Chunk & {
-        processing?: {
-          section: unknown;
-          tags: unknown;
-          entities: unknown[];
-        };
+        processing?: ChunkProcessingMetadata;
       } = {
         id: processed.id || file.source,
         source: file.source,
@@ -316,11 +561,15 @@ export async function loadWorkspaceChunks(
         ...defaultSignals(kind)
       };
 
-      chunk.processing = {
+      (chunk as unknown as Record<string, unknown>).processing = {
         section: (processed as Record<string, unknown>).metadata,
         tags,
-        entities
-      };
+        entities,
+        symbols: summarizeCodeSymbolsForChunk(
+          symbolGraph,
+          (processed as { metadata?: { startLine?: number; endLine?: number } }).metadata
+        )
+      } satisfies ChunkProcessingMetadata;
 
       chunks.push(chunk);
     }

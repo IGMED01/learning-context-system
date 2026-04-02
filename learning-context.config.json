@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "project": "learning-context-system",
+  "project": "nexus",
   "workspace": ".",
   "output": {
     "jsonSchemaVersion": "1.0.0"
@@ -13,14 +13,16 @@
   },
   "memory": {
     "enabled": true,
-    "project": "learning-context-system",
+    "project": "nexus",
     "limit": 3,
     "scope": "project",
     "backend": "resilient",
     "autoRecall": true,
     "autoRemember": false,
     "strictRecall": false,
-    "degradedRecall": true
+    "degradedRecall": true,
+    "tempTtlMinutes": 120,
+    "tempMaxEntries": 50
   },
   "engram": {
     "binaryPath": "tools/engram/engram.exe",
@@ -35,6 +37,19 @@
   },
   "scan": {
     "ignoreDirs": [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
+  },
+  "sync": {
+    "knowledgeBackend": "local-only",
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "backoffMs": 1000,
+      "maxBackoffMs": 30000
+    },
+    "dlq": {
+      "enabled": true,
+      "path": ".lcs/dlq",
+      "ttlDays": 7
+    }
   },
   "safety": {
     "requirePlanForWrite": false,

@@ -1,0 +1,85 @@
+{
+  "suite": "ft4-query-rewrite-pilot-v1",
+  "thresholds": {
+    "minCandidateKeywordRecall": 0.82,
+    "minKeywordRecallLift": 0.2,
+    "minRewriteRate": 0.8,
+    "minIntentPreservationRate": 0.9,
+    "maxLengthRatio": 2.1
+  },
+  "cases": [
+    {
+      "id": "ft4-001",
+      "originalQuery": "¿Cómo bloquear suitePath traversal en /api/eval?",
+      "expectedKeywords": [
+        "suitepath",
+        "traversal",
+        "api/eval",
+        "resolveSafePathWithinWorkspace"
+      ],
+      "baselineRewrite": "bloquear traversal",
+      "candidateRewrite": "Path traversal suitePath /api/eval usando resolveSafePathWithinWorkspace y validación dentro del workspace root"
+    },
+    {
+      "id": "ft4-002",
+      "originalQuery": "Necesito rate limiting confiable detrás de proxy",
+      "expectedKeywords": [
+        "rate limiting",
+        "trust proxy",
+        "x-forwarded-for",
+        "lcs_api_trust_proxy"
+      ],
+      "baselineRewrite": "rate limit",
+      "candidateRewrite": "Rate limiting con trust proxy controlado: ignorar X-Forwarded-For salvo LCS_API_TRUST_PROXY=true"
+    },
+    {
+      "id": "ft4-003",
+      "originalQuery": "Quiero evitar prompt injection en chunks de contexto",
+      "expectedKeywords": [
+        "prompt injection",
+        "chunks",
+        "sanitize",
+        "guard"
+      ],
+      "baselineRewrite": "prompt safety",
+      "candidateRewrite": "Sanitizar chunks contra prompt injection antes del guard y antes de inyectarlos al prompt"
+    },
+    {
+      "id": "ft4-004",
+      "originalQuery": "¿Cómo validar JWT con issuer y audience en API?",
+      "expectedKeywords": [
+        "jwt",
+        "issuer",
+        "audience",
+        "hs256",
+        "clock skew"
+      ],
+      "baselineRewrite": "validar token",
+      "candidateRewrite": "Validación JWT HS256 en API con issuer, audience y clock skew configurable"
+    },
+    {
+      "id": "ft4-005",
+      "originalQuery": "quiero saber por qué se cuelgan requests largos",
+      "expectedKeywords": [
+        "request timeout",
+        "headers timeout",
+        "keepalive timeout",
+        "server"
+      ],
+      "baselineRewrite": "requests lentos",
+      "candidateRewrite": "Diagnóstico de requests largos en server: keepAliveTimeout, headersTimeout y requestTimeout"
+    },
+    {
+      "id": "ft4-006",
+      "originalQuery": "Necesito que /api/health refleje estado real de Engram",
+      "expectedKeywords": [
+        "api/health",
+        "engram",
+        "status",
+        "runtime"
+      ],
+      "baselineRewrite": "health endpoint",
+      "candidateRewrite": "Endpoint /api/health con status real del runtime de Engram y fallback local"
+    }
+  ]
+}

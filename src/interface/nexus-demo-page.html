@@ -53,12 +53,13 @@
           <input id="baseUrl" />
         </label>
         <label>API key (x-api-key)
-          <input id="apiKey" placeholder="optional" />
+          <input id="apiKey" placeholder="required for secured API routes" />
         </label>
         <label>Prompt key
           <input id="promptKey" value="ask/default" />
         </label>
       </div>
+      <p>Only <code>/api/health</code> is public by default. Demo, OpenAPI, dashboard, routes, metrics, and guard policy endpoints require API auth in the secured runtime.</p>
       <div class="row" style="margin-top:8px">
         <button id="btnHealth">Check health</button>
         <button id="btnDashboard">Load dashboard</button>
@@ -149,6 +150,18 @@
       rawOutput.textContent = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
     }
 
+    function clearNode(node) {
+      node.replaceChildren();
+    }
+
+    function appendTextElement(parent, tag, text, className) {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      element.textContent = String(text);
+      parent.appendChild(element);
+      return element;
+    }
+
     async function apiFetch(path, options = {}) {
       const headers = new Headers(options.headers || {});
       const key = (apiKey.value || "").trim();
@@ -187,11 +200,12 @@
       ];
 
       const metricRoot = $("metrics");
-      metricRoot.innerHTML = "";
+      clearNode(metricRoot);
       metrics.forEach(([label, value]) => {
         const node = document.createElement("article");
         node.className = "metric";
-        node.innerHTML = "<strong>" + value + "</strong><span>" + label + "</span>";
+        appendTextElement(node, "strong", value);
+        appendTextElement(node, "span", label);
         metricRoot.appendChild(node);
       });
 
@@ -201,38 +215,42 @@
         ["Recall hit", health.recallHitRate || 0]
       ];
       const barsRoot = $("bars");
-      barsRoot.innerHTML = "";
+      clearNode(barsRoot);
       bars.forEach(([label, value]) => {
         const percent = pct(value);
         const css = percent >= 70 ? "danger" : percent >= 40 ? "warn" : "";
         const row = document.createElement("div");
         row.className = "bar-row";
-        row.innerHTML =
-          "<span>" + label + "</span>" +
-          "<div class='track'><div class='fill " + css + "' style='width:" + percent + "%'></div></div>" +
-          "<strong>" + percent + "%</strong>";
+        appendTextElement(row, "span", label);
+        const track = document.createElement("div");
+        track.className = "track";
+        const fill = document.createElement("div");
+        fill.className = css ? "fill " + css : "fill";
+        fill.style.width = percent + "%";
+        track.appendChild(fill);
+        row.appendChild(track);
+        appendTextElement(row, "strong", percent + "%");
         barsRoot.appendChild(row);
       });
 
       const commandRows = $("commandRows");
-      commandRows.innerHTML = "";
+      clearNode(commandRows);
       commands.forEach((command) => {
         const tr = document.createElement("tr");
-        tr.innerHTML =
-          "<td>" + command.command + "</td>" +
-          "<td>" + command.runs + "</td>" +
-          "<td>" + command.averageDurationMs + "</td>" +
-          "<td>" + pct(command.blockedRate || 0) + "%</td>";
+        appendTextElement(tr, "td", command.command ?? "");
+        appendTextElement(tr, "td", command.runs ?? 0);
+        appendTextElement(tr, "td", command.averageDurationMs ?? 0);
+        appendTextElement(tr, "td", pct(command.blockedRate || 0) + "%");
         commandRows.appendChild(tr);
       });
 
       const recallPills = $("recallPills");
-      recallPills.innerHTML = "";
+      clearNode(recallPills);
       const statuses = recall.byStatus || {};
       const keys = Object.keys(statuses);
 
       if (!keys.length) {
-        recallPills.innerHTML = "<span class='pill'>No recall samples yet</span>";
+        appendTextElement(recallPills, "span", "No recall samples yet", "pill");
         return;
       }
 
@@ -247,11 +265,19 @@
     function refreshVersionSelects() {
       const left = $("leftVersion");
       const right = $("rightVersion");
-      const options = state.versions
-        .map((version) => "<option value='" + version.id + "'>" + version.id + "</option>")
-        .join("");
-      left.innerHTML = options;
-      right.innerHTML = options;
+      clearNode(left);
+      clearNode(right);
+      state.versions.forEach((version) => {
+        const leftOption = document.createElement("option");
+        leftOption.value = String(version.id ?? "");
+        leftOption.textContent = String(version.id ?? "");
+        left.appendChild(leftOption);
+
+        const rightOption = document.createElement("option");
+        rightOption.value = String(version.id ?? "");
+        rightOption.textContent = String(version.id ?? "");
+        right.appendChild(rightOption);
+      });
 
       if (state.versions.length >= 2) {
         left.value = state.versions[state.versions.length - 1].id;

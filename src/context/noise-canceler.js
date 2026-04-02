@@ -10,7 +10,7 @@
 
 /**
  * @typedef {Chunk & {
- *   origin: "engram" | "workspace",
+ *   origin: "memory" | "workspace" | "chat",
  *   tokenCount: number,
  *   tokens: string[],
  *   retrievalScore?: number,
@@ -24,6 +24,8 @@
  *   detail: ChunkDiagnostics
  * }} ScoreChunkResult
  */
+
+/** @typedef {"memory" | "workspace" | "chat"} SourceBudgetName */
 
 const DEFAULT_STOPWORDS = new Set([
   "a",
@@ -75,16 +77,19 @@ const DEFAULT_RECALL_RESERVE_RATIO = 0.15;
 const DEFAULT_SCORING_PROFILE = "vertical-tuned";
 
 const BASELINE_SCORING_WEIGHTS = {
-  overlap: 0.3,
+  overlap: 0.26,
   kindPrior: 0.15,
   certainty: 0.12,
   recency: 0.08,
   teachingValue: 0.1,
   priority: 0.06,
   density: 0.03,
-  sourceAffinity: 0.1,
-  implementationFit: 0.12,
-  retrievalBoost: 0.08,
+  sourceAffinity: 0.09,
+  implementationFit: 0.1,
+  retrievalBoost: 0.07,
+  structuralOverlap: 0.11,
+  structuralPublicSurface: 0.07,
+  structuralDependency: 0.05,
   changeAnchor: 1,
   relatedTestBoost: 0.04,
   recallOriginBoost: 0.09,
@@ -102,6 +107,9 @@ const SCORING_PROFILES = {
     overlap: 0.28,
     sourceAffinity: 0.12,
     implementationFit: 0.14,
+    structuralOverlap: 0.13,
+    structuralPublicSurface: 0.08,
+    structuralDependency: 0.06,
     changeAnchor: 1.05,
     relatedTestBoost: 0.05,
     recallOriginBoost: 0.07,
@@ -256,6 +264,63 @@ function densityScore(tokens) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {Record<string, unknown>}
+ */
+function asRecord(value) {
+  return value && typeof value === "object" ? /** @type {Record<string, unknown>} */ (value) : {};
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function asStringArray(value) {
+  return Array.isArray(value)
+    ? value.map((entry) => normalizeText(String(entry ?? ""))).filter(Boolean)
+    : [];
+}
+
+/**
+ * @param {Chunk} chunk
+ */
+function collectStructuralSignals(chunk) {
+  const processing = asRecord(/** @type {Record<string, unknown>} */ (/** @type {unknown} */ (chunk)).processing);
+  const symbols = asRecord(processing.symbols);
+  const exports = asStringArray(symbols.exports);
+  const publicSurface = asStringArray(symbols.publicSurface);
+  const dependencyHints = asStringArray(symbols.dependencyHints);
+  const imports = Array.isArray(symbols.imports)
+    ? symbols.imports.flatMap((entry) => {
+        const importRecord = asRecord(entry);
+        return [
+          normalizeText(String(importRecord.source ?? "")),
+          ...asStringArray(importRecord.bindings)
+        ].filter(Boolean);
+      })
+    : [];
+  const declarations = Array.isArray(symbols.declarations)
+    ? symbols.declarations.flatMap((entry) => {
+        const declaration = asRecord(entry);
+        return [
+          normalizeText(String(declaration.name ?? "")),
+          normalizeText(String(declaration.parent ?? "")),
+          ...asStringArray(declaration.extends),
+          ...asStringArray(declaration.implements)
+        ].filter(Boolean);
+      })
+    : [];
+
+  const allSignals = [...exports, ...publicSurface, ...dependencyHints, ...imports, ...declarations];
+  return {
+    tokens: tokenize(allSignals.join(" ")),
+    publicSurfaceTokens: tokenize([...exports, ...publicSurface, ...declarations].join(" ")),
+    dependencyTokens: tokenize([...dependencyHints, ...imports].join(" ")),
+    signalCount: allSignals.length
+  };
+}
+
+/**
  * @param {string} [text]
  */
 function approximateTokenCount(text = "") {
@@ -270,11 +335,18 @@ function normalizeSource(source = "") {
 }
 
 /**
- * @param {string} [source]
- * @returns {"engram" | "workspace"}
+ * @param {Chunk} chunk
+ * @returns {"memory" | "workspace" | "chat"}
  */
-function chunkOrigin(source = "") {
-  return normalizeSource(source).startsWith("engram://") ? "engram" : "workspace";
+function chunkOrigin(chunk) {
+  const kind = String(chunk.kind ?? "").toLowerCase();
+  const source = normalizeSource(String(chunk.source ?? ""));
+
+  if (kind === "chat" || /^chat:\/\//u.test(source)) {
+    return "chat";
+  }
+
+  return /^(engram|memory):\/\//u.test(source) ? "memory" : "workspace";
 }
 
 /**
@@ -286,7 +358,66 @@ function chunkOrigin(source = "") {
  * @returns {number}
  */
 function recallBoost(source = "") {
-  return normalizeSource(source).startsWith("engram://") ? 0.12 : 0;
+  return /^(engram|memory):\/\//u.test(normalizeSource(source)) ? 0.12 : 0;
+}
+
+/**
+ * @param {SelectionOptions["sourceBudgets"]} value
+ */
+function normalizeSourceBudgetConfig(value) {
+  if (!value || typeof value !== "object") {
+    return {
+      enabled: false,
+      ratios: /** @type {Partial<Record<SourceBudgetName, number>>} */ ({})
+    };
+  }
+
+  const input = /** @type {Record<string, unknown>} */ (value);
+  /** @type {Partial<Record<SourceBudgetName, number>>} */
+  const ratios = {};
+
+  for (const key of /** @type {SourceBudgetName[]} */ (["workspace", "memory", "chat"])) {
+    const raw = input[key];
+    if (typeof raw !== "number" || !Number.isFinite(raw)) {
+      continue;
+    }
+
+    const clamped = clamp(raw, 0, 1);
+    if (clamped > 0) {
+      ratios[key] = clamped;
+    } else {
+      ratios[key] = 0;
+    }
+  }
+
+  const keys = Object.keys(ratios);
+  if (!keys.length) {
+    return {
+      enabled: false,
+      ratios
+    };
+  }
+
+  const total = keys.reduce((sum, key) => sum + asNumber(ratios[/** @type {SourceBudgetName} */ (key)]), 0);
+
+  if (total <= 0) {
+    return {
+      enabled: true,
+      ratios
+    };
+  }
+
+  if (total > 1) {
+    for (const key of keys) {
+      const typedKey = /** @type {SourceBudgetName} */ (key);
+      ratios[typedKey] = asNumber(ratios[typedKey]) / total;
+    }
+  }
+
+  return {
+    enabled: true,
+    ratios
+  };
 }
 
 /**
@@ -610,7 +741,11 @@ export function compressContent(content, focus = "", sentenceBudget = 3) {
 export function scoreChunk(chunk, focus, selectedChunks = [], options = {}) {
   const focusTokens = options._cachedFocusTokens || tokenize(focus);
   const chunkTokens = options._cachedChunkTokens || chunk.tokens || tokenize(chunk.content);
+  const structuralSignals = collectStructuralSignals(chunk);
   const overlap = overlapScore(chunkTokens, focusTokens);
+  const structuralOverlap = overlapScore(structuralSignals.tokens, focusTokens);
+  const structuralPublicSurface = overlapScore(structuralSignals.publicSurfaceTokens, focusTokens);
+  const structuralDependency = overlapScore(structuralSignals.dependencyTokens, focusTokens);
   const density = densityScore(chunkTokens);
   const kindPrior = KIND_PRIOR[chunk.kind] ?? 0.5;
   const certainty = clamp(chunk.certainty ?? 0.7);
@@ -666,6 +801,9 @@ export function scoreChunk(chunk, focus, selectedChunks = [], options = {}) {
     sourceAffinity * (scoringWeights.sourceAffinity ?? 0.1) +
     implementationFit * (scoringWeights.implementationFit ?? 0.12) +
     retrievalBoost * (scoringWeights.retrievalBoost ?? 0.08) +
+    structuralOverlap * (scoringWeights.structuralOverlap ?? 0.11) +
+    structuralPublicSurface * (scoringWeights.structuralPublicSurface ?? 0.07) +
+    structuralDependency * (scoringWeights.structuralDependency ?? 0.05) +
     changeAnchor * changeAnchorWeight +
     relatedTestBoost * (scoringWeights.relatedTestBoost ?? 0.04) +
     recallOriginBoost * (scoringWeights.recallOriginBoost ?? 0.09) +
@@ -688,6 +826,10 @@ export function scoreChunk(chunk, focus, selectedChunks = [], options = {}) {
       teachingValue,
       priority,
       density,
+      structuralOverlap,
+      structuralPublicSurface,
+      structuralDependency,
+      structuralSignalCount: structuralSignals.signalCount,
       sourceAffinity,
       changeAnchor,
       changeAnchorWeight,
@@ -727,7 +869,7 @@ export function selectContextWindow(chunks, options = {}) {
     const tokens = tokenize(compressedContent);
     return {
       ...chunk,
-      origin: chunkOrigin(chunk.source),
+      origin: chunkOrigin(chunk),
       content: compressedContent,
       tokenCount: approximateTokenCount(compressedContent),
       tokens
@@ -754,9 +896,35 @@ export function selectContextWindow(chunks, options = {}) {
     }))
     .sort((left, right) => right.score - left.score);
   const preparedById = new Map(prepared.map((chunk) => [chunk.id, chunk]));
+  const sourceBudgetConfig = normalizeSourceBudgetConfig(options.sourceBudgets);
+  /** @type {Partial<Record<SourceBudgetName, number>>} */
+  const sourceTokenCaps = {};
+  /** @type {Record<SourceBudgetName, number>} */
+  const usedOriginTokens = {
+    workspace: 0,
+    memory: 0,
+    chat: 0
+  };
+
+  if (sourceBudgetConfig.enabled) {
+    for (const key of /** @type {SourceBudgetName[]} */ (["workspace", "memory", "chat"])) {
+      const ratio = sourceBudgetConfig.ratios[key];
+      if (typeof ratio !== "number" || !Number.isFinite(ratio)) {
+        continue;
+      }
+
+      if (ratio <= 0) {
+        sourceTokenCaps[key] = 0;
+        continue;
+      }
+
+      const cap = Math.max(1, Math.floor(tokenBudget * ratio));
+      sourceTokenCaps[key] = cap;
+    }
+  }
 
   const normalizedRecallReserveRatio = clamp(recallReserveRatio, 0, 0.5);
-  const recallRanked = ranked.filter((entry) => entry.chunk.origin === "engram");
+  const recallRanked = ranked.filter((entry) => entry.chunk.origin === "memory");
   const workspaceRanked = ranked.filter((entry) => entry.chunk.origin === "workspace");
   const recallTokenBudget = recallRanked.length
     ? Math.max(1, Math.floor(tokenBudget * normalizedRecallReserveRatio))
@@ -842,11 +1010,27 @@ export function selectContextWindow(chunks, options = {}) {
 
     if (
       phase === "recall" &&
-      chunk.origin === "engram" &&
+      chunk.origin === "memory" &&
+      !sourceBudgetConfig.enabled &&
       recallTokenBudget > 0 &&
       usedRecallTokens + chunk.tokenCount > recallTokenBudget
     ) {
       return;
+    }
+
+    if (sourceBudgetConfig.enabled) {
+      const originCap = sourceTokenCaps[chunk.origin];
+      if (typeof originCap === "number") {
+        if (originCap <= 0) {
+          suppressChunk(chunk, "origin-budget-exceeded");
+          return;
+        }
+
+        if (usedOriginTokens[chunk.origin] + chunk.tokenCount > originCap) {
+          suppressChunk(chunk, "origin-budget-exceeded");
+          return;
+        }
+      }
     }
 
     if (usedTokens + chunk.tokenCount > tokenBudget) {
@@ -862,8 +1046,9 @@ export function selectContextWindow(chunks, options = {}) {
     processed.add(chunk.id);
     selected.push(chunk);
     usedTokens += chunk.tokenCount;
+    usedOriginTokens[chunk.origin] += chunk.tokenCount;
 
-    if (phase === "recall" && chunk.origin === "engram") {
+    if (phase === "recall" && chunk.origin === "memory") {
       usedRecallTokens += chunk.tokenCount;
     }
   }
@@ -881,11 +1066,11 @@ export function selectContextWindow(chunks, options = {}) {
   }
 
   let rebalanceIterations = 0;
-  while (rebalanceIterations < maxChunks) {
+  while (!sourceBudgetConfig.enabled && rebalanceIterations < maxChunks) {
     rebalanceIterations++;
     const selectedRecall = selected
       .map((chunk, index) => ({ chunk, index }))
-      .filter((entry) => entry.chunk.origin === "engram")
+      .filter((entry) => entry.chunk.origin === "memory")
       .sort((left, right) => left.chunk.score - right.chunk.score);
 
     const workspaceCandidates = suppressed
@@ -986,7 +1171,17 @@ export function selectContextWindow(chunks, options = {}) {
       selectedCount: selected.length,
       suppressedCount: suppressed.length,
       selectedOrigins: summarizeBy(selected, (chunk) => chunk.origin),
-      suppressedOrigins: summarizeBy(suppressed, (chunk) => chunk.origin ?? chunkOrigin(chunk.source)),
+      suppressedOrigins: summarizeBy(
+        suppressed,
+        (chunk) =>
+          chunk.origin ??
+          chunkOrigin({
+            id: chunk.id,
+            source: chunk.source,
+            kind: chunk.kind ?? "doc",
+            content: ""
+          })
+      ),
       suppressionReasons: summarizeBy(suppressed, (chunk) => chunk.reason)
     }
   };

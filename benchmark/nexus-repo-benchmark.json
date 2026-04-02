@@ -1,0 +1,71 @@
+{
+  "_comment": "NEXUS repo self-benchmark cases. Tests structural grounding and symbol-aware scoring on the NEXUS codebase itself. Run with: node benchmark/run-nexus-comparison.js --file benchmark/nexus-repo-benchmark.json",
+  "cases": [
+    {
+      "name": "nexus repo — noise-canceler structural grounding selects scorer over logs",
+      "input": {
+        "workspace": ".",
+        "task": "Improve structural scoring in noise-canceler",
+        "objective": "Add import/export signal to chunk ranking so structurally connected chunks rank higher",
+        "changedFiles": ["src/context/noise-canceler.js", "test/noise-canceler.test.js"],
+        "project": "learning-context-system",
+        "noRecall": true,
+        "tokenBudget": 400,
+        "maxChunks": 5
+      },
+      "provider": { "memories": [] },
+      "expectations": {
+        "codeFocus": "src/context/noise-canceler.js",
+        "relatedTest": "test/noise-canceler.test.js",
+        "excludedSources": [],
+        "memoryRecallStatus": "disabled",
+        "selectedMemoryChunks": 0,
+        "suppressedMemoryChunks": 0
+      }
+    },
+    {
+      "name": "nexus repo — code gate focus selects guard modules over unrelated specs",
+      "input": {
+        "workspace": ".",
+        "task": "Implement Code Gate v1",
+        "objective": "Run typecheck and build gate before accepting generated code",
+        "changedFiles": ["src/guard/code-gate.js", "test/run-tests.js"],
+        "project": "learning-context-system",
+        "noRecall": true,
+        "tokenBudget": 450,
+        "maxChunks": 5
+      },
+      "provider": { "memories": [] },
+      "expectations": {
+        "codeFocus": "src/guard/code-gate.js",
+        "relatedTest": "test/run-tests.js",
+        "excludedSources": [],
+        "memoryRecallStatus": "disabled",
+        "selectedMemoryChunks": 0,
+        "suppressedMemoryChunks": 0
+      }
+    },
+    {
+      "name": "nexus repo — local-first memory focus selects runtime modules",
+      "input": {
+        "workspace": ".",
+        "task": "Harden local-first memory runtime and external battery fallback",
+        "objective": "Keep local JSONL canonical and Engram isolated as contingency battery",
+        "changedFiles": ["src/memory/resilient-memory-client.js", "test/run-tests.js"],
+        "project": "learning-context-system",
+        "noRecall": true,
+        "tokenBudget": 400,
+        "maxChunks": 5
+      },
+      "provider": { "memories": [] },
+      "expectations": {
+        "codeFocus": "src/memory/resilient-memory-client.js",
+        "relatedTest": "test/run-tests.js",
+        "excludedSources": [],
+        "memoryRecallStatus": "disabled",
+        "selectedMemoryChunks": 0,
+        "suppressedMemoryChunks": 0
+      }
+    }
+  ]
+}

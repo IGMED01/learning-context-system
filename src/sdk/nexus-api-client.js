@@ -18,6 +18,18 @@ function ensureString(value) {
 
 /**
  * @param {string} baseUrl
+ */
+function isLoopbackBaseUrl(baseUrl) {
+  try {
+    const url = new URL(baseUrl);
+    return ["127.0.0.1", "localhost", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} baseUrl
  * @param {string} pathname
  */
 function resolveUrl(baseUrl, pathname) {
@@ -47,6 +59,7 @@ function toQueryString(query) {
  *   baseUrl: string,
  *   apiKey?: string,
  *   token?: string,
+ *   allowUnauthenticated?: boolean,
  *   headers?: Record<string, string>,
  *   fetchFn?: typeof fetch
  * }} NexusApiClientOptions
@@ -67,8 +80,15 @@ export class NexusApiClient {
     this.baseUrl = options.baseUrl;
     this.apiKey = options.apiKey?.trim() || "";
     this.token = options.token?.trim() || "";
+    this.allowUnauthenticated = options.allowUnauthenticated === true;
     this.defaultHeaders = options.headers ?? {};
     this.fetchFn = options.fetchFn ?? fetch;
+
+    if (!this.apiKey && !this.token && !this.allowUnauthenticated && !isLoopbackBaseUrl(this.baseUrl)) {
+      throw new Error(
+        "Remote NEXUS API clients require 'apiKey' or 'token'. Use allowUnauthenticated=true only for explicitly public deployments."
+      );
+    }
   }
 
   /**

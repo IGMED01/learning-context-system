@@ -1,5 +1,12 @@
 // @ts-check
 
+/**
+ * Memory Auto-Orchestrator — provider-agnostic memory recall and auto-remember logic.
+ *
+ * Previously "engram-auto-orchestrator.js" — now fully decoupled from Engram.
+ * Works with any MemoryProvider (local JSONL, axiom-store, semantic tier, or future vector-store).
+ */
+
 import {
   redactSensitiveContent,
   resolveSecurityPolicy,
@@ -10,6 +17,8 @@ import { resolveTeachRecall } from "./teach-recall.js";
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
 /** @typedef {import("../types/core-contracts.d.ts").TeachRecallResolution} TeachRecallResolution */
 /** @typedef {import("../types/core-contracts.d.ts").MemoryRecallState} MemoryRecallState */
+/** @typedef {import("../types/core-contracts.d.ts").MemorySearchResult} MemorySearchResult */
+/** @typedef {import("../types/core-contracts.d.ts").MemorySearchOptions} MemorySearchOptions */
 
 /**
  * @typedef {{
@@ -29,6 +38,19 @@ import { resolveTeachRecall } from "./teach-recall.js";
  *   selectedSources: string[],
  *   project?: string,
  *   recallState: MemoryRecallState,
+ *   selectionDiagnostics?: {
+ *     selectorStatus?: string,
+ *     selectorReason?: string,
+ *     selectedCount?: number,
+ *     suppressedCount?: number,
+ *     suppressionReasons?: Record<string, number>,
+ *     sdd?: Record<string, unknown>
+ *   },
+ *   axiomDiagnostics?: {
+ *     status?: string,
+ *     count?: number,
+ *     reason?: string
+ *   },
  *   memoryType?: string,
  *   memoryScope?: string,
  *   security?: AutoMemorySecurityOptions
@@ -64,9 +86,7 @@ function sanitizePathList(values, securityPolicy) {
   let sensitivePathCount = 0;
 
   for (const value of values) {
-    if (!value) {
-      continue;
-    }
+    if (!value) continue;
 
     if (shouldIgnoreSensitiveFile(value, securityPolicy)) {
       sensitivePathCount += 1;
@@ -77,13 +97,13 @@ function sanitizePathList(values, securityPolicy) {
     sanitized.push(value);
   }
 
-  return {
-    values: sanitized,
-    sensitivePathCount
-  };
+  return { values: sanitized, sensitivePathCount };
 }
 
 /**
+ * Resolve recall with auto-signal detection.
+ * Skips recall when task signal is too low to produce useful results.
+ *
  * @param {{
  *   task?: string,
  *   objective?: string,
@@ -98,7 +118,7 @@ function sanitizePathList(values, securityPolicy) {
  *   type?: string,
  *   strictRecall?: boolean,
  *   baseChunks?: Chunk[],
- *   searchMemories: (query: string, options?: { project?: string, scope?: string, type?: string, limit?: number }) => Promise<{ stdout: string }>
+ *   search: (query: string, options?: MemorySearchOptions) => Promise<MemorySearchResult>
  * }} input
  * @returns {Promise<TeachRecallResolution & { autoRecallEnabled: boolean }>}
  */
@@ -122,7 +142,7 @@ export async function resolveAutoTeachRecall(input) {
     type: input.type,
     strictRecall: input.strictRecall,
     baseChunks: input.baseChunks,
-    searchMemories: input.searchMemories
+    search: input.search
   });
 
   if (lowSignalTask) {
@@ -137,10 +157,7 @@ export async function resolveAutoTeachRecall(input) {
     };
   }
 
-  return {
-    ...result,
-    autoRecallEnabled
-  };
+  return { ...result, autoRecallEnabled };
 }
 
 /**
@@ -153,6 +170,8 @@ function compactText(value, maxLength) {
 }
 
 /**
+ * Build a payload for auto-remember after a teach loop.
+ *
  * @param {AutoRememberPayloadInput} input
  * @returns {AutoRememberPayload}
  */
@@ -169,6 +188,26 @@ export function buildTeachAutoRememberPayload(input) {
   const changedFiles = sanitizePathList(input.changedFiles, securityPolicy);
   const topSources = sanitizePathList(input.selectedSources.slice(0, 4), securityPolicy);
   const sensitivePathCount = changedFiles.sensitivePathCount + topSources.sensitivePathCount;
+  const selectionDiagnostics = input.selectionDiagnostics ?? {};
+  const suppressionReasons =
+    selectionDiagnostics.suppressionReasons &&
+    typeof selectionDiagnostics.suppressionReasons === "object"
+      ? Object.entries(selectionDiagnostics.suppressionReasons)
+          .map(([reason, count]) => `${reason}=${count}`)
+          .join(", ")
+      : "none";
+  const axiomDiagnostics = input.axiomDiagnostics ?? {};
+  const sddCoverage =
+    selectionDiagnostics.sdd &&
+    typeof selectionDiagnostics.sdd === "object" &&
+    selectionDiagnostics.sdd !== null &&
+    typeof selectionDiagnostics.sdd.coverage === "object"
+      ? Object.entries(
+          /** @type {{ coverage?: Record<string, boolean> }} */ (selectionDiagnostics.sdd).coverage ?? {}
+        )
+          .map(([kind, covered]) => `${kind}=${covered ? "yes" : "no"}`)
+          .join(", ") || "none"
+      : "none";
 
   const rawContent = [
     "## Teach Auto Memory",
@@ -180,8 +219,18 @@ export function buildTeachAutoRememberPayload(input) {
     `- Recall query: ${recall.query || "none"}`,
     `- Recovered chunks: ${recall.recoveredChunks}`,
     `- Selected recalled chunks: ${recall.selectedChunks}`,
-    `- Top selected context sources: ${topSources.values.join(", ") || "none"}`
+    `- Top selected context sources: ${topSources.values.join(", ") || "none"}`,
+    `- Selector status: ${selectionDiagnostics.selectorStatus || "unknown"}`,
+    `- Selector reason: ${selectionDiagnostics.selectorReason || "none"}`,
+    `- Selected context count: ${selectionDiagnostics.selectedCount ?? "n/a"}`,
+    `- Suppressed context count: ${selectionDiagnostics.suppressedCount ?? "n/a"}`,
+    `- Suppression reasons: ${suppressionReasons}`,
+    `- SDD coverage: ${sddCoverage}`,
+    `- Axiom injection: ${axiomDiagnostics.status || "none"}`,
+    `- Axiom count: ${axiomDiagnostics.count ?? 0}`,
+    `- Axiom reason: ${axiomDiagnostics.reason || "none"}`
   ].join("\n");
+
   const redaction = redactSensitiveContent(rawContent, securityPolicy);
 
   return {

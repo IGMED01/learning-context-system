@@ -1,0 +1,138 @@
+{
+  "suite": "nexus-retrieval-first-v1",
+  "thresholds": {
+    "minCasePassRate": 0.9,
+    "minRecallAtK": 0.75,
+    "minMrr": 0.55,
+    "minNdcgAtK": 0.7,
+    "maxErrorRate": 0.05,
+    "maxP95LatencyMs": 1800
+  },
+  "defaults": {
+    "ragLimit": 6,
+    "rerankTopK": 12
+  },
+  "cases": [
+    {
+      "name": "Caso A - soporte de código interno",
+      "endpoint": "ask",
+      "project": "rag-a-code-support",
+      "query": "¿Dónde validamos JWT y expiración antes del handler?",
+      "task": "auth hardening",
+      "objective": "trazabilidad de código",
+      "expectedSources": [
+        "Auth middleware code",
+        "Auth boundary spec"
+      ],
+      "documents": [
+        {
+          "title": "Auth middleware code",
+          "content": "El middleware valida firma JWT, issuer y exp antes de ejecutar handlers. Si falla, responde 401."
+        },
+        {
+          "title": "Auth boundary spec",
+          "content": "Spec de request boundary: validar token, expiración y revocación antes de ingresar a lógica de negocio."
+        },
+        {
+          "title": "Frontend CSS guide",
+          "content": "Guía de dark mode y variables CSS para la UI."
+        },
+        {
+          "title": "Deploy checklist",
+          "content": "Checklist de despliegue con pasos de rollback."
+        }
+      ]
+    },
+    {
+      "name": "Caso B - runbooks e incidentes",
+      "endpoint": "chat",
+      "project": "rag-b-runbook",
+      "query": "¿Qué runbook seguimos ante compromiso de token?",
+      "task": "incident response",
+      "objective": "runbook recuperable",
+      "expectedSources": [
+        "Auth incident runbook",
+        "Token compromise postmortem"
+      ],
+      "documents": [
+        {
+          "title": "Auth incident runbook",
+          "content": "Ante compromiso de token: rotar llaves, invalidar sesiones activas y forzar reautenticación global."
+        },
+        {
+          "title": "Token compromise postmortem",
+          "content": "El postmortem recomienda rotación de llaves y revocación inmediata de sesiones comprometidas."
+        },
+        {
+          "title": "Design system notes",
+          "content": "Ajustes de componentes visuales del dashboard."
+        },
+        {
+          "title": "CI style report",
+          "content": "Reporte de estilo y lint de frontend."
+        }
+      ]
+    },
+    {
+      "name": "Caso C - compliance y trazabilidad",
+      "endpoint": "ask",
+      "project": "rag-c-compliance",
+      "query": "¿Cuál es la política de PII para logs y retención?",
+      "task": "compliance check",
+      "objective": "responder con política vigente",
+      "expectedSources": [
+        "Compliance policy PII",
+        "Logging retention standard"
+      ],
+      "documents": [
+        {
+          "title": "Compliance policy PII",
+          "content": "La política prohíbe registrar PII en texto plano y exige redacción o hash irreversible en logs."
+        },
+        {
+          "title": "Logging retention standard",
+          "content": "Retención: 30 días para logs operativos con acceso mínimo y auditoría de lectura."
+        },
+        {
+          "title": "Release notes UI",
+          "content": "Cambios menores de interfaz."
+        },
+        {
+          "title": "Marketing copy",
+          "content": "Texto promocional del producto."
+        }
+      ]
+    },
+    {
+      "name": "Caso D - topic y recency",
+      "endpoint": "chat",
+      "project": "rag-d-topic-recency",
+      "query": "Necesito la actualización 2026 de revocación de sesión",
+      "task": "session policy update",
+      "objective": "preferir versión vigente",
+      "expectedSources": [
+        "Session revocation policy 2026",
+        "Session revocation changelog 2026"
+      ],
+      "documents": [
+        {
+          "title": "Session revocation policy 2025",
+          "content": "Política 2025: revocación manual por lotes cada 12 horas."
+        },
+        {
+          "title": "Session revocation policy 2026",
+          "content": "Política 2026: revocación inmediata por evento de riesgo y bloqueo preventivo por firma sospechosa."
+        },
+        {
+          "title": "Session revocation changelog 2026",
+          "content": "Cambios 2026: se elimina ventana de 12 horas y se adopta invalidación en tiempo real."
+        },
+        {
+          "title": "Legacy archive",
+          "content": "Notas históricas no vigentes."
+        }
+      ]
+    }
+  ]
+}
+

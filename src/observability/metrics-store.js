@@ -5,6 +5,15 @@ import path from "node:path";
 
 const OBSERVABILITY_SCHEMA_VERSION = "1.0.0";
 const DEFAULT_OBSERVABILITY_FILE = ".lcs/observability.json";
+const METRIC_FLUSH_INTERVAL_MS = 1_000;
+const METRIC_BUFFER_FLUSH_THRESHOLD = 100;
+/** @type {Map<string, CommandMetric[]>} */
+const metricBufferByPath = new Map();
+/** @type {Map<string, NodeJS.Timeout>} */
+const metricFlushTimers = new Map();
+/** @type {Map<string, Promise<{ flushed: number, error: string }>>} */
+const metricFlushInFlight = new Map();
+let metricShutdownHooksRegistered = false;
 
 /**
  * @typedef {{
@@ -14,6 +23,19 @@ const DEFAULT_OBSERVABILITY_FILE = ".lcs/observability.json";
  *   selection?: {
  *     selectedCount?: number,
  *     suppressedCount?: number
+ *   },
+ *   sdd?: {
+ *     enabled?: boolean,
+ *     requiredKinds?: number,
+ *     coveredKinds?: number,
+ *     injectedKinds?: number,
+ *     skippedReasons?: string[]
+ *   },
+ *   teaching?: {
+ *     enabled?: boolean,
+ *     sectionsPresent?: number,
+ *     sectionsExpected?: number,
+ *     hasPractice?: boolean
  *   },
  *   recall?: {
  *     attempted?: boolean,
@@ -74,6 +96,19 @@ function defaultStore() {
       suppressedTotal: 0,
       samples: 0
     },
+    sdd: {
+      samples: 0,
+      requiredKindsTotal: 0,
+      coveredKindsTotal: 0,
+      injectedKindsTotal: 0,
+      bySkippedReason: {}
+    },
+    teaching: {
+      samples: 0,
+      sectionsPresentTotal: 0,
+      sectionsExpectedTotal: 0,
+      practiceCount: 0
+    },
     safety: {
       blockedRuns: 0,
       preventedErrors: 0,
@@ -99,6 +134,8 @@ function normalizedStore(record) {
   const totals = asRecord(record.totals);
   const recall = asRecord(record.recall);
   const selection = asRecord(record.selection);
+  const sdd = asRecord(record.sdd);
+  const teaching = asRecord(record.teaching);
   const safety = asRecord(record.safety);
   const commands = asRecord(record.commands);
 
@@ -129,6 +166,19 @@ function normalizedStore(record) {
       selectedTotal: toFiniteNumber(selection.selectedTotal),
       suppressedTotal: toFiniteNumber(selection.suppressedTotal),
       samples: toFiniteNumber(selection.samples)
+    },
+    sdd: {
+      samples: toFiniteNumber(sdd.samples),
+      requiredKindsTotal: toFiniteNumber(sdd.requiredKindsTotal),
+      coveredKindsTotal: toFiniteNumber(sdd.coveredKindsTotal),
+      injectedKindsTotal: toFiniteNumber(sdd.injectedKindsTotal),
+      bySkippedReason: asRecord(sdd.bySkippedReason)
+    },
+    teaching: {
+      samples: toFiniteNumber(teaching.samples),
+      sectionsPresentTotal: toFiniteNumber(teaching.sectionsPresentTotal),
+      sectionsExpectedTotal: toFiniteNumber(teaching.sectionsExpectedTotal),
+      practiceCount: toFiniteNumber(teaching.practiceCount)
     },
     safety: {
       blockedRuns: toFiniteNumber(safety.blockedRuns),
@@ -226,6 +276,56 @@ function applyMetric(store, metric) {
     store.selection.suppressedTotal += suppressedCount;
   }
 
+  if (metric.sdd?.enabled) {
+    const requiredKinds = Math.max(
+      0,
+      Math.round(toFiniteNumber(metric.sdd.requiredKinds))
+    );
+    const coveredKinds = Math.max(
+      0,
+      Math.min(requiredKinds, Math.round(toFiniteNumber(metric.sdd.coveredKinds)))
+    );
+    const injectedKinds = Math.max(
+      0,
+      Math.round(toFiniteNumber(metric.sdd.injectedKinds))
+    );
+    const skippedReasons = Array.isArray(metric.sdd.skippedReasons)
+      ? metric.sdd.skippedReasons
+          .filter((entry) => typeof entry === "string" && entry.trim())
+          .map((entry) => entry.trim())
+      : [];
+    const bySkippedReason = asRecord(store.sdd.bySkippedReason);
+
+    store.sdd.samples += 1;
+    store.sdd.requiredKindsTotal += requiredKinds;
+    store.sdd.coveredKindsTotal += coveredKinds;
+    store.sdd.injectedKindsTotal += injectedKinds;
+    store.sdd.bySkippedReason = bySkippedReason;
+
+    for (const reason of skippedReasons) {
+      bySkippedReason[reason] = toFiniteNumber(bySkippedReason[reason]) + 1;
+    }
+  }
+
+  if (metric.teaching?.enabled) {
+    const sectionsExpected = Math.max(
+      0,
+      Math.round(toFiniteNumber(metric.teaching.sectionsExpected))
+    );
+    const sectionsPresent = Math.max(
+      0,
+      Math.min(sectionsExpected, Math.round(toFiniteNumber(metric.teaching.sectionsPresent)))
+    );
+    const hasPractice = metric.teaching.hasPractice === true;
+
+    store.teaching.samples += 1;
+    store.teaching.sectionsPresentTotal += sectionsPresent;
+    store.teaching.sectionsExpectedTotal += sectionsExpected;
+    if (hasPractice) {
+      store.teaching.practiceCount += 1;
+    }
+  }
+
   if (metric.recall?.attempted) {
     const recoveredChunks = Math.max(
       0,
@@ -273,6 +373,129 @@ function resolveMetricsPath(options = {}) {
 }
 
 /**
+ * @param {string} filePath
+ */
+function getMetricBuffer(filePath) {
+  let queue = metricBufferByPath.get(filePath);
+  if (!queue) {
+    queue = [];
+    metricBufferByPath.set(filePath, queue);
+  }
+
+  return queue;
+}
+
+/**
+ * @param {string} filePath
+ */
+function clearMetricFlushTimer(filePath) {
+  const timer = metricFlushTimers.get(filePath);
+  if (timer) {
+    clearTimeout(timer);
+    metricFlushTimers.delete(filePath);
+  }
+}
+
+/**
+ * @param {string} filePath
+ */
+function scheduleMetricFlush(filePath) {
+  if (metricFlushTimers.has(filePath)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    metricFlushTimers.delete(filePath);
+    void flushMetricsPath(filePath);
+  }, METRIC_FLUSH_INTERVAL_MS);
+  timer.unref?.();
+  metricFlushTimers.set(filePath, timer);
+}
+
+/**
+ * @param {string} filePath
+ * @returns {Promise<{ flushed: number, error: string }>}
+ */
+async function flushMetricsPath(filePath) {
+  const inFlight = metricFlushInFlight.get(filePath);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  clearMetricFlushTimer(filePath);
+
+  const run = (async () => {
+    const queue = getMetricBuffer(filePath);
+    if (queue.length === 0) {
+      return { flushed: 0, error: "" };
+    }
+
+    const batch = queue.splice(0, queue.length);
+
+    try {
+      const loaded = await loadStore(filePath);
+      for (const metric of batch) {
+        applyMetric(loaded.store, metric);
+      }
+      await persistStore(filePath, loaded.store);
+      return {
+        flushed: batch.length,
+        error: ""
+      };
+    } catch (error) {
+      // Requeue at the front to avoid dropping metrics.
+      queue.unshift(...batch);
+      return {
+        flushed: 0,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  })();
+
+  metricFlushInFlight.set(filePath, run);
+  try {
+    return await run;
+  } finally {
+    metricFlushInFlight.delete(filePath);
+  }
+}
+
+/**
+ * @returns {Promise<void>}
+ */
+async function flushAllMetrics() {
+  const paths = new Set([
+    ...metricBufferByPath.keys(),
+    ...metricFlushInFlight.keys()
+  ]);
+
+  for (const filePath of paths) {
+    // eslint-disable-next-line no-await-in-loop
+    await flushMetricsPath(filePath);
+  }
+}
+
+function registerMetricShutdownHooks() {
+  if (metricShutdownHooksRegistered) {
+    return;
+  }
+
+  metricShutdownHooksRegistered = true;
+
+  process.once("SIGTERM", () => {
+    void flushAllMetrics();
+  });
+
+  process.once("beforeExit", () => {
+    if (![...metricBufferByPath.values()].some((queue) => queue.length > 0)) {
+      return;
+    }
+
+    return flushAllMetrics();
+  });
+}
+
+/**
  * @param {CommandMetric} metric
  * @param {{ cwd?: string, filePath?: string }} [options]
  */
@@ -280,9 +503,20 @@ export async function recordCommandMetric(metric, options = {}) {
   const filePath = resolveMetricsPath(options);
 
   try {
-    const loaded = await loadStore(filePath);
-    applyMetric(loaded.store, metric);
-    await persistStore(filePath, loaded.store);
+    registerMetricShutdownHooks();
+    const queue = getMetricBuffer(filePath);
+    queue.push(metric);
+
+    if (queue.length >= METRIC_BUFFER_FLUSH_THRESHOLD) {
+      const flushed = await flushMetricsPath(filePath);
+      return {
+        stored: !flushed.error,
+        filePath,
+        error: flushed.error
+      };
+    }
+
+    scheduleMetricFlush(filePath);
 
     return {
       stored: true,
@@ -330,17 +564,29 @@ function commandSummary(commands) {
  */
 export async function getObservabilityReport(options = {}) {
   const filePath = resolveMetricsPath(options);
+  const flushResult = await flushMetricsPath(filePath);
   const loaded = await loadStore(filePath);
   const totals = loaded.store.totals;
   const recall = loaded.store.recall;
   const selection = loaded.store.selection;
+  const sdd = loaded.store.sdd;
+  const teaching = loaded.store.teaching;
   const safety = loaded.store.safety;
+  const sddCoverageRate = sdd.requiredKindsTotal
+    ? round(sdd.coveredKindsTotal / sdd.requiredKindsTotal)
+    : 0;
+  const teachingCoverageRate = teaching.sectionsExpectedTotal
+    ? round(teaching.sectionsPresentTotal / teaching.sectionsExpectedTotal)
+    : 0;
+  const teachingPracticeRate = teaching.samples
+    ? round(teaching.practiceCount / teaching.samples)
+    : 0;
 
   return {
     schemaVersion: OBSERVABILITY_SCHEMA_VERSION,
     filePath,
     found: loaded.found,
-    loadError: loaded.error,
+    loadError: flushResult.error || loaded.error,
     updatedAt: loaded.store.updatedAt,
     totals: {
       runs: totals.runs,
@@ -369,6 +615,31 @@ export async function getObservabilityReport(options = {}) {
       averageSuppressed: selection.samples
         ? round(selection.suppressedTotal / selection.samples)
         : 0
+    },
+    sdd: {
+      samples: sdd.samples,
+      requiredKindsTotal: sdd.requiredKindsTotal,
+      coveredKindsTotal: sdd.coveredKindsTotal,
+      injectedKindsTotal: sdd.injectedKindsTotal,
+      coverageRate: sddCoverageRate,
+      bySkippedReason: sdd.bySkippedReason,
+      metrics: {
+        sdd_coverage_rate: sddCoverageRate,
+        sdd_injected_kinds: sdd.injectedKindsTotal,
+        sdd_skipped_reason: sdd.bySkippedReason
+      }
+    },
+    teaching: {
+      samples: teaching.samples,
+      sectionsPresentTotal: teaching.sectionsPresentTotal,
+      sectionsExpectedTotal: teaching.sectionsExpectedTotal,
+      practiceCount: teaching.practiceCount,
+      coverageRate: teachingCoverageRate,
+      practiceRate: teachingPracticeRate,
+      metrics: {
+        teaching_coverage_rate: teachingCoverageRate,
+        teaching_practice_rate: teachingPracticeRate
+      }
     },
     safety: {
       blockedRuns: safety.blockedRuns,

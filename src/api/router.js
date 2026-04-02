@@ -8,11 +8,22 @@
  * @typedef {{ corsOrigin: string }} RouterConfig
  */
 
+import { findCommand } from "../core/command-registry.js";
+import { randomUUID } from "node:crypto";
+import { log } from "../core/logger.js";
+
 /** @type {ApiRoute[]} */
 const routes = [];
 
 /** @type {Middleware[]} */
 const middlewares = [];
+
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024; // 1MB
+const configuredMaxBodyBytes = Number(process.env.LCS_API_MAX_BODY_BYTES ?? DEFAULT_MAX_BODY_BYTES);
+const MAX_REQUEST_BODY_BYTES =
+  Number.isFinite(configuredMaxBodyBytes) && configuredMaxBodyBytes > 1024
+    ? Math.trunc(configuredMaxBodyBytes)
+    : DEFAULT_MAX_BODY_BYTES;
 
 /**
  * @param {"GET" | "POST"} method
@@ -45,8 +56,28 @@ export async function parseRequestBody(req) {
   return new Promise((resolve, reject) => {
     /** @type {Buffer[]} */
     const chunks = [];
-    req.on("data", (/** @type {Buffer} */ chunk) => chunks.push(chunk));
+    let totalBytes = 0;
+    let rejected = false;
+    req.on("data", (/** @type {Buffer} */ chunk) => {
+      if (rejected) {
+        return;
+      }
+
+      totalBytes += chunk.length;
+
+      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+        rejected = true;
+        reject(new Error(`Request body too large. Max bytes: ${MAX_REQUEST_BODY_BYTES}.`));
+        return;
+      }
+
+      chunks.push(chunk);
+    });
     req.on("end", () => {
+      if (rejected) {
+        return;
+      }
+
       const raw = Buffer.concat(chunks).toString("utf8").trim();
 
       if (!raw) {
@@ -78,6 +109,9 @@ export async function parseRequestBody(req) {
 export function buildApiRequest(httpReq, body) {
   /** @type {Record<string, string>} */
   const headers = {};
+  /** @type {Record<string, string>} */
+  const query = {};
+  const requestUrl = new URL(httpReq.url ?? "/", "http://127.0.0.1");
 
   for (const [key, value] of Object.entries(httpReq.headers)) {
     if (typeof value === "string") {
@@ -85,11 +119,17 @@ export function buildApiRequest(httpReq, body) {
     }
   }
 
+  requestUrl.searchParams.forEach((value, key) => {
+    query[key] = value;
+  });
+
   return {
     method: (httpReq.method ?? "GET").toUpperCase(),
-    path: (httpReq.url ?? "/").split("?")[0],
+    path: requestUrl.pathname,
     body,
-    headers
+    headers,
+    query,
+    params: {}
   };
 }
 
@@ -162,7 +202,8 @@ function corsHeaders(origin) {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-API-Key, X-Project, X-Data-Dir, X-Request-Id",
     "Access-Control-Max-Age": "86400"
   };
 }
@@ -174,10 +215,13 @@ function corsHeaders(origin) {
  */
 export async function handleRequest(httpReq, httpRes, config) {
   const startMs = Date.now();
+  const requestId = randomUUID();
+  httpRes.setHeader("X-Request-Id", requestId);
 
   if (httpReq.method === "OPTIONS") {
     httpRes.writeHead(204, {
       "Content-Type": "application/json",
+      "X-Request-Id": requestId,
       ...corsHeaders(config.corsOrigin)
     });
     httpRes.end();
@@ -195,20 +239,62 @@ export async function handleRequest(httpReq, httpRes, config) {
     const apiReq = buildApiRequest(httpReq, body);
     const route = matchRoute(apiReq.method, apiReq.path);
 
-    if (!route) {
-      apiResponse = errorResponse(404, `No route matches ${apiReq.method} ${apiReq.path}`);
-    } else {
+    if (route) {
       const chainedHandler = buildMiddlewareChain(route.handler);
       apiResponse = await chainedHandler(apiReq);
+    } else {
+      const commandMatch = await findCommand(apiReq.method, apiReq.path);
+      if (!commandMatch) {
+        apiResponse = errorResponse(404, `No route matches ${apiReq.method} ${apiReq.path}`);
+      } else {
+        apiReq.params = commandMatch.params;
+        const command = commandMatch.command;
+
+        if (typeof command.rawHandler === "function") {
+          const handled = await command.rawHandler(apiReq, {
+            httpReq,
+            httpRes,
+            corsOrigin: config.corsOrigin,
+            startMs
+          });
+
+          if (handled !== false) {
+            return;
+          }
+        }
+
+        if (typeof command.handler !== "function") {
+          apiResponse = errorResponse(500, `Command has no JSON handler: ${apiReq.method} ${apiReq.path}`);
+        } else {
+          const chainedHandler = buildMiddlewareChain(command.handler);
+          apiResponse = await chainedHandler(apiReq);
+        }
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    apiResponse = errorResponse(500, message);
+    const invalidJson = /invalid json/i.test(message);
+    const requestTooLarge = /request body too large/i.test(message);
+    const status = requestTooLarge ? 413 : invalidJson ? 400 : 500;
+    if (status === 500) {
+      log("error", "Unhandled API router error", {
+        requestId,
+        message,
+        stack: err instanceof Error ? err.stack : undefined
+      });
+      apiResponse = errorResponse(500, "Internal server error", {
+        requestId,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      apiResponse = errorResponse(status, message, { requestId });
+    }
   }
 
   const responseHeaders = {
     "Content-Type": "application/json",
     "X-Response-Time": `${Date.now() - startMs}ms`,
+    "X-Request-Id": requestId,
     ...corsHeaders(config.corsOrigin),
     ...(apiResponse.headers ?? {})
   };

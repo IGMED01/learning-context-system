@@ -31,11 +31,13 @@
  *   limit: number,
  *   scope: string,
  *   type: string,
- *   backend: "resilient" | "engram-only" | "local-only",
+ *   backend: "resilient" | "local-only",
  *   strictRecall: boolean,
  *   degradedRecall: boolean,
  *   autoRecall: boolean,
- *   autoRemember: boolean
+ *   autoRemember: boolean,
+ *   tempTtlMinutes: number,
+ *   tempMaxEntries: number
  * }} ProjectMemoryConfig
  */
 
@@ -58,8 +60,42 @@
 
 /**
  * @typedef {{
- *   ignoreDirs: string[]
+ *   enabled: boolean,
+ *   binaryPath: string,
+ *   arguments: string[],
+ *   timeoutMs: number
+ * }} ProjectFastScannerConfig
+ */
+
+/**
+ * @typedef {{
+ *   ignoreDirs: string[],
+ *   fastScanner: ProjectFastScannerConfig
  * }} ProjectScanConfig
+ */
+
+/**
+ * @typedef {{
+ *   maxAttempts: number,
+ *   backoffMs: number,
+ *   maxBackoffMs: number
+ * }} ProjectSyncRetryPolicy
+ */
+
+/**
+ * @typedef {{
+ *   enabled: boolean,
+ *   path: string,
+ *   ttlDays: number
+ * }} ProjectSyncDlqConfig
+ */
+
+/**
+ * @typedef {{
+ *   knowledgeBackend: "notion" | "obsidian" | "local-only",
+ *   retryPolicy: ProjectSyncRetryPolicy,
+ *   dlq: ProjectSyncDlqConfig
+ * }} ProjectSyncConfig
  */
 
 /**
@@ -97,6 +133,7 @@
  *   engram: ProjectEngramConfig,
  *   security: ProjectSecurityConfig,
  *   scan: ProjectScanConfig,
+ *   sync: ProjectSyncConfig,
  *   safety: ProjectSafetyConfig,
  *   llm: ProjectLlmConfig
  * }} ProjectConfig
@@ -236,7 +273,9 @@ export function defaultProjectConfig() {
       strictRecall: false,
       degradedRecall: true,
       autoRecall: true,
-      autoRemember: false
+      autoRemember: false,
+      tempTtlMinutes: 120,
+      tempMaxEntries: 50
     },
     engram: {
       binaryPath: "tools/engram/engram.exe",
@@ -250,7 +289,26 @@ export function defaultProjectConfig() {
       extraSensitivePathFragments: []
     },
     scan: {
-      ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
+      ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs", ".claude", ".atl", ".engram"],
+      fastScanner: {
+        enabled: false,
+        binaryPath: "tools/fastscan/lcs-fastscan",
+        arguments: [],
+        timeoutMs: 8000
+      }
+    },
+    sync: {
+      knowledgeBackend: "local-only",
+      retryPolicy: {
+        maxAttempts: 3,
+        backoffMs: 1000,
+        maxBackoffMs: 30000
+      },
+      dlq: {
+        enabled: true,
+        path: ".lcs/dlq",
+        ttlDays: 7
+      }
     },
     safety: {
       requirePlanForWrite: false,
@@ -311,6 +369,10 @@ export function validateProjectConfig(value) {
     assertObject(config.safety, "Project config.safety");
   }
 
+  if (config.sync !== undefined) {
+    assertObject(config.sync, "Project config.sync");
+  }
+
   if (config.llm !== undefined) {
     assertObject(config.llm, "Project config.llm");
   }
@@ -321,6 +383,7 @@ export function validateProjectConfig(value) {
   const engram = /** @type {Record<string, unknown> | undefined} */ (config.engram);
   const security = /** @type {Record<string, unknown> | undefined} */ (config.security);
   const scan = /** @type {Record<string, unknown> | undefined} */ (config.scan);
+  const sync = /** @type {Record<string, unknown> | undefined} */ (config.sync);
   const safety = /** @type {Record<string, unknown> | undefined} */ (config.safety);
   const llm = /** @type {Record<string, unknown> | undefined} */ (config.llm);
 
@@ -342,8 +405,39 @@ export function validateProjectConfig(value) {
     memoryBackend !== "engram-only" &&
     memoryBackend !== "local-only"
   ) {
-    fail("Project config.memory.backend must be 'resilient', 'engram-only', or 'local-only'.");
+    fail("Project config.memory.backend must be 'resilient' or 'local-only' (legacy alias: 'engram-only').");
   }
+
+  const normalizedMemoryBackend =
+    memoryBackend === "engram-only" ? "resilient" : memoryBackend;
+
+  const knowledgeBackend = optionalString(
+    sync?.knowledgeBackend,
+    "Project config.sync.knowledgeBackend"
+  );
+
+  if (
+    knowledgeBackend !== undefined &&
+    knowledgeBackend !== "notion" &&
+    knowledgeBackend !== "obsidian" &&
+    knowledgeBackend !== "local-only"
+  ) {
+    fail("Project config.sync.knowledgeBackend must be 'notion', 'obsidian', or 'local-only'.");
+  }
+
+  const fastScanner =
+    scan && typeof scan.fastScanner === "object" && scan.fastScanner && !Array.isArray(scan.fastScanner)
+      ? /** @type {Record<string, unknown>} */ (scan.fastScanner)
+      : undefined;
+
+  const syncRetryPolicy =
+    sync && typeof sync.retryPolicy === "object" && sync.retryPolicy && !Array.isArray(sync.retryPolicy)
+      ? /** @type {Record<string, unknown>} */ (sync.retryPolicy)
+      : undefined;
+  const syncDlq =
+    sync && typeof sync.dlq === "object" && sync.dlq && !Array.isArray(sync.dlq)
+      ? /** @type {Record<string, unknown>} */ (sync.dlq)
+      : undefined;
 
   return {
     schemaVersion:
@@ -397,7 +491,7 @@ export function validateProjectConfig(value) {
       type:
         optionalString(memory?.type, "Project config.memory.type") ??
         defaults.memory.type,
-      backend: memoryBackend ?? defaults.memory.backend,
+      backend: normalizedMemoryBackend ?? defaults.memory.backend,
       strictRecall:
         optionalBoolean(memory?.strictRecall, "Project config.memory.strictRecall") ??
         defaults.memory.strictRecall,
@@ -409,7 +503,19 @@ export function validateProjectConfig(value) {
         defaults.memory.autoRecall,
       autoRemember:
         optionalBoolean(memory?.autoRemember, "Project config.memory.autoRemember") ??
-        defaults.memory.autoRemember
+        defaults.memory.autoRemember,
+      tempTtlMinutes:
+        optionalNumber(memory?.tempTtlMinutes, "Project config.memory.tempTtlMinutes", {
+          min: 1,
+          max: 10080,
+          integer: true
+        }) ?? defaults.memory.tempTtlMinutes,
+      tempMaxEntries:
+        optionalNumber(memory?.tempMaxEntries, "Project config.memory.tempMaxEntries", {
+          min: 10,
+          max: 500,
+          integer: true
+        }) ?? defaults.memory.tempMaxEntries
     },
     engram: {
       binaryPath:
@@ -449,7 +555,82 @@ export function validateProjectConfig(value) {
     scan: {
       ignoreDirs:
         optionalStringArray(scan?.ignoreDirs, "Project config.scan.ignoreDirs") ??
-        defaults.scan.ignoreDirs
+        defaults.scan.ignoreDirs,
+      fastScanner: {
+        enabled:
+          optionalBoolean(
+            fastScanner?.enabled,
+            "Project config.scan.fastScanner.enabled"
+          ) ?? defaults.scan.fastScanner.enabled,
+        binaryPath:
+          optionalString(
+            fastScanner?.binaryPath,
+            "Project config.scan.fastScanner.binaryPath"
+          ) ?? defaults.scan.fastScanner.binaryPath,
+        arguments:
+          optionalStringArray(
+            fastScanner?.arguments,
+            "Project config.scan.fastScanner.arguments"
+          ) ?? defaults.scan.fastScanner.arguments,
+        timeoutMs:
+          optionalNumber(
+            fastScanner?.timeoutMs,
+            "Project config.scan.fastScanner.timeoutMs",
+            {
+              min: 200,
+              integer: true
+            }
+          ) ?? defaults.scan.fastScanner.timeoutMs
+      }
+    },
+    sync: {
+      knowledgeBackend: knowledgeBackend ?? defaults.sync.knowledgeBackend,
+      retryPolicy: {
+        maxAttempts:
+          optionalNumber(
+            syncRetryPolicy?.maxAttempts,
+            "Project config.sync.retryPolicy.maxAttempts",
+            {
+              min: 1,
+              max: 12,
+              integer: true
+            }
+          ) ?? defaults.sync.retryPolicy.maxAttempts,
+        backoffMs:
+          optionalNumber(
+            syncRetryPolicy?.backoffMs,
+            "Project config.sync.retryPolicy.backoffMs",
+            {
+              min: 100,
+              max: 120000,
+              integer: true
+            }
+          ) ?? defaults.sync.retryPolicy.backoffMs,
+        maxBackoffMs:
+          optionalNumber(
+            syncRetryPolicy?.maxBackoffMs,
+            "Project config.sync.retryPolicy.maxBackoffMs",
+            {
+              min: 100,
+              max: 600000,
+              integer: true
+            }
+          ) ?? defaults.sync.retryPolicy.maxBackoffMs
+      },
+      dlq: {
+        enabled:
+          optionalBoolean(syncDlq?.enabled, "Project config.sync.dlq.enabled") ??
+          defaults.sync.dlq.enabled,
+        path:
+          optionalString(syncDlq?.path, "Project config.sync.dlq.path") ??
+          defaults.sync.dlq.path,
+        ttlDays:
+          optionalNumber(syncDlq?.ttlDays, "Project config.sync.dlq.ttlDays", {
+            min: 1,
+            max: 365,
+            integer: true
+          }) ?? defaults.sync.dlq.ttlDays
+      }
     },
     safety: {
       requirePlanForWrite:

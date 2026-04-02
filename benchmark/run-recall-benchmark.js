@@ -57,6 +57,14 @@ function buildSearchOutput(rules, query, fallbackProject = "") {
   return lines.join("\n");
 }
 
+function toIsoTimestamp(value) {
+  const parsed = new Date(String(value ?? "").replace(" ", "T"));
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date("2026-03-17T00:00:00.000Z").toISOString();
+  }
+  return parsed.toISOString();
+}
+
 function ruleMatchesQuery(rule, query) {
   const queryTerms = terms(query);
   const requiresAll = rule.requiresAll ?? [];
@@ -81,7 +89,7 @@ async function runCase(entry) {
     limit: entry.input.limit,
     strictRecall: entry.input.strictRecall,
     baseChunks: entry.input.baseChunks,
-    async searchMemories(query) {
+    async search(query) {
       seenQueries.push(query);
 
       if (entry.provider.failMessage) {
@@ -89,7 +97,24 @@ async function runCase(entry) {
       }
 
       const matches = entry.provider.rules.filter((rule) => ruleMatchesQuery(rule, query));
+      const entries = matches.map((rule) => ({
+        id: rule.observationId
+          ? rule.observationId.startsWith("engram-memory-")
+            ? rule.observationId
+            : `engram-memory-${rule.observationId}`
+          : `benchmark-${normalizeText(rule.title).replace(/\s+/g, "-") || "memory"}`,
+        title: rule.title,
+        content: rule.body,
+        type: rule.type,
+        project: rule.project || entry.input.project || "global",
+        scope: rule.scope || "project",
+        topic: "",
+        createdAt: toIsoTimestamp(rule.timestamp)
+      }));
       return {
+        entries,
+        provider: "benchmark-mock",
+        providerChain: ["benchmark-mock"],
         stdout: buildSearchOutput(matches, query, entry.input.project)
       };
     }

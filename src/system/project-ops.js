@@ -1,14 +1,17 @@
 // @ts-check
 
+import { createRequire } from "node:module";
 import { access, readFile } from "node:fs/promises";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 
-import { defaultProjectConfig } from "../contracts/config-contracts.js";
+import { defaultProjectConfig, parseProjectConfig } from "../contracts/config-contracts.js";
 import { writeTextFile } from "../io/text-file.js";
 
 const execFile = promisify(execFileCallback);
+const require = createRequire(import.meta.url);
 
 /** @typedef {import("../types/core-contracts.d.ts").DoctorCheck} DoctorCheck */
 /** @typedef {import("../types/core-contracts.d.ts").DoctorResult} DoctorResult */
@@ -22,6 +25,46 @@ async function pathExists(targetPath) {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * @param {string} cwd
+ */
+async function resolveProductionSafetyProfile(cwd) {
+  const candidatePath = path.join(cwd, "learning-context.config.production.json");
+
+  if (!(await pathExists(candidatePath))) {
+    return {
+      found: false,
+      strict: false,
+      path: "",
+      allowedScopePaths: []
+    };
+  }
+
+  try {
+    const raw = await readFile(candidatePath, "utf8");
+    const parsed = parseProjectConfig(raw, candidatePath);
+    const allowedScopePaths = Array.isArray(parsed.safety?.allowedScopePaths)
+      ? parsed.safety.allowedScopePaths.filter(Boolean)
+      : [];
+    const strict =
+      parsed.safety?.requirePlanForWrite === true && allowedScopePaths.length > 0;
+
+    return {
+      found: true,
+      strict,
+      path: candidatePath,
+      allowedScopePaths
+    };
+  } catch {
+    return {
+      found: true,
+      strict: false,
+      path: candidatePath,
+      allowedScopePaths: []
+    };
   }
 }
 
@@ -90,6 +133,53 @@ async function tryExec(command, args) {
   return { ok: false, stdout: "", stderr: `Unable to execute ${command}` };
 }
 
+async function resolveNpmCliPath() {
+  /** @type {string[]} */
+  const candidates = [];
+  const npmExecPath =
+    typeof process.env.npm_execpath === "string" ? process.env.npm_execpath.trim() : "";
+
+  if (npmExecPath) {
+    candidates.push(npmExecPath);
+  }
+
+  try {
+    candidates.push(require.resolve("npm/bin/npm-cli.js"));
+  } catch {}
+
+  const nodeDir = path.dirname(process.execPath);
+  candidates.push(path.join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"));
+  candidates.push(path.join(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"));
+
+  /** @type {Set<string>} */
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const normalized = path.resolve(candidate);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    if (await pathExists(normalized)) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * @param {string[]} args
+ */
+async function tryExecNpm(args) {
+  const npmCliPath = await resolveNpmCliPath();
+
+  if (npmCliPath) {
+    return tryExec(process.execPath, [npmCliPath, ...args]);
+  }
+
+  return tryExec("npm", args);
+}
+
 /**
  * @param {{ ok: boolean }} npmAvailability
  * @returns {Promise<{ known: boolean, enabled: boolean, detail: string }>}
@@ -103,10 +193,7 @@ async function readNpmIgnoreScriptsPolicy(npmAvailability) {
     };
   }
 
-  const configResult =
-    process.platform === "win32"
-      ? await tryExec("cmd.exe", ["/c", "npm.cmd", "config", "get", "ignore-scripts"])
-      : await tryExec("npm", ["config", "get", "ignore-scripts"]);
+  const configResult = await tryExecNpm(["config", "get", "ignore-scripts"]);
 
   if (!configResult.ok) {
     return {
@@ -166,10 +253,7 @@ export async function runProjectDoctor(input) {
     fix: nodeMajor >= 20 ? "" : "Install Node.js 20 or newer."
   });
 
-  const npmResult =
-    process.platform === "win32"
-      ? await tryExec("cmd.exe", ["/c", "npm.cmd", "--version"])
-      : await tryExec("npm", ["--version"]);
+  const npmResult = await tryExecNpm(["--version"]);
   checks.push({
     id: "npm",
     label: "npm availability",
@@ -261,17 +345,21 @@ export async function runProjectDoctor(input) {
       : ""
   });
 
+  const productionSafetyProfile = await resolveProductionSafetyProfile(cwd);
   const strictSafetyEnabled =
     configInfo.config.safety.requirePlanForWrite === true &&
     configInfo.config.safety.allowedScopePaths.length > 0;
+  const productionStrictSafetyEnabled = productionSafetyProfile.strict === true;
   checks.push({
     id: "task-safety-gate",
     label: "Task safety gate",
-    status: strictSafetyEnabled ? "pass" : "warn",
+    status: strictSafetyEnabled || productionStrictSafetyEnabled ? "pass" : "warn",
     detail: strictSafetyEnabled
       ? `Plan gate enabled and scope locked (${configInfo.config.safety.allowedScopePaths.join(", ")}).`
-      : "Safety gate is permissive (plan gate disabled or scope paths empty).",
-    fix: strictSafetyEnabled
+      : productionStrictSafetyEnabled
+        ? `Active config is permissive, but production profile is locked (${productionSafetyProfile.allowedScopePaths.join(", ")}) via ${productionSafetyProfile.path}.`
+        : "Safety gate is permissive (plan gate disabled or scope paths empty).",
+    fix: strictSafetyEnabled || productionStrictSafetyEnabled
       ? ""
       : "Set config.safety.requirePlanForWrite=true and define config.safety.allowedScopePaths for production workflows."
   });
@@ -292,56 +380,91 @@ export async function runProjectDoctor(input) {
   });
 
   const memoryBackend = configInfo.config.memory.backend || "resilient";
-  const engramEnabledByBackend = memoryBackend !== "local-only";
   checks.push({
     id: "memory-backend",
     label: "Memory backend mode",
     status: memoryBackend === "resilient" ? "pass" : "warn",
     detail:
       memoryBackend === "resilient"
-        ? "resilient (Engram primary + local fallback)."
-        : memoryBackend === "engram-only"
-          ? "engram-only (no local fallback)."
-          : "local-only (Engram disabled by config).",
+        ? "resilient (local JSONL primary + optional external battery contingency)."
+        : "local-only (only the local JSONL store is active).",
     fix:
       memoryBackend === "resilient"
         ? ""
-        : "Prefer memory.backend='resilient' for production reliability unless you intentionally need single-provider mode."
+        : "Prefer memory.backend='resilient' when you want local-first recall plus optional external battery fallback."
   });
 
-  const engramBinary = path.resolve(cwd, configInfo.config.engram.binaryPath || "tools/engram/engram.exe");
-  const engramBinaryExists = await pathExists(engramBinary);
+  const localMemoryDir = path.resolve(cwd, ".lcs/memory");
+  const localMemoryExists = await pathExists(localMemoryDir);
   checks.push({
-    id: "engram-binary",
-    label: "Engram binary",
-    status: engramEnabledByBackend ? (engramBinaryExists ? "pass" : "warn") : "pass",
-    detail: engramEnabledByBackend
-      ? engramBinaryExists
-        ? engramBinary
-        : `Not found: ${engramBinary}`
-      : `Skipped because memory.backend='${memoryBackend}'.`,
-    fix:
-      !engramEnabledByBackend || engramBinaryExists
-        ? ""
-        : "Install Engram or point config.engram.binaryPath to the correct binary."
+    id: "local-memory",
+    label: "Local JSONL memory store",
+    status: "pass",
+    detail: localMemoryExists
+      ? localMemoryDir
+      : `Will be created on first successful local memory write: ${localMemoryDir}`,
+    fix: ""
   });
 
-  const engramDataDir = path.resolve(cwd, configInfo.config.engram.dataDir || ".engram");
-  const engramDataExists = await pathExists(engramDataDir);
+  const engramBatteryPath = path.resolve(cwd, configInfo.config.engram.binaryPath || "tools/engram/engram.exe");
+  const engramBatteryExists = await pathExists(engramBatteryPath);
   checks.push({
-    id: "engram-data",
-    label: "Engram data directory",
-    status: engramEnabledByBackend ? (engramDataExists ? "pass" : "warn") : "pass",
-    detail: engramEnabledByBackend
-      ? engramDataExists
-        ? engramDataDir
-        : `Missing data dir: ${engramDataDir}`
-      : `Skipped because memory.backend='${memoryBackend}'.`,
+    id: "engram-battery",
+    label: "Engram external battery",
+    status:
+      memoryBackend === "local-only"
+        ? "pass"
+        : engramBatteryExists
+          ? "pass"
+          : "warn",
+    detail:
+      memoryBackend === "local-only"
+        ? "Skipped because memory.backend='local-only'."
+        : engramBatteryExists
+          ? `Available as external battery only: ${engramBatteryPath}`
+          : `Optional external battery not available: ${engramBatteryPath}`,
     fix:
-      !engramEnabledByBackend || engramDataExists
+      memoryBackend === "local-only" || engramBatteryExists
         ? ""
-        : "The directory will be created on first successful Engram write."
+              : "Install or place the Engram binary only if you want third-tier contingency memory. NEXUS remains canonical on local JSONL + optional external battery."
   });
+
+  // Memory sectorization check — verifies per-project buckets exist
+  const memoryDir = path.resolve(cwd, ".lcs/memory");
+  const memoryDirExists = await pathExists(memoryDir);
+  if (memoryDirExists) {
+    try {
+      const projectBuckets = readdirSync(memoryDir, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== "_default")
+        .map(d => d.name);
+
+      checks.push({
+        id: "memory-sectorization",
+        label: "Memory sectorization by project",
+        status: projectBuckets.length > 0 ? "pass" : "warn",
+        detail: projectBuckets.length > 0
+          ? `Active project buckets: ${projectBuckets.join(", ")}`
+          : "No project-specific memory buckets found. All memories go to _default. Use --project flag when saving.",
+        fix: projectBuckets.length > 0 ? "" : "Use --project flag when saving memories to create project-specific buckets."
+      });
+    } catch {
+      checks.push({
+        id: "memory-sectorization",
+        label: "Memory sectorization by project",
+        status: "warn",
+        detail: "Could not read memory directory.",
+        fix: ""
+      });
+    }
+  } else {
+    checks.push({
+      id: "memory-sectorization",
+      label: "Memory sectorization by project",
+      status: "warn",
+      detail: "Memory directory not yet created. Will appear on first memory write.",
+      fix: ""
+    });
+  }
 
   const summary = checks.reduce(
     (accumulator, check) => {

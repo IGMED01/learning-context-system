@@ -1,9 +1,17 @@
 import { buildLearningPacket } from "../learning/mentor-loop.js";
-import { createEngramClient } from "../memory/engram-client.js";
+import { createLocalMemoryStore } from "../memory/local-memory-store.js";
+import { legacySearchStdoutToEntries } from "../memory/memory-utils.js";
+import { createResilientMemoryClient } from "../memory/resilient-memory-client.js";
+import {
+  buildAcceptedMemoryMetadata,
+  evaluateMemoryWrite,
+  quarantineMemoryWrite
+} from "../memory/memory-hygiene.js";
 import {
   buildTeachAutoRememberPayload,
   resolveAutoTeachRecall
-} from "../memory/engram-auto-orchestrator.js";
+} from "../memory/memory-auto-orchestrator.js";
+import { createAxiomInjector } from "../memory/axiom-injector.js";
 import { formatLearningPacketAsText } from "./formatters.js";
 import {
   assertNumberRules,
@@ -13,11 +21,14 @@ import {
   type CliOptions
 } from "./arg-parser.js";
 import type {
+  AxiomType,
   Chunk,
   CliContractMeta,
-  EngramSearchOptions,
-  EngramSearchResult,
   LearningPacket,
+  MemoryCloseInput,
+  MemorySearchOptions,
+  MemorySearchResult,
+  MemorySaveInput,
   MemoryRecallState,
   RuntimeMeta,
   ScanStats
@@ -41,6 +52,7 @@ interface LearningPacketWithMemory extends LearningPacket {
     autoRememberEnabled: boolean;
     rememberAttempted: boolean;
     rememberSaved: boolean;
+    rememberStatus?: string;
     rememberTitle: string;
     rememberError: string;
     rememberRedactionCount: number;
@@ -67,33 +79,24 @@ interface ChunkSourceResult {
 }
 
 interface MemoryClientLike {
+  search?: (query: string, options?: MemorySearchOptions) => Promise<MemorySearchResult>;
+  searchMemories?: (
+    query: string,
+    options?: MemorySearchOptions
+  ) => Promise<Record<string, unknown> & { stdout?: string }>;
+  save?: (input: MemorySaveInput) => Promise<Record<string, unknown>>;
+  saveMemory?: (input: MemorySaveInput) => Promise<Record<string, unknown>>;
   config?: { dataDir?: string };
   recallContext: (project?: string) => Promise<Record<string, unknown>>;
-  searchMemories: (
-    query: string,
-    options?: EngramSearchOptions
-  ) => Promise<EngramSearchResult & Record<string, unknown>>;
-  saveMemory: (input: {
-    title: string;
-    content: string;
-    type?: string;
-    project?: string;
-    scope?: string;
-    topic?: string;
-  }) => Promise<Record<string, unknown>>;
-  closeSession: (input: {
-    summary: string;
-    learned?: string;
-    next?: string;
-    title?: string;
-    project?: string;
-    scope?: string;
-    type?: string;
-  }) => Promise<Record<string, unknown>>;
+  closeSession: (input: MemoryCloseInput) => Promise<Record<string, unknown>>;
 }
 
 interface AppDependencies {
+  memoryClient?: MemoryClientLike;
   engramClient?: MemoryClientLike;
+  axiomInjector?: {
+    retrieve?: (context?: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
+  };
 }
 
 interface RunTeachCommandInput {
@@ -121,18 +124,98 @@ interface RunTeachCommandInput {
   ) => RuntimeMeta;
 }
 
-function getEngramClient(
+function getMemoryClient(
   options: CliOptions,
   dependencies: AppDependencies = {}
 ): MemoryClientLike {
+  if (dependencies.memoryClient) {
+    return dependencies.memoryClient;
+  }
+
   if (dependencies.engramClient) {
     return dependencies.engramClient;
   }
 
-  return createEngramClient({
-    binaryPath: options["engram-bin"],
-    dataDir: options["engram-data-dir"]
+  const local = createLocalMemoryStore({
+    filePath: options["memory-fallback-file"],
+    baseDir: options["memory-base-dir"]
   });
+
+  return createResilientMemoryClient({ primary: local, fallback: local }) as unknown as MemoryClientLike;
+}
+
+async function searchMemoryClient(
+  memoryClient: MemoryClientLike,
+  query: string,
+  options: MemorySearchOptions = {}
+): Promise<MemorySearchResult> {
+  if (typeof memoryClient.search === "function") {
+    const result = await memoryClient.search(query, options);
+    if (Array.isArray(result?.entries)) {
+      return result;
+    }
+
+    const stdout = typeof result?.stdout === "string" ? result.stdout : "";
+    return {
+      ...result,
+      entries: legacySearchStdoutToEntries(stdout, { project: options.project }),
+      stdout,
+      provider:
+        typeof result?.provider === "string" && result.provider.trim()
+          ? result.provider
+          : "memory"
+    } as MemorySearchResult;
+  }
+
+  if (typeof memoryClient.searchMemories !== "function") {
+    throw new Error("Legacy searchMemories() is not supported by the configured memory client.");
+  }
+
+  const legacyResult = await memoryClient.searchMemories(query, options);
+  const stdout = typeof legacyResult.stdout === "string" ? legacyResult.stdout : "";
+  return {
+    entries: legacySearchStdoutToEntries(stdout, { project: options.project }),
+    stdout,
+    provider:
+      typeof legacyResult.provider === "string" && legacyResult.provider.trim()
+        ? legacyResult.provider
+        : "memory"
+  } as MemorySearchResult;
+}
+
+async function saveMemoryClient(
+  memoryClient: MemoryClientLike,
+  input: MemorySaveInput
+): Promise<Record<string, unknown>> {
+  if (typeof memoryClient.save === "function") {
+    return memoryClient.save(input);
+  }
+
+  if (typeof memoryClient.saveMemory === "function") {
+    return memoryClient.saveMemory(input);
+  }
+
+  throw new Error("save()/saveMemory() not supported by the configured memory client.");
+}
+
+function isRecalledSelectionChunk(
+  chunk: {
+    id?: string;
+    source?: string;
+    origin?: string;
+  },
+  recoveredMemoryIds: Set<string>
+): boolean {
+  const chunkId = String(chunk.id ?? "").trim();
+  if (chunkId && recoveredMemoryIds.has(chunkId)) {
+    return true;
+  }
+
+  return (
+    String(chunk.source ?? "").startsWith("engram://") ||
+    String(chunk.source ?? "").startsWith("memory://") ||
+    chunk.origin === "memory"
+  );
 }
 
 function booleanOption(options: CliOptions, key: string, fallback = false): boolean {
@@ -147,6 +230,104 @@ function booleanOption(options: CliOptions, key: string, fallback = false): bool
   }
 
   return value === "true";
+}
+
+function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["false", "0", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
+function parseIntegerEnv(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.trunc(parsed));
+}
+
+function parseScoreEnv(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function buildAxiomFocusTerms(
+  changedFiles: string[],
+  task: string,
+  objective: string,
+  focus: string
+): string[] {
+  const source = [...changedFiles, task, objective, focus].join(" ").toLowerCase();
+  return Array.from(
+    new Set(
+      source
+        .split(/[^a-z0-9_./-]+/u)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length >= 4)
+    )
+  ).slice(0, 20);
+}
+
+function classifyRememberStatus(message: string): "failed" | "unavailable" | "degradedRecall" {
+  const normalized = String(message || "").toLowerCase();
+  if (
+    normalized.includes("degraded") ||
+    normalized.includes("fallback") ||
+    normalized.includes("partial")
+  ) {
+    return "degradedRecall";
+  }
+
+  if (
+    normalized.includes("unavailable") ||
+    normalized.includes("timeout") ||
+    normalized.includes("locked") ||
+    normalized.includes("refused") ||
+    normalized.includes("econn")
+  ) {
+    return "unavailable";
+  }
+
+  return "failed";
+}
+
+function normalizeAxiomType(value: unknown): AxiomType {
+  const normalized = String(value ?? "").trim();
+  if (
+    normalized === "code-axiom" ||
+    normalized === "library-gotcha" ||
+    normalized === "security-rule" ||
+    normalized === "testing-pattern" ||
+    normalized === "api-contract"
+  ) {
+    return normalized;
+  }
+
+  return "code-axiom";
 }
 
 function buildTeachObservability(
@@ -165,10 +346,37 @@ function buildTeachObservability(
     suppressedChunks: number;
     hit: boolean;
   };
+  sdd: {
+    enabled: boolean;
+    requiredKinds: number;
+    coveredKinds: number;
+    injectedKinds: number;
+    skippedReasons: string[];
+  };
 } {
   const selectedCount = packet.diagnostics.summary?.selectedCount ?? packet.selectedContext.length;
   const suppressedCount =
     packet.diagnostics.summary?.suppressedCount ?? packet.suppressedContext.length;
+  const requiredKinds = ["code", "test", "memory"];
+  const selectedKinds = new Set(
+    packet.selectedContext
+      .map((chunk) => String(chunk.kind ?? "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const coveredKinds = requiredKinds.filter((kind) => selectedKinds.has(kind)).length;
+  const skippedReasons: string[] = [];
+
+  if (!selectedKinds.has("code")) {
+    skippedReasons.push("missing-code-anchor");
+  }
+
+  if (!selectedKinds.has("test")) {
+    skippedReasons.push("missing-test-anchor");
+  }
+
+  if (!selectedKinds.has("memory")) {
+    skippedReasons.push("missing-memory-anchor");
+  }
 
   return {
     metricsVersion: "1.0.0",
@@ -188,6 +396,13 @@ function buildTeachObservability(
       selectedChunks: packet.memoryRecall.selectedChunks,
       suppressedChunks: packet.memoryRecall.suppressedChunks,
       hit: packet.memoryRecall.recoveredChunks > 0
+    },
+    sdd: {
+      enabled: true,
+      requiredKinds: requiredKinds.length,
+      coveredKinds,
+      injectedKinds: 0,
+      skippedReasons
     }
   };
 }
@@ -206,6 +421,13 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
       suppressedChunks: number;
       hit: boolean;
     };
+    sdd: {
+      enabled: boolean;
+      requiredKinds: number;
+      coveredKinds: number;
+      injectedKinds: number;
+      skippedReasons: string[];
+    };
   };
 }> {
   const { options, loadedConfig, source, numeric, format, debugEnabled, startedAt } = input;
@@ -215,7 +437,14 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
   const objective = requireOption(options, "objective");
   const changedFiles = listOption(options, "changed-files");
   const focus = options.focus ?? `${task} ${objective}`;
-  const engram = getEngramClient(options, dependencies);
+  const axiomInjectionDisabled = parseBooleanEnv(
+    process.env.LCS_TEACH_AXIOM_INJECTION_DISABLED,
+    false
+  );
+  const axiomMax = parseIntegerEnv(process.env.LCS_TEACH_MAX_AXIOMS, 3);
+  const axiomMinScore = parseScoreEnv(process.env.LCS_TEACH_AXIOM_MIN_MATCH_SCORE, 0.5);
+  const axiomMinMatches = parseIntegerEnv(process.env.LCS_TEACH_AXIOM_MIN_MATCHES, 1);
+  const memoryClient = getMemoryClient(options, dependencies);
   const memoryScope = options["memory-scope"] ?? "project";
   const memoryType = options["memory-type"];
   const noRecall = booleanOption(options, "no-recall", false);
@@ -248,7 +477,8 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
     type: memoryType,
     strictRecall,
     baseChunks: payload.chunks,
-    searchMemories: engram.searchMemories
+    search: (query: string, searchOptions?: MemorySearchOptions) =>
+      searchMemoryClient(memoryClient, query, searchOptions ?? {})
   });
   const packet = buildLearningPacket({
     task,
@@ -262,11 +492,84 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
     minScore: numeric.minScore,
     debug: debugEnabled
   });
+  const packetDiagnostics = packet.diagnostics ?? {};
+  const axiomDiagnostics: {
+    status: "injected" | "skipped" | "degraded";
+    count: number;
+    reason: string;
+  } = {
+    status: "skipped",
+    count: 0,
+    reason: "below-threshold"
+  };
+
+  if (!axiomInjectionDisabled) {
+    const injector =
+      dependencies.axiomInjector ??
+      createAxiomInjector({
+        project: options.project || loadedConfig.config.project,
+        maxAxioms: axiomMax,
+        minMatchScore: axiomMinScore
+      });
+
+    if (!injector || typeof injector.retrieve !== "function") {
+      axiomDiagnostics.status = "degraded";
+      axiomDiagnostics.reason = "injector-unavailable";
+    } else {
+      try {
+        const axioms = await injector.retrieve({
+          focusTerms: buildAxiomFocusTerms(changedFiles, task, objective, focus),
+          pathScope: changedFiles[0] || undefined
+        });
+        const normalizedAxioms = Array.isArray(axioms)
+          ? axioms
+              .map((entry) => ({
+                type: normalizeAxiomType(entry.type),
+                title: String(entry.title ?? "").trim(),
+                body: String(entry.body ?? "").trim(),
+                tags: Array.isArray(entry.tags)
+                  ? entry.tags.filter((tag) => typeof tag === "string")
+                  : undefined
+              }))
+              .filter((entry) => entry.title && entry.body)
+          : [];
+        axiomDiagnostics.count = normalizedAxioms.length;
+
+        if (normalizedAxioms.length >= axiomMinMatches) {
+          packet.teachingSections = {
+            ...packet.teachingSections,
+            relevantAxioms: normalizedAxioms
+          };
+          axiomDiagnostics.status = "injected";
+          axiomDiagnostics.reason = "threshold-met";
+        }
+      } catch {
+        axiomDiagnostics.status = "degraded";
+        axiomDiagnostics.reason = "injector-failed";
+      }
+    }
+  } else {
+    axiomDiagnostics.reason = "disabled";
+  }
+
+  packet.diagnostics = {
+    ...packetDiagnostics,
+    axiomInjection: axiomDiagnostics.status,
+    axiomCount: axiomDiagnostics.count,
+    axiomReason: axiomDiagnostics.reason
+  };
+  const recoveredMemoryIds = new Set(
+    Array.isArray(teachChunks.memoryRecall.recoveredMemoryIds)
+      ? teachChunks.memoryRecall.recoveredMemoryIds
+          .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+          .map((entry) => entry.trim())
+      : []
+  );
   const selectedMemoryChunkIds = packet.selectedContext
-    .filter((chunk) => chunk.source.startsWith("engram://"))
+    .filter((chunk) => isRecalledSelectionChunk(chunk, recoveredMemoryIds))
     .map((chunk) => chunk.id);
   const suppressedMemoryChunkIds = packet.suppressedContext
-    .filter((chunk) => String(chunk.id).startsWith("engram-memory-"))
+    .filter((chunk) => isRecalledSelectionChunk(chunk, recoveredMemoryIds))
     .map((chunk) => chunk.id);
   const packetWithMemory = {
     ...packet,
@@ -289,6 +592,7 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
     autoRememberEnabled: autoRemember,
     rememberAttempted: false,
     rememberSaved: false,
+    rememberStatus: "idle",
     rememberTitle: "",
     rememberError: "",
     rememberRedactionCount: 0,
@@ -306,6 +610,19 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
         selectedSources: packet.selectedContext.map((chunk) => chunk.source),
         project: options.project,
         recallState: packetWithMemory.memoryRecall,
+        selectionDiagnostics: {
+          selectorStatus: packet.diagnostics.selectorStatus,
+          selectorReason: packet.diagnostics.selectorReason,
+          selectedCount: packet.diagnostics.summary?.selectedCount,
+          suppressedCount: packet.diagnostics.summary?.suppressedCount,
+          suppressionReasons: packet.diagnostics.summary?.suppressionReasons,
+          sdd: packet.diagnostics.sdd
+        },
+        axiomDiagnostics: {
+          status: packet.diagnostics.axiomInjection,
+          count: packet.diagnostics.axiomCount,
+          reason: packet.diagnostics.axiomReason
+        },
         memoryType,
         memoryScope,
         security: loadedConfig.config.security
@@ -313,25 +630,55 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
       packetWithMemory.autoMemory.rememberRedactionCount = rememberInput.security.redactionCount;
       packetWithMemory.autoMemory.rememberSensitivePathCount =
         rememberInput.security.sensitivePathCount;
-      const rememberResult = await engram.saveMemory({
+      packetWithMemory.autoMemory.rememberTitle = rememberInput.title;
+      const hygiene = evaluateMemoryWrite({
         title: rememberInput.title,
         content: rememberInput.content,
         type: rememberInput.type,
         scope: rememberInput.scope,
-        project: rememberInput.project
+        project: rememberInput.project,
+        sourceKind: "auto-remember"
       });
-      packetWithMemory.autoMemory.rememberSaved = true;
-      packetWithMemory.autoMemory.rememberTitle = rememberInput.title;
-      const rememberWarning =
-        typeof (rememberResult as Record<string, unknown>).warning === "string"
-          ? String((rememberResult as Record<string, unknown>).warning)
-          : "";
-      if (rememberWarning) {
-        packetWithMemory.autoMemory.rememberError = rememberWarning;
+
+      if (hygiene.action === "quarantine") {
+        await quarantineMemoryWrite({
+          cwd: process.cwd(),
+          quarantineDir: options["memory-quarantine-dir"],
+          title: rememberInput.title,
+          content: rememberInput.content,
+          type: rememberInput.type,
+          scope: rememberInput.scope,
+          project: rememberInput.project,
+          sourceKind: "auto-remember",
+          reasons: hygiene.reasons
+        });
+        packetWithMemory.autoMemory.rememberSaved = false;
+        packetWithMemory.autoMemory.rememberStatus = "quarantined";
+        packetWithMemory.autoMemory.rememberError = hygiene.reasons.join(", ");
+      } else {
+        const rememberResult = await saveMemoryClient(memoryClient, {
+          title: rememberInput.title,
+          content: rememberInput.content,
+          type: rememberInput.type,
+          scope: rememberInput.scope,
+          project: rememberInput.project,
+          ...buildAcceptedMemoryMetadata(hygiene, { sourceKind: "auto-remember" })
+        });
+        packetWithMemory.autoMemory.rememberSaved = true;
+        packetWithMemory.autoMemory.rememberStatus = "accepted";
+        const rememberWarning =
+          typeof (rememberResult as Record<string, unknown>).warning === "string"
+            ? String((rememberResult as Record<string, unknown>).warning)
+            : "";
+        if (rememberWarning) {
+          packetWithMemory.autoMemory.rememberError = rememberWarning;
+          packetWithMemory.autoMemory.rememberStatus = classifyRememberStatus(rememberWarning);
+        }
       }
     } catch (error) {
-      packetWithMemory.autoMemory.rememberError =
-        error instanceof Error ? error.message : String(error);
+      const rememberError = error instanceof Error ? error.message : String(error);
+      packetWithMemory.autoMemory.rememberStatus = classifyRememberStatus(rememberError);
+      packetWithMemory.autoMemory.rememberError = rememberError;
     }
   }
 
@@ -359,7 +706,13 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
   }
 
   if (packetWithMemory.autoMemory?.rememberError && !packetWithMemory.autoMemory.rememberSaved) {
-    warnings.push(`Auto remember failed: ${packetWithMemory.autoMemory.rememberError}`);
+    if (packetWithMemory.autoMemory.rememberStatus === "quarantined") {
+      warnings.push(
+        `Auto remember quarantined by hygiene gate: ${packetWithMemory.autoMemory.rememberError}`
+      );
+    } else {
+      warnings.push(`Auto remember failed: ${packetWithMemory.autoMemory.rememberError}`);
+    }
   }
 
   if (packetWithMemory.autoMemory?.rememberSaved && packetWithMemory.autoMemory?.rememberError) {
@@ -409,7 +762,8 @@ export async function runTeachCommand(input: RunTeachCommandInput): Promise<{
     metrics: {
       degraded,
       selection: observability.selection,
-      recall: observability.recall
+      recall: observability.recall,
+      sdd: observability.sdd
     }
   };
 }

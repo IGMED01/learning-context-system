@@ -1,6 +1,7 @@
 // @ts-check
 
 import { selectContextWindow } from "../context/noise-canceler.js";
+import { selectEndpointContext } from "../context/context-mode.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
 /** @typedef {import("../types/core-contracts.d.ts").SelectedChunk} SelectedChunk */
@@ -9,6 +10,48 @@ import { selectContextWindow } from "../context/noise-canceler.js";
 /** @typedef {import("../types/core-contracts.d.ts").TeachingSections} TeachingSections */
 /** @typedef {import("../types/core-contracts.d.ts").LearningPacket} LearningPacket */
 /** @typedef {import("../types/core-contracts.d.ts").ContextSelectionResult} ContextSelectionResult */
+
+/**
+ * @param {Array<Record<string, unknown>>} chunks
+ */
+function summarizeOrigins(chunks) {
+  /** @type {Record<string, number>} */
+  const counts = {};
+
+  for (const chunk of chunks) {
+    const origin = String(chunk.origin ?? "unknown").trim() || "unknown";
+    counts[origin] = (counts[origin] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+/**
+ * @param {Array<{ reason?: string }>} chunks
+ */
+function summarizeReasons(chunks) {
+  /** @type {Record<string, number>} */
+  const counts = {};
+
+  for (const chunk of chunks) {
+    const reason = String(chunk.reason ?? "unknown").trim() || "unknown";
+    counts[reason] = (counts[reason] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+/**
+ * @param {unknown} error
+ */
+function classifySelectorReason(error) {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (message.includes("timeout")) {
+    return "timeout";
+  }
+
+  return "selector-error";
+}
 
 /**
  * @param {string} source
@@ -120,7 +163,11 @@ function summarizeTeachingSections(selectedContext, changedFiles = []) {
  *   maxChunks?: number,
  *   minScore?: number,
  *   sentenceBudget?: number,
- *   debug?: boolean
+ *   language?: string,
+ *   framework?: string,
+ *   sddProfile?: string,
+ *   selector?: typeof selectEndpointContext,
+  *   debug?: boolean
  * }} input
  * @returns {LearningPacket}
  */
@@ -135,19 +182,78 @@ export function buildLearningPacket(input) {
     maxChunks,
     minScore,
     sentenceBudget,
+    language,
+    framework,
+    sddProfile,
+    selector = selectEndpointContext,
     debug = false
   } = input;
+  const focusQuery = focus || `${task} ${objective}`.trim();
+  const normalizedChunks = Array.isArray(chunks) ? chunks : [];
 
-  const context = /** @type {ContextSelectionResult} */ (
-    selectContextWindow(chunks, {
-      focus: focus || `${task} ${objective}`.trim(),
-      tokenBudget,
-      maxChunks,
-      minScore,
-      sentenceBudget,
-      changedFiles
-    })
-  );
+  /** @type {ContextSelectionResult} */
+  let context;
+  /** @type {"ok" | "degraded"} */
+  let selectorStatus = "ok";
+  let selectorReason = "";
+  let sddDiagnostics;
+
+  try {
+    const selected = selector({
+      endpoint: "teach",
+      query: focusQuery,
+      chunks: normalizedChunks,
+      changedFiles,
+      language,
+      framework,
+      sddProfile,
+      forceSelection: true,
+      profileOverrides: {
+        tokenBudget,
+        maxChunks: typeof maxChunks === "number" ? maxChunks : 6,
+        minScore,
+        sentenceBudget,
+        sourceBudgets: {
+          chat: 0
+        }
+      }
+    });
+
+    context = {
+      focus: focusQuery,
+      tokenBudget: selected.profile.tokenBudget,
+      usedTokens: selected.usedTokens,
+      selected: /** @type {SelectedChunk[]} */ (selected.selectedChunks),
+      suppressed: /** @type {import("../types/core-contracts.d.ts").SuppressedChunk[]} */ (
+        selected.suppressedChunks
+      ),
+      summary: {
+        selectedCount: selected.selectedChunks.length,
+        suppressedCount: selected.suppressedChunks.length,
+        selectedOrigins: summarizeOrigins(
+          /** @type {Record<string, unknown>[]} */ (selected.selectedChunks)
+        ),
+        suppressedOrigins: summarizeOrigins(
+          /** @type {Record<string, unknown>[]} */ (selected.suppressedChunks)
+        ),
+        suppressionReasons: summarizeReasons(selected.suppressedChunks)
+      }
+    };
+    sddDiagnostics = selected.sdd;
+  } catch (error) {
+    selectorStatus = "degraded";
+    selectorReason = classifySelectorReason(error);
+    context = /** @type {ContextSelectionResult} */ (
+      selectContextWindow(normalizedChunks, {
+        focus: focusQuery,
+        tokenBudget,
+        maxChunks,
+        minScore,
+        sentenceBudget,
+        changedFiles
+      })
+    );
+  }
   const selectedContext = context.selected.map(
     /** @param {SelectedChunk} chunk */ (chunk) => toPacketChunk(chunk, debug)
   );
@@ -186,7 +292,10 @@ export function buildLearningPacket(input) {
       focus: context.focus,
       tokenBudget: context.tokenBudget,
       usedTokens: context.usedTokens,
-      summary: context.summary
+      summary: context.summary,
+      selectorStatus,
+      ...(selectorReason ? { selectorReason } : {}),
+      ...(sddDiagnostics ? { sdd: sddDiagnostics } : {})
     }
   };
 }

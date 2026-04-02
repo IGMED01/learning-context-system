@@ -120,6 +120,56 @@ test("buildLearningPacket returns teaching scaffolding with selected context", (
   assert.equal(packet.teachingChecklist.length, 4);
 });
 
+test("buildLearningPacket uses endpoint selector diagnostics for teach context", () => {
+  const packet = buildLearningPacket({
+    task: "Improve auth middleware",
+    objective: "Teach selector diagnostics",
+    changedFiles: ["src/auth.js"],
+    chunks: [
+      {
+        id: "code-auth",
+        source: "src/auth.js",
+        kind: "code",
+        content: "JWT validation runs before handlers.",
+        certainty: 0.95,
+        recency: 0.9,
+        teachingValue: 0.9,
+        priority: 0.95
+      }
+    ]
+  });
+
+  assert.equal(packet.diagnostics.selectorStatus, "ok");
+  assert.equal(packet.diagnostics.summary.selectedCount >= 1, true);
+});
+
+test("buildLearningPacket degrades gracefully when endpoint selector fails", () => {
+  const packet = buildLearningPacket({
+    task: "Fallback selector",
+    objective: "Teach legacy fallback",
+    changedFiles: ["src/auth.js"],
+    selector: () => {
+      throw new Error("selector timeout");
+    },
+    chunks: [
+      {
+        id: "code-auth",
+        source: "src/auth.js",
+        kind: "code",
+        content: "JWT validation runs before handlers.",
+        certainty: 0.95,
+        recency: 0.9,
+        teachingValue: 0.9,
+        priority: 0.95
+      }
+    ]
+  });
+
+  assert.equal(packet.diagnostics.selectorStatus, "degraded");
+  assert.equal(packet.diagnostics.selectorReason, "timeout");
+  assert.equal(packet.selectedContext.length >= 1, true);
+});
+
 // --- Phase 1: recall → selection → teaching sections costura ---
 
 test("memory recall chunks enter teachingSections.historicalMemory", () => {
@@ -222,7 +272,7 @@ test("teaching sections route all chunk kinds correctly", () => {
   assert.ok(packet.teachingSections.flow.length >= 2, "flow should have at least 2 teaching steps");
 });
 
-test("mixed workspace+engram chunks respect budget without origin bias", () => {
+test("mixed workspace+memory chunks respect budget without origin bias", () => {
   const workspaceChunk = {
     id: "ws-code",
     source: "src/service.js",
@@ -260,7 +310,7 @@ test("mixed workspace+engram chunks respect budget without origin bias", () => {
   const origins = result.selected.map((c) => c.origin);
   if (result.selected.length === 2) {
     assert.ok(origins.includes("workspace"), "workspace chunk should be included");
-    assert.ok(origins.includes("engram"), "engram chunk should be included");
+    assert.ok(origins.includes("memory"), "memory chunk should be included");
   }
 });
 
@@ -312,7 +362,7 @@ test("two-pass selection reserves room for recalled memory", () => {
 
   assert.equal(result.selected.length, 2, "should select exactly maxChunks");
   assert.ok(
-    result.selected.some((chunk) => chunk.origin === "engram"),
+    result.selected.some((chunk) => chunk.origin === "memory"),
     "should keep at least one recalled memory chunk"
   );
   assert.ok(
@@ -354,13 +404,13 @@ test("buildLearningPacket always exposes chunk origin in JSON output", () => {
 
   assert.ok(packet.selectedContext.length >= 1, "selected context should not be empty");
   assert.ok(
-    packet.selectedContext.every((chunk) => chunk.origin === "workspace" || chunk.origin === "engram"),
+    packet.selectedContext.every((chunk) => chunk.origin === "workspace" || chunk.origin === "memory"),
     "selected chunk origin should always be present"
   );
   assert.ok(packet.suppressedContext.length >= 1, "suppressed context should include at least one item");
   assert.ok(
     packet.suppressedContext.every(
-      (chunk) => chunk.origin === "workspace" || chunk.origin === "engram"
+      (chunk) => chunk.origin === "workspace" || chunk.origin === "memory"
     ),
     "suppressed chunk origin should always be present"
   );
@@ -382,7 +432,7 @@ test("recalled memory survives selection against workspace scan noise", () => {
       id: "code-engram-client",
       source: "src/memory/engram-client.js",
       kind: "code",
-      content: "Engram client wraps binary execution for search, save, and context commands.",
+      content: "External battery adapter wraps binary execution for search, save, and context commands.",
       certainty: 0.9,
       recency: 0.85,
       teachingValue: 0.75,
@@ -392,7 +442,7 @@ test("recalled memory survives selection against workspace scan noise", () => {
       id: "test-engram",
       source: "test/engram-client.test.js",
       kind: "test",
-      content: "Tests verify engram client search command builds correct arguments and handles errors.",
+      content: "Tests verify the external battery adapter search command builds correct arguments and handles errors.",
       certainty: 0.88,
       recency: 0.8,
       teachingValue: 0.7,
@@ -413,7 +463,7 @@ test("recalled memory survives selection against workspace scan noise", () => {
     id: "engram-memory-8",
     source: "engram://learning-context-system/8",
     kind: "memory",
-    content: "CLI Engram integration. Durable memory now enters the teach packet automatically. Memory type: architecture.",
+    content: "CLI memory runtime integration. Durable memory now enters the teach packet automatically. Memory type: architecture.",
     certainty: 0.93,
     recency: 0.72,
     teachingValue: 0.92,
@@ -421,7 +471,7 @@ test("recalled memory survives selection against workspace scan noise", () => {
   };
 
   const result = selectContextWindow([...workspaceChunks, recalledMemory], {
-    focus: "Integrate Engram CLI Teach how durable memory feeds the packet",
+    focus: "Integrate memory runtime CLI Teach how durable memory feeds the packet",
     tokenBudget: 520,
     maxChunks: 8,
     minScore: 0.25,

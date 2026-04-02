@@ -21,7 +21,13 @@ const MAX_PARAGRAPH_LENGTH = 1800;
  */
 
 /**
- * @typedef {(url: string, init?: RequestInit) => Promise<{ ok: boolean, status: number, statusText: string, text: () => Promise<string> }>} NotionFetch
+ * @typedef {(url: string, init?: RequestInit) => Promise<{
+ *   ok: boolean,
+ *   status: number,
+ *   statusText: string,
+ *   text: () => Promise<string>,
+ *   headers?: { get?: (name: string) => string | null }
+ * }>} NotionFetch
  */
 
 /**
@@ -417,7 +423,35 @@ async function requestNotion(config, fetchImpl, method, path, payload) {
       parsed && typeof parsed === "object" && "message" in parsed && typeof parsed.message === "string"
         ? parsed.message
         : raw || response.statusText || "Unknown Notion API error";
-    throw new Error(`Notion API request failed (${response.status}): ${message}`);
+    const retryAfterRaw =
+      response.headers && typeof response.headers.get === "function"
+        ? response.headers.get("retry-after")
+        : "";
+    const retryAfterMs = (() => {
+      const trimmed = String(retryAfterRaw ?? "").trim();
+      if (!trimmed) {
+        return 0;
+      }
+
+      const numeric = Number(trimmed);
+      if (Number.isFinite(numeric)) {
+        return Math.max(0, Math.trunc(numeric * 1000));
+      }
+
+      const parsedDate = Date.parse(trimmed);
+      if (!Number.isFinite(parsedDate)) {
+        return 0;
+      }
+
+      return Math.max(0, parsedDate - Date.now());
+    })();
+    throw Object.assign(
+      new Error(`Notion API request failed (${response.status}): ${message}`),
+      {
+        status: response.status,
+        retryAfterMs
+      }
+    );
   }
 
   return parsed;
