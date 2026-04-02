@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import type { ExecFileOptions } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { buildSafeEnv } from "../core/safe-env.js";
 import type {
   Chunk,
   EngramCommandResult,
@@ -255,10 +256,9 @@ export function createEngramClient(options: CreateEngramClientOptions = {}) {
     try {
       const executionOptions: ExecFileOptions = {
         cwd: config.cwd,
-        env: {
-          ...process.env,
+        env: buildSafeEnv({
           ENGRAM_DATA_DIR: config.dataDir
-        }
+        })
       };
       let result: CommandOutput;
 

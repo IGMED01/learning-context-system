@@ -1,6 +1,7 @@
 // @ts-check
 
 import { tokenize } from "../context/noise-canceler.js";
+import { sanitizeChunkContent } from "../guard/chunk-sanitizer.js";
 
 /**
  * @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk
@@ -33,7 +34,10 @@ function tokenCount(text) {
  * @param {Chunk} chunk
  */
 function renderChunk(chunk) {
-  return [`[source=${chunk.source} kind=${chunk.kind}]`, chunk.content.trim()].join("\n");
+  return [
+    `[source=${chunk.source} kind=${chunk.kind}]`,
+    sanitizeChunkContent(chunk.content).trim()
+  ].join("\n");
 }
 
 /**

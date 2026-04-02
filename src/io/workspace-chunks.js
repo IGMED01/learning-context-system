@@ -19,6 +19,7 @@ import {
   resolveSecurityPolicy,
   shouldIgnoreSensitiveFile
 } from "../security/secret-redaction.js";
+import { buildSafeEnv } from "../core/safe-env.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").ChunkKind} ChunkKind */
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
@@ -404,6 +405,7 @@ async function runFastScanner(rootPath, ignoredDirs, fastScanner) {
     const child = spawn(binaryPath, args, {
       cwd: rootPath,
       windowsHide: true,
+      env: buildSafeEnv(),
       stdio: ["pipe", "pipe", "pipe"]
     });
     let stdout = "";

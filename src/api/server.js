@@ -18,6 +18,7 @@ import {
   listDomainGuardPolicyProfiles,
   resolveDomainGuardPolicy
 } from "../guard/domain-policy-profiles.js";
+import { sanitizeChunkContent } from "../guard/chunk-sanitizer.js";
 import { buildLlmPrompt } from "../llm/prompt-builder.js";
 import { parseLlmResponse } from "../llm/response-parser.js";
 import { createLlmProviderRegistry } from "../llm/provider.js";
@@ -1073,7 +1074,7 @@ function normalizePromptChunks(chunksInput) {
     const chunk = chunks[index];
 
     if (typeof chunk === "string") {
-      const content = chunk.trim();
+      const content = sanitizeChunkContent(chunk.trim());
 
       if (!content) {
         continue;
@@ -1149,7 +1150,7 @@ function normalizePromptChunks(chunksInput) {
       id,
       source,
       kind: typeof record.kind === "string" && record.kind.trim() ? record.kind.trim() : "doc",
-      content: typeof record.content === "string" ? record.content : ""
+      content: typeof record.content === "string" ? sanitizeChunkContent(record.content) : ""
     });
   }
 

@@ -18,6 +18,7 @@ import {
   resolveSecurityPolicy,
   shouldIgnoreSensitiveFile
 } from "../security/secret-redaction.js";
+import { buildSafeEnv } from "../core/safe-env.js";
 import type { Chunk, ChunkKind, ScanStats } from "../types/core-contracts.d.ts";
 
 interface WorkspaceFile {
@@ -362,6 +363,7 @@ async function runFastScanner(
     const child = spawn(binaryPath, args, {
       cwd: rootPath,
       windowsHide: true,
+      env: buildSafeEnv(),
       stdio: ["pipe", "pipe", "pipe"]
     });
     let stdout = "";

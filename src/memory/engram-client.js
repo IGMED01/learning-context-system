@@ -3,6 +3,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { buildSafeEnv } from "../core/safe-env.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
 /** @typedef {import("../types/core-contracts.d.ts").EngramResolvedConfig} EngramResolvedConfig */
@@ -274,10 +275,9 @@ export function createEngramClient(options = {}) {
     try {
       const executionOptions = {
         cwd: config.cwd,
-        env: {
-          ...process.env,
+        env: buildSafeEnv({
           ENGRAM_DATA_DIR: config.dataDir
-        }
+        })
       };
       let result;
 

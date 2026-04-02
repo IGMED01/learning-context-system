@@ -37,6 +37,8 @@ import { resolveEndpointContextProfile, selectEndpointContext } from "../context
 import { loadApiAxioms, formatApiAxiomsMarkdown } from "./axioms-loader.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { sanitizeChunkContent } from "../guard/chunk-sanitizer.js";
+import { resolveSafePathWithinWorkspace as resolveWorkspacePath } from "../utils/path-utils.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -125,24 +127,6 @@ const MAX_CHAT_CONTEXT_CHARS = Math.max(
   1000,
   Math.trunc(Number(process.env.LCS_API_CHAT_CONTEXT_MAX_CHARS ?? 8000))
 );
-
-/**
- * @param {string | undefined} candidate
- * @param {string} label
- */
-function resolveSafePathWithinWorkspace(candidate, label) {
-  if (!candidate || candidate.trim() === "" || candidate.trim() === ".") {
-    return API_WORKSPACE_ROOT;
-  }
-
-  const resolved = path.resolve(API_WORKSPACE_ROOT, candidate);
-
-  if (resolved === API_WORKSPACE_ROOT || resolved.startsWith(`${API_WORKSPACE_ROOT}${path.sep}`)) {
-    return resolved;
-  }
-
-  throw new Error(`${label} must stay inside workspace root: ${API_WORKSPACE_ROOT}`);
-}
 
 /**
  * @param {string | undefined} value
@@ -578,7 +562,7 @@ registerRoute("POST", "/api/ingest", async (/** @type {ApiRequest} */ req) => {
   let safeSourcePath = "";
 
   try {
-    safeSourcePath = resolveSafePathWithinWorkspace(sourcePath, "path");
+    safeSourcePath = resolveWorkspacePath(sourcePath, API_WORKSPACE_ROOT, "path");
   } catch (error) {
     return errorResponse(400, error instanceof Error ? error.message : String(error));
   }
@@ -772,7 +756,7 @@ registerRoute("POST", "/api/eval", async (/** @type {ApiRequest} */ req) => {
   if (suitePath) {
     let safeSuitePath = "";
     try {
-      safeSuitePath = resolveSafePathWithinWorkspace(suitePath, "suitePath");
+      safeSuitePath = resolveWorkspacePath(suitePath, API_WORKSPACE_ROOT, "suitePath");
     } catch (error) {
       return errorResponse(400, error instanceof Error ? error.message : String(error));
     }
@@ -973,7 +957,7 @@ registerRoute("POST", "/api/rollback-check", async (/** @type {ApiRequest} */ re
   if (suitePath) {
     let safeSuitePath = "";
     try {
-      safeSuitePath = resolveSafePathWithinWorkspace(suitePath, "suitePath");
+      safeSuitePath = resolveWorkspacePath(suitePath, API_WORKSPACE_ROOT, "suitePath");
     } catch (error) {
       return errorResponse(400, error instanceof Error ? error.message : String(error));
     }
@@ -1024,7 +1008,7 @@ registerRoute("GET", "/api/axioms", async (/** @type {ApiRequest} */ req) => {
   let dataDir = "";
 
   try {
-    dataDir = resolveSafePathWithinWorkspace(dataDirRaw, "x-data-dir");
+    dataDir = resolveWorkspacePath(dataDirRaw, API_WORKSPACE_ROOT, "x-data-dir");
   } catch (error) {
     return errorResponse(400, error instanceof Error ? error.message : String(error));
   }
@@ -1059,7 +1043,7 @@ registerRoute("POST", "/api/agent", async (/** @type {ApiRequest} */ req) => {
   try {
     workspace =
       typeof body.workspace === "string"
-        ? resolveSafePathWithinWorkspace(body.workspace, "workspace")
+        ? resolveWorkspacePath(body.workspace, API_WORKSPACE_ROOT, "workspace")
         : API_WORKSPACE_ROOT;
   } catch (error) {
     return errorResponse(400, error instanceof Error ? error.message : String(error));
@@ -1129,7 +1113,7 @@ registerRoute("POST", "/api/mitosis", async (/** @type {ApiRequest} */ req) => {
   try {
     dataDir =
       typeof body.dataDir === "string"
-        ? resolveSafePathWithinWorkspace(body.dataDir, "dataDir")
+        ? resolveWorkspacePath(body.dataDir, API_WORKSPACE_ROOT, "dataDir")
         : API_WORKSPACE_ROOT;
   } catch (error) {
     return errorResponse(400, error instanceof Error ? error.message : String(error));
@@ -1159,8 +1143,9 @@ registerRoute("POST", "/api/mitosis", async (/** @type {ApiRequest} */ req) => {
 registerRoute("GET", "/api/agents", async (/** @type {ApiRequest} */ req) => {
   let dataDir = API_WORKSPACE_ROOT;
   try {
-    dataDir = resolveSafePathWithinWorkspace(
+    dataDir = resolveWorkspacePath(
       typeof req.headers["x-data-dir"] === "string" ? req.headers["x-data-dir"] : "",
+      API_WORKSPACE_ROOT,
       "x-data-dir"
     );
   } catch (error) {
@@ -1184,7 +1169,7 @@ registerRoute("POST", "/api/agents/route", async (/** @type {ApiRequest} */ req)
   try {
     dataDir =
       typeof body.dataDir === "string"
-        ? resolveSafePathWithinWorkspace(body.dataDir, "dataDir")
+        ? resolveWorkspacePath(body.dataDir, API_WORKSPACE_ROOT, "dataDir")
         : API_WORKSPACE_ROOT;
   } catch (error) {
     return errorResponse(400, error instanceof Error ? error.message : String(error));
@@ -1522,7 +1507,7 @@ registerRoute("POST", "/api/chat", async (/** @type {ApiRequest} */ req) => {
   if (withContext && contextSelection.selectedChunks.length > 0) {
     context = contextSelection.selectedChunks.map((c, i) => {
       const source = c.source ?? c.id ?? `chunk-${i}`;
-      const content = c.content ?? "";
+      const content = sanitizeChunkContent(String(c.content ?? ""));
       const score = typeof c.priority === "number" ? c.priority : typeof c.score === "number" ? c.score : 0;
       return `[${source} | score:${(score * 100).toFixed(0)}%]\n${content}`;
     }).join("\n\n");
