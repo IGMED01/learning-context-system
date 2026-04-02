@@ -196,12 +196,12 @@ Migrar de un enfoque de parcheo manual a un pipeline DevSecOps donde las validac
   - **Cubre:** L2
   - **Archivos:** `docker-compose.yml`
 
-- [ ] **C.4** Healthcheck en Docker
-  - **Fix:** `healthcheck: test: ["CMD", "curl", "-f", "http://localhost:3100/api/health"]`
+- [x] **C.4** Healthcheck en Docker
+  - **Fix:** `HEALTHCHECK` en Dockerfile + `healthcheck` en compose apuntando a `/api/health`
   - **Cubre:** L3
   - **Archivos:** `docker-compose.yml`
 
-- [ ] **C.5** Contenedores inmutables (rootless)
+- [x] **C.5** Contenedores inmutables (rootless)
   - **Fix:** `USER node` en Dockerfile, `read_only: true` en compose
   - **Cubre:** L1, L2
   - **Archivos:** `Dockerfile`, `docker-compose.yml`
@@ -224,7 +224,7 @@ Migrar de un enfoque de parcheo manual a un pipeline DevSecOps donde las validac
 
 ### Defensa en Runtime & Docker
 
-- [ ] **9.7** Contenedores rootless — `USER node`, `read_only: true`
+- [x] **9.7** Contenedores rootless — `USER node`, `read_only: true`
 - [ ] **9.8** Docker secrets — credenciales via `/run/secrets/`
 - [ ] **9.9** Logging estructurado de seguridad — JSON `SECURITY_ALERT` para guard blocks, rate limit exceeds
 

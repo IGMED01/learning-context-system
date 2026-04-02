@@ -7,6 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import { log } from "../core/logger.js";
+import { createSessionHistoryStore } from "./session-history.js";
 import {
   calculateTokenBudgetState,
   recordCompactFailure,
@@ -49,6 +50,7 @@ let policyCacheHits = 0;
 let policyRecomputations = 0;
 let contextCacheHits = 0;
 let contextComputations = 0;
+const sessionHistoryStore = createSessionHistoryStore();
 const CONTRADICTION_NEGATIVE_TOKENS = new Set([
   "no",
   "not",
@@ -908,6 +910,12 @@ export function addTurn(sessionId, role, content, metadata) {
   updateContradictionState(session);
   session.updatedAt = turn.timestamp;
   invalidateSessionContextCache(sessionId);
+  void sessionHistoryStore.enqueueTurn(sessionId, turn).catch((error) => {
+    log("warn", "session history append failed", {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  });
 
   return turn;
 }
@@ -1123,6 +1131,21 @@ export function resetAllSessions() {
   contextCacheHits = 0;
   contextComputations = 0;
   resetCompactState();
+}
+
+/**
+ * @param {string} sessionId
+ * @param {number} [limit]
+ */
+export async function loadSessionHistory(sessionId, limit = 40) {
+  return sessionHistoryStore.loadRecent(sessionId, limit);
+}
+
+/**
+ * @param {string} sessionId
+ */
+export async function flushSessionHistory(sessionId) {
+  await sessionHistoryStore.flush(sessionId);
 }
 
 /**

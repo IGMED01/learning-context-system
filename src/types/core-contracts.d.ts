@@ -318,6 +318,10 @@ export interface MemoryRecallState {
   project: string;
   recoveredChunks: number;
   recoveredMemoryIds: string[];
+  candidateChunks?: number;
+  alreadySurfacedFiltered?: number;
+  resurfacedChunks?: number;
+  sideQueryUsed?: boolean;
   firstMatchIndex: number;
   selectedChunks: number;
   suppressedChunks: number;

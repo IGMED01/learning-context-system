@@ -55,9 +55,10 @@ function parseConnectSrcExtras(value) {
  * @param {string | undefined} explicitOrigin
  * @param {string} host
  * @param {number} port
+ * @param {"http" | "https"} [protocol]
  * @returns {string}
  */
-export function resolveCorsOrigin(explicitOrigin, host, port) {
+export function resolveCorsOrigin(explicitOrigin, host, port, protocol = "http") {
   const normalizedExplicit = String(explicitOrigin ?? "").trim();
   if (normalizedExplicit && normalizedExplicit !== "*") {
     return normalizedExplicit;
@@ -66,7 +67,7 @@ export function resolveCorsOrigin(explicitOrigin, host, port) {
   const normalizedHost =
     host === "0.0.0.0" || host === "::" || host === "[::]" ? "127.0.0.1" : host;
 
-  return `http://${normalizedHost}:${port}`;
+  return `${protocol}://${normalizedHost}:${port}`;
 }
 
 /**

@@ -73,9 +73,11 @@ import {
   buildConversationRecallQuery,
   cleanupExpiredSessions,
   createSession as createConversationSession,
+  flushSessionHistory as flushConversationHistory,
   getConversationMemoizationStats,
   getConversationNoiseTelemetry,
   getSession as getConversationSession,
+  loadSessionHistory as loadConversationHistory,
   resetAllSessions,
   updateContext as updateConversationContext
 } from "../src/orchestration/conversation-manager.js";
@@ -224,6 +226,7 @@ import {
   runDomainEvalSuite
 } from "../src/eval/domain-eval-suite.js";
 import {
+  runCodeGate,
   getGateErrors,
   formatGateErrors,
   buildCodeGateEnv
@@ -233,6 +236,7 @@ import {
   checkFileArchitecture
 } from "../src/guard/architecture-gate.js";
 import { runDeprecationGate } from "../src/guard/deprecation-gate.js";
+import { createPermissionContext } from "../src/orchestration/tool-permission.js";
 import { createAxiomStore } from "../src/memory/axiom-store.js";
 import { createAxiomInjector, formatAxiomBlock } from "../src/memory/axiom-injector.js";
 import {
@@ -244,6 +248,7 @@ import { runRepairLoop } from "../src/orchestration/repair-loop.js";
 import { runAgentWithRecovery } from "../src/orchestration/agent-query-loop.js";
 import { spawnAgent } from "../src/orchestration/nexus-agent-runtime.js";
 import { spawnNexusAgent } from "../src/orchestration/nexus-agent-bridge.js";
+import { createSessionHistoryStore } from "../src/orchestration/session-history.js";
 
 const tests = [];
 const execFile = promisify(execFileCallback);
@@ -1577,6 +1582,68 @@ run("conversation manager bounds memoized context cache size", () => {
 
   const stats = getConversationMemoizationStats();
   assert.equal(stats.context.cacheSize <= stats.context.maxCacheSize, true);
+});
+
+run("session history dual-store stores large turns via hashed references and hydrates content", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-session-history-"));
+  const store = createSessionHistoryStore({
+    cwd: tempRoot,
+    historyDir: ".lcs/session-history",
+    inlineContentBytes: 64
+  });
+  const sessionId = "session-1";
+  const smallContent = "short inline message";
+  const largeContent = `large:${"x".repeat(2400)}`;
+
+  try {
+    await store.enqueueTurn(sessionId, {
+      role: "user",
+      content: smallContent,
+      timestamp: "2026-04-02T00:00:00.000Z"
+    });
+    await store.enqueueTurn(sessionId, {
+      role: "system",
+      content: largeContent,
+      timestamp: "2026-04-02T00:00:10.000Z"
+    });
+    await store.flush(sessionId);
+
+    const filePath = path.join(tempRoot, ".lcs", "session-history", "session-1.jsonl");
+    const raw = await readFile(filePath, "utf8");
+    const lines = raw
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    assert.equal(lines.length, 2);
+    const first = JSON.parse(lines[0]);
+    const second = JSON.parse(lines[1]);
+    assert.equal(first.content, smallContent);
+    assert.equal(typeof second.contentHash, "string");
+    assert.equal(Boolean(second.content), false);
+    assert.equal(typeof second.contentPreview, "string");
+
+    const hydrated = await store.loadRecent(sessionId, 10);
+    assert.equal(hydrated.length, 2);
+    assert.equal(hydrated[0].content, smallContent);
+    assert.equal(hydrated[1].content, largeContent);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+run("conversation manager dual-store persists turns to session history and can reload them", async () => {
+  resetAllSessions();
+
+  const session = createConversationSession("nexus-history");
+  addConversationTurn(session.sessionId, "user", "Auth token must be verified before route execution.");
+  addConversationTurn(session.sessionId, "system", "Applied guard-first flow and documented rationale.");
+  await flushConversationHistory(session.sessionId);
+
+  const history = await loadConversationHistory(session.sessionId, 10);
+  assert.equal(history.length >= 2, true);
+  assert.equal(history.some((entry) => /token must be verified/i.test(entry.content)), true);
+  assert.equal(history.some((entry) => /guard-first flow/i.test(entry.content)), true);
 });
 
 run("builds a learning packet with teaching scaffolding", () => {
@@ -5704,6 +5771,103 @@ run("teach recall strategy retries queries and deduplicates repeated memories", 
   assert.equal(result.memoryRecall.matchedQueries.length >= 1, true);
   assert.equal(result.chunks.filter((chunk) => chunk.kind === "memory").length, 1);
   assert.equal(seenQueries.length >= 1, true);
+});
+
+run("teach recall side-query filters already surfaced memories and keeps novel entries", async () => {
+  let callCount = 0;
+  const result = await resolveTeachRecall({
+    task: "Integrate memory runtime CLI",
+    objective: "Teach memory flow",
+    focus: "memory runtime cli integration",
+    changedFiles: ["src/memory/teach-recall.js"],
+    project: "learning-context-system",
+    limit: 2,
+    alreadySurfacedMemoryIds: ["old-1"],
+    baseChunks: [],
+    async search() {
+      callCount += 1;
+
+      if (callCount === 1) {
+        return {
+          entries: [
+            {
+              id: "old-1",
+              title: "Old repeated memory",
+              content: "This memory was already surfaced in a previous turn.",
+              type: "learning",
+              project: "learning-context-system",
+              scope: "project",
+              topic: "",
+              createdAt: "2026-03-20T10:00:00.000Z"
+            }
+          ],
+          stdout: "Found 1 memories:",
+          provider: "memory"
+        };
+      }
+
+      return {
+        entries: [
+          {
+            id: "new-1",
+            title: "Fresh memory insight",
+            content: "A new memory candidate should be selected over old surfaced ones.",
+            type: "learning",
+            project: "learning-context-system",
+            scope: "project",
+            topic: "",
+            createdAt: "2026-04-01T10:00:00.000Z"
+          }
+        ],
+        stdout: "Found 1 memories:",
+        provider: "memory"
+      };
+    }
+  });
+
+  assert.equal(callCount >= 2, true);
+  assert.equal(result.memoryRecall.status, "recalled");
+  assert.equal(result.memoryRecall.alreadySurfacedFiltered >= 1, true);
+  assert.equal(result.memoryRecall.recoveredMemoryIds.includes("new-1"), true);
+  assert.equal(result.memoryRecall.recoveredMemoryIds.includes("old-1"), false);
+  assert.equal(result.memoryRecall.sideQueryUsed, true);
+});
+
+run("teach recall marks empty result when all candidates are already surfaced", async () => {
+  const result = await resolveTeachRecall({
+    task: "Integrate memory runtime CLI",
+    objective: "Teach memory flow",
+    focus: "memory runtime cli integration",
+    changedFiles: ["src/memory/teach-recall.js"],
+    project: "learning-context-system",
+    limit: 2,
+    alreadySurfacedMemoryIds: ["old-1"],
+    baseChunks: [],
+    explicitQuery: "memory runtime integration",
+    async search() {
+      return {
+        entries: [
+          {
+            id: "old-1",
+            title: "Old repeated memory",
+            content: "This memory was already surfaced in a previous turn.",
+            type: "learning",
+            project: "learning-context-system",
+            scope: "project",
+            topic: "",
+            createdAt: "2026-03-20T10:00:00.000Z"
+          }
+        ],
+        stdout: "Found 1 memories:",
+        provider: "memory"
+      };
+    }
+  });
+
+  assert.equal(result.memoryRecall.status, "empty");
+  assert.equal(result.memoryRecall.reason, "already-surfaced");
+  assert.equal(result.memoryRecall.recoveredChunks, 0);
+  assert.equal(result.memoryRecall.alreadySurfacedFiltered, 1);
 });
 
 run("teach recall strategy reports recoverable provider errors without throwing", async () => {
@@ -9843,6 +10007,7 @@ run("NEXUS:10 resolveCorsOrigin stays local-first by default and honors explicit
   assert.equal(resolveCorsOrigin(undefined, "0.0.0.0", 3100), "http://127.0.0.1:3100");
   assert.equal(resolveCorsOrigin("https://app.example.com", "0.0.0.0", 3100), "https://app.example.com");
   assert.equal(resolveCorsOrigin("*", "0.0.0.0", 3100), "http://127.0.0.1:3100");
+  assert.equal(resolveCorsOrigin(undefined, "0.0.0.0", 3100, "https"), "https://127.0.0.1:3100");
 });
 
 run("NEXUS:10 rate limiter ignores X-Forwarded-For unless trust proxy is enabled", async () => {
@@ -10714,10 +10879,12 @@ run("NEXUS benchmark compares raw context versus selected context on real worksp
 run("NEXUS:3 health command is registered and returns component checks", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-health-command-"));
   const previousOpenAi = process.env.OPENAI_API_KEY;
+  const previousRequireAuth = process.env.LCS_API_REQUIRE_AUTH;
 
   try {
     await mkdir(path.join(tempRoot, ".lcs", "memory"), { recursive: true });
     process.env.OPENAI_API_KEY = "test-health-provider";
+    process.env.LCS_API_REQUIRE_AUTH = "false";
 
     const health = await getHealthStatus(tempRoot);
     const commandMatch = await findCommand("GET", "/api/health");
@@ -10731,12 +10898,82 @@ run("NEXUS:3 health command is registered and returns component checks", async (
     assert.equal(health.checks.engram.status, "unavailable");
     assert.equal(health.checks.llmProviders.status, "ok");
     assert.equal(Array.isArray(health.checks.llmProviders.providers), true);
+    assert.equal(["ok", "degraded", "unavailable"].includes(health.checks.secrets.status), true);
+    assert.equal(["ok", "degraded", "unavailable"].includes(health.checks.tls.status), true);
+    assert.equal("path" in health.checks.memory, false);
+    assert.equal("binary" in health.checks.engram, false);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
     if (previousOpenAi === undefined) {
       delete process.env.OPENAI_API_KEY;
     } else {
       process.env.OPENAI_API_KEY = previousOpenAi;
+    }
+    if (previousRequireAuth === undefined) {
+      delete process.env.LCS_API_REQUIRE_AUTH;
+    } else {
+      process.env.LCS_API_REQUIRE_AUTH = previousRequireAuth;
+    }
+  }
+});
+
+run("NEXUS:3 health command reports TLS and secret-file hardening checks", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-health-hardening-"));
+  const apiKeysFile = path.join(tempRoot, "api-keys.txt");
+  const tlsKeyFile = path.join(tempRoot, "tls-key.pem");
+  const tlsCertFile = path.join(tempRoot, "tls-cert.pem");
+
+  const previousRequireAuth = process.env.LCS_API_REQUIRE_AUTH;
+  const previousApiKeysFile = process.env.LCS_API_KEYS_FILE;
+  const previousTlsEnabled = process.env.LCS_API_TLS_ENABLED;
+  const previousTlsKeyFile = process.env.LCS_API_TLS_KEY_FILE;
+  const previousTlsCertFile = process.env.LCS_API_TLS_CERT_FILE;
+
+  try {
+    await mkdir(path.join(tempRoot, ".lcs", "memory"), { recursive: true });
+    await mkdir(path.join(tempRoot, ".lcs", "axioms"), { recursive: true });
+    await writeFile(apiKeysFile, "test-key-from-file\n", "utf8");
+    await writeFile(tlsKeyFile, "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n", "utf8");
+    await writeFile(tlsCertFile, "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n", "utf8");
+
+    process.env.LCS_API_REQUIRE_AUTH = "true";
+    process.env.LCS_API_KEYS_FILE = apiKeysFile;
+    process.env.LCS_API_TLS_ENABLED = "true";
+    process.env.LCS_API_TLS_KEY_FILE = tlsKeyFile;
+    process.env.LCS_API_TLS_CERT_FILE = tlsCertFile;
+
+    const health = await getHealthStatus(tempRoot);
+
+    assert.equal(health.checks.secrets.status, "ok");
+    assert.equal(health.checks.tls.status, "ok");
+    assert.equal(["healthy", "degraded", "unhealthy"].includes(health.status), true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+
+    if (previousRequireAuth === undefined) {
+      delete process.env.LCS_API_REQUIRE_AUTH;
+    } else {
+      process.env.LCS_API_REQUIRE_AUTH = previousRequireAuth;
+    }
+    if (previousApiKeysFile === undefined) {
+      delete process.env.LCS_API_KEYS_FILE;
+    } else {
+      process.env.LCS_API_KEYS_FILE = previousApiKeysFile;
+    }
+    if (previousTlsEnabled === undefined) {
+      delete process.env.LCS_API_TLS_ENABLED;
+    } else {
+      process.env.LCS_API_TLS_ENABLED = previousTlsEnabled;
+    }
+    if (previousTlsKeyFile === undefined) {
+      delete process.env.LCS_API_TLS_KEY_FILE;
+    } else {
+      process.env.LCS_API_TLS_KEY_FILE = previousTlsKeyFile;
+    }
+    if (previousTlsCertFile === undefined) {
+      delete process.env.LCS_API_TLS_CERT_FILE;
+    } else {
+      process.env.LCS_API_TLS_CERT_FILE = previousTlsCertFile;
     }
   }
 });
@@ -12854,6 +13091,60 @@ run("NEXUS:4 code gate runs typecheck and reports pass on clean cwd", async () =
   assert.equal(syntheticResult.tools.length, 1);
   assert.equal(syntheticResult.tools[0].tool, "typecheck");
   assert.equal(syntheticResult.tools[0].status, "pass");
+});
+
+run("NEXUS:4 permission context resolves once per key and honors precedence", async () => {
+  let hookCalls = 0;
+  let classifierCalls = 0;
+  let userCalls = 0;
+  const permission = createPermissionContext({
+    hook: async () => {
+      hookCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return "deny";
+    },
+    classifier: async () => {
+      classifierCalls += 1;
+      return "allow";
+    },
+    user: async () => {
+      userCalls += 1;
+      return "allow";
+    }
+  });
+
+  const [first, second] = await Promise.all([
+    permission.resolve({ tool: "typecheck", scope: "code-gate" }),
+    permission.resolve({ tool: "typecheck", scope: "code-gate" })
+  ]);
+
+  assert.equal(first.allowed, false);
+  assert.equal(second.allowed, false);
+  assert.equal(first.source, "hook");
+  assert.equal(second.source, "hook");
+  assert.equal(hookCalls, 1);
+  assert.equal(classifierCalls, 0);
+  assert.equal(userCalls, 0);
+});
+
+run("NEXUS:4 code gate skips blocked tools via permission context", async () => {
+  const result = await runCodeGate({
+    cwd: process.cwd(),
+    tools: ["typecheck"],
+    permissionContext: createPermissionContext({
+      classifier: () => "deny"
+    })
+  });
+
+  assert.equal(result.status, "skipped");
+  assert.equal(result.passed, true);
+  assert.equal(result.tools.length, 1);
+  assert.equal(result.tools[0].tool, "typecheck");
+  assert.equal(result.tools[0].status, "skipped");
+  assert.equal(
+    result.tools[0].errors.some((entry) => /permission context/i.test(entry.message)),
+    true
+  );
 });
 
 run("NEXUS:4 repair loop validates target candidate code and restores workspace file", async () => {
