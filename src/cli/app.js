@@ -363,6 +363,14 @@ function buildRuntimeMeta(startedAt, options = {}) {
  *     blocked?: boolean,
  *     reason?: string,
  *     preventedError?: boolean
+ *   },
+ *   memory?: {
+ *     backend?: string,
+ *     isolationMode?: "strict" | "relaxed",
+ *     language?: string,
+ *     provider?: string,
+ *     providerChain?: string[],
+ *     fallbackProvider?: string
  *   }
  * }} [extras]
  */
@@ -374,7 +382,8 @@ function buildCommandMetric(command, startedAt, extras = {}) {
     selection: extras.selection ?? undefined,
     recall: extras.recall ?? undefined,
     sdd: extras.sdd ?? undefined,
-    safety: extras.safety ?? undefined
+    safety: extras.safety ?? undefined,
+    memory: extras.memory ?? undefined
   };
 }
 
@@ -412,6 +421,16 @@ function buildObservabilityEvent(metric) {
       blocked: metric.safety?.blocked === true,
       reason: metric.safety?.reason ?? "",
       preventedError: metric.safety?.preventedError === true
+    },
+    memory: {
+      backend: metric.memory?.backend ?? "",
+      isolationMode: metric.memory?.isolationMode ?? "",
+      language: metric.memory?.language ?? "",
+      provider: metric.memory?.provider ?? "",
+      providerChain: Array.isArray(metric.memory?.providerChain)
+        ? metric.memory.providerChain
+        : [],
+      fallbackProvider: metric.memory?.fallbackProvider ?? ""
     }
   };
 }
@@ -2219,6 +2238,21 @@ export async function runCli(argv, dependencies = {}) {
         selectedChunks: 0,
         suppressedChunks: 0,
         hit: query ? recoveredChunks > 0 : Boolean(result.stdout?.trim())
+      },
+      memory: {
+        backend: memoryBackend,
+        isolationMode: memoryIsolation,
+        language:
+          typeof language === "string" && language.trim()
+            ? language.trim().toLowerCase()
+            : "",
+        provider: result?.provider ?? "",
+        providerChain: Array.isArray(result?.providerChain)
+          ? result.providerChain.filter(
+              (entry) => typeof entry === "string" && entry.trim().length > 0
+            )
+          : [],
+        fallbackProvider: result?.fallbackProvider ?? ""
       }
     });
     await safeRecordCommandMetric(metric);

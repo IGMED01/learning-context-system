@@ -6218,6 +6218,10 @@ run("cli recall delegates to Engram search when a query is provided", async () =
       "decision",
       "--scope",
       "project",
+      "--memory-language",
+      "typescript",
+      "--memory-isolation",
+      "strict",
       "--limit",
       "2",
       "--format",
@@ -6231,7 +6235,11 @@ run("cli recall delegates to Engram search when a query is provided", async () =
   assert.equal(result.exitCode, 0);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].kind, "search");
+  assert.equal(calls[0].payload.options?.language, "typescript");
+  assert.equal(calls[0].payload.options?.isolationMode, "strict");
   assert.match(result.stdout, /Recall mode: search/);
+  assert.match(result.stdout, /Language filter: typescript/);
+  assert.match(result.stdout, /Isolation mode: strict/);
   assert.match(result.stdout, /auth middleware/);
   assert.match(result.stdout, /Auth order decision/);
 });
@@ -6309,6 +6317,9 @@ run("cli recall uses config defaults and emits a stable JSON contract", async ()
   assert.equal(parsed.observability.event.command, "recall");
   assert.equal(typeof parsed.observability.event.durationMs, "number");
   assert.equal(typeof parsed.observability.recall.hit, "boolean");
+  assert.equal(typeof parsed.observability.memory.backend, "string");
+  assert.equal(parsed.observability.memory.isolationMode, "strict");
+  assert.equal(typeof parsed.observability.memory.provider, "string");
   assert.equal(parsed.project, "configured-project");
   assert.equal(seen.query, "auth middleware");
   assert.equal(seen.options?.project, "configured-project");

@@ -387,11 +387,15 @@ export function formatLearningPacketAsText(packet, options = {}) {
  *   query?: string,
  *   type?: string,
  *   scope?: string,
+ *   language?: string,
+ *   isolationMode?: "strict" | "relaxed",
  *   limit?: number | null,
  *   stdout?: string,
  *   dataDir?: string,
  *   filePath?: string,
  *   provider?: string,
+ *   providerChain?: string[],
+ *   fallbackProvider?: string,
  *   degraded?: boolean,
  *   warning?: string,
  *   error?: string,
@@ -408,8 +412,16 @@ export function formatMemoryRecallAsText(result, options = {}) {
     `Query: ${result.query || "none"}`,
     `Type filter: ${result.type || "none"}`,
     `Scope: ${result.scope || "none"}`,
+    `Language filter: ${result.language || "none"}`,
+    `Isolation mode: ${result.isolationMode || "strict"}`,
     `Limit: ${result.limit ?? "default"}`,
     `Provider: ${result.provider || "memory"}`,
+    `Provider chain: ${
+      Array.isArray(result.providerChain) && result.providerChain.length
+        ? result.providerChain.join(" -> ")
+        : "n/a"
+    }`,
+    `Fallback provider: ${result.fallbackProvider || "none"}`,
     `Data dir: ${result.dataDir || "unknown"}`,
     `Fallback file: ${result.filePath || "none"}`,
     `Degraded: ${result.degraded ? "yes" : "no"}`,
@@ -442,6 +454,8 @@ export function formatMemoryRecallAsText(result, options = {}) {
     lines.push(`- Query provided: ${result.query ? "yes" : "no"}`);
     lines.push(`- Scope filter active: ${result.scope ? "yes" : "no"}`);
     lines.push(`- Type filter active: ${result.type ? "yes" : "no"}`);
+    lines.push(`- Language filter active: ${result.language ? "yes" : "no"}`);
+    lines.push(`- Isolation mode: ${result.isolationMode || "strict"}`);
   }
 
   return lines.join("\n");
