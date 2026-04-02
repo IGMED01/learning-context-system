@@ -394,18 +394,22 @@ export async function runProjectDoctor(input: RunProjectDoctorInput): Promise<Do
   });
 
   const memoryBackend = configInfo.config.memory.backend || "resilient";
+  const memoryIsolation = configInfo.config.memory.isolation || "strict";
+  const resilientLikeBackend = memoryBackend === "resilient" || memoryBackend === "parallel";
   checks.push({
     id: "memory-backend",
     label: "Memory backend mode",
-    status: memoryBackend === "resilient" ? "pass" : "warn",
+    status: resilientLikeBackend ? "pass" : "warn",
     detail:
-      memoryBackend === "resilient"
-        ? "resilient (local JSONL primary + optional external battery contingency)."
-        : "local-only (only the local JSONL store is active).",
+      memoryBackend === "parallel"
+        ? `parallel (local JSONL + Obsidian in parallel, isolation=${memoryIsolation}).`
+        : memoryBackend === "resilient"
+          ? `resilient (local JSONL primary + optional external battery contingency, isolation=${memoryIsolation}).`
+          : `local-only (only the local JSONL store is active, isolation=${memoryIsolation}).`,
     fix:
-      memoryBackend === "resilient"
+      resilientLikeBackend
         ? ""
-        : "Prefer memory.backend='resilient' when you want local-first recall plus optional external battery fallback."
+        : "Prefer memory.backend='parallel' (or resilient) when you want stronger recall coverage with explicit isolation controls."
   });
 
   const localMemoryDir = path.resolve(cwd, ".lcs/memory");
@@ -440,8 +444,24 @@ export async function runProjectDoctor(input: RunProjectDoctorInput): Promise<Do
     fix:
       memoryBackend === "local-only" || engramBatteryExists
         ? ""
-              : "Install or place the Engram binary only if you want third-tier contingency memory. NEXUS remains canonical on local JSONL + optional external battery."
+        : "Install or place the Engram binary only if you want third-tier contingency memory. NEXUS remains canonical on local JSONL + optional external battery."
   });
+
+  if (memoryBackend === "parallel") {
+    const obsidianVaultPath = path.resolve(cwd, ".lcs/obsidian-vault");
+    const obsidianVaultExists = await pathExists(obsidianVaultPath);
+    checks.push({
+      id: "obsidian-memory",
+      label: "Obsidian second-brain memory",
+      status: obsidianVaultExists ? "pass" : "warn",
+      detail: obsidianVaultExists
+        ? `Obsidian vault detected: ${obsidianVaultPath}`
+        : `Obsidian vault not found yet: ${obsidianVaultPath}`,
+      fix: obsidianVaultExists
+        ? ""
+        : "Run at least one remember/close command with memory.backend='parallel' to initialize and sync the vault."
+    });
+  }
 
   const summary = checks.reduce<DoctorResult["summary"]>(
     (accumulator, check) => {

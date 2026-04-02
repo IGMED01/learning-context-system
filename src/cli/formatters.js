@@ -387,11 +387,15 @@ export function formatLearningPacketAsText(packet, options = {}) {
  *   query?: string,
  *   type?: string,
  *   scope?: string,
+ *   language?: string,
+ *   isolationMode?: "strict" | "relaxed",
  *   limit?: number | null,
  *   stdout?: string,
  *   dataDir?: string,
  *   filePath?: string,
  *   provider?: string,
+ *   providerChain?: string[],
+ *   fallbackProvider?: string,
  *   degraded?: boolean,
  *   warning?: string,
  *   error?: string,
@@ -408,8 +412,16 @@ export function formatMemoryRecallAsText(result, options = {}) {
     `Query: ${result.query || "none"}`,
     `Type filter: ${result.type || "none"}`,
     `Scope: ${result.scope || "none"}`,
+    `Language filter: ${result.language || "none"}`,
+    `Isolation mode: ${result.isolationMode || "strict"}`,
     `Limit: ${result.limit ?? "default"}`,
     `Provider: ${result.provider || "memory"}`,
+    `Provider chain: ${
+      Array.isArray(result.providerChain) && result.providerChain.length
+        ? result.providerChain.join(" -> ")
+        : "n/a"
+    }`,
+    `Fallback provider: ${result.fallbackProvider || "none"}`,
     `Data dir: ${result.dataDir || "unknown"}`,
     `Fallback file: ${result.filePath || "none"}`,
     `Degraded: ${result.degraded ? "yes" : "no"}`,
@@ -442,6 +454,8 @@ export function formatMemoryRecallAsText(result, options = {}) {
     lines.push(`- Query provided: ${result.query ? "yes" : "no"}`);
     lines.push(`- Scope filter active: ${result.scope ? "yes" : "no"}`);
     lines.push(`- Type filter active: ${result.type ? "yes" : "no"}`);
+    lines.push(`- Language filter active: ${result.language ? "yes" : "no"}`);
+    lines.push(`- Isolation mode: ${result.isolationMode || "strict"}`);
   }
 
   return lines.join("\n");
@@ -918,12 +932,12 @@ export function usageText() {
     "  node src/cli.js sync-knowledge [--config <file>] --title <text> (--content <text> | --message <text>) [--project <name>] [--source <text>] [--tags a,b] [--notion-token <token>] [--notion-page-id <id>] [--plan-approved true] [--format json|text]",
     "  node src/cli.js ingest-security --input <prowler.json> [--status-filter all|non-pass|fail] [--max-findings 200] [--output <file>] [--plan-approved true] [--format json|text]",
     "  node src/cli.js select [--config <file>] (--input <file> | --workspace <dir>) --focus <text> [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
-    "  node src/cli.js teach [--config <file>] (--input <file> | --workspace <dir>) --task <text> --objective <text> [--changed-files a,b] [--project <name>] [--recall-query <text>] [--memory-limit 3] [--memory-type <name>] [--memory-scope <name>] [--memory-backend resilient|local-only] [--auto-recall true|false] [--no-recall] [--strict-recall true|false] [--auto-remember true|false] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
+    "  node src/cli.js teach [--config <file>] (--input <file> | --workspace <dir>) --task <text> --objective <text> [--changed-files a,b] [--project <name>] [--recall-query <text>] [--memory-limit 3] [--memory-type <name>] [--memory-scope <name>] [--memory-language <name>] [--memory-isolation strict|relaxed] [--memory-backend resilient|parallel|local-only] [--auto-recall true|false] [--no-recall] [--strict-recall true|false] [--auto-remember true|false] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--obsidian-vault <dir>] [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
     "  node src/cli.js readme [--config <file>] [--workspace <dir>] [--input <file>] [--focus <text>] [--task <text>] [--objective <text>] [--title <text>] [--output <file>] [--plan-approved true] [--format json|text]",
-    "  node src/cli.js recall [--config <file>] [--project <name>] [--query <text>] [--type <name>] [--scope <name>] [--limit 5] [--memory-backend resilient|local-only] [--degraded-recall true|false] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--debug] [--format json|text]",
-    "  node src/cli.js remember [--config <file>] --title <text> (--content <text> | --message <text>) [--project <name>] [--type <name>] [--scope <name>] [--topic <key>] [--memory-backend resilient|local-only] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--plan-approved true] [--format json|text]",
-    "  node src/cli.js close [--config <file>] --summary <text> [--learned <text>] [--next <text>] [--title <text>] [--project <name>] [--type <name>] [--scope <name>] [--memory-backend resilient|local-only] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--plan-approved true] [--format json|text]",
-    "  node src/cli.js shell [--project <name>] [--workspace <dir>] [--memory-backend resilient|local-only] [--format text|json]",
+    "  node src/cli.js recall [--config <file>] [--project <name>] [--query <text>] [--type <name>] [--scope <name>] [--memory-language <name>] [--memory-isolation strict|relaxed] [--limit 5] [--memory-backend resilient|parallel|local-only] [--degraded-recall true|false] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--obsidian-vault <dir>] [--debug] [--format json|text]",
+    "  node src/cli.js remember [--config <file>] --title <text> (--content <text> | --message <text>) [--project <name>] [--type <name>] [--scope <name>] [--topic <key>] [--memory-language <name>] [--memory-isolation strict|relaxed] [--memory-backend resilient|parallel|local-only] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--obsidian-vault <dir>] [--plan-approved true] [--format json|text]",
+    "  node src/cli.js close [--config <file>] --summary <text> [--learned <text>] [--next <text>] [--title <text>] [--project <name>] [--type <name>] [--scope <name>] [--memory-language <name>] [--memory-isolation strict|relaxed] [--memory-backend resilient|parallel|local-only] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--obsidian-vault <dir>] [--plan-approved true] [--format json|text]",
+    "  node src/cli.js shell [--project <name>] [--workspace <dir>] [--memory-backend resilient|parallel|local-only] [--format text|json]",
     "",
     "Input file format:",
     '  { "chunks": [ { "id": "x", "source": "src/file.ts", "kind": "code", "content": "..." } ] }',
@@ -945,7 +959,9 @@ export function usageText() {
     "  teach recalls durable memory automatically unless you pass --no-recall.",
     "  auto recall can be disabled globally with memory.autoRecall or per command with --auto-recall false.",
     "  auto remember can be enabled with --auto-remember true or memory.autoRemember=true.",
-    "  memory backend defaults to resilient (local JSONL + optional external battery), configurable with memory.backend or --memory-backend.",
+    "  memory backend defaults to resilient (local JSONL + optional external battery); use parallel to read/write local+obsidian together.",
+    "  memory isolation defaults to strict and can be relaxed with --memory-isolation relaxed.",
+    "  use --memory-language (or changed-files in teach) to enforce language-aware recall and prevent cross-project language drift.",
     "  Engram is treated as an optional external battery only; use --external-battery false to disable that contingency tier.",
     "  auto remember always sanitizes sensitive paths and redacts secret-like fragments before save.",
     "  teach now tries multiple smarter recall queries before giving up.",

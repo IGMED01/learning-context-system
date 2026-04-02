@@ -60,6 +60,11 @@ function normalizeKnowledgeEntry(value, fallback = {}) {
   const updatedAt = asText(record.updatedAt) || asText(fallbackRecord.updatedAt) || createdAt;
   const slug = asText(record.slug) || asText(fallbackRecord.slug) || slugify(title);
   const tags = asStringArray(record.tags);
+  const scope = asText(record.scope) || asText(fallbackRecord.scope);
+  const topic = asText(record.topic) || asText(fallbackRecord.topic);
+  const language = asText(record.language) || asText(fallbackRecord.language);
+  const sector = asText(record.sector) || asText(fallbackRecord.sector);
+  const memoryType = asText(record.memoryType) || asText(fallbackRecord.memoryType);
 
   return {
     id: asText(record.id) || asText(fallbackRecord.id) || slug,
@@ -71,7 +76,12 @@ function normalizeKnowledgeEntry(value, fallback = {}) {
     tags,
     createdAt,
     updatedAt,
-    slug
+    slug,
+    ...(scope ? { scope } : {}),
+    ...(topic ? { topic } : {}),
+    ...(language ? { language } : {}),
+    ...(sector ? { sector } : {}),
+    ...(memoryType ? { memoryType } : {})
   };
 }
 
@@ -93,6 +103,53 @@ function slugify(value) {
     .replace(/(^-|-$)/gu, "");
 
   return compact.slice(0, 100) || "note";
+}
+
+/**
+ * @param {string} typeValue
+ * @returns {string}
+ */
+function resolveVaultSector(typeValue) {
+  const normalized = slugify(typeValue || "memories");
+
+  if (["skill", "skills"].includes(normalized)) {
+    return "skills";
+  }
+
+  if (["tool", "tools", "cli", "runtime", "integration", "adapter"].includes(normalized)) {
+    return "tools";
+  }
+
+  if (
+    [
+      "learning",
+      "lesson",
+      "lessons",
+      "teaching",
+      "teaching-packet",
+      "learning-packet",
+      "learning-packets",
+      "session-close"
+    ].includes(normalized)
+  ) {
+    return "learning-packets";
+  }
+
+  if (
+    [
+      "project",
+      "projects",
+      "architecture",
+      "decision",
+      "pattern",
+      "bugfix",
+      "release"
+    ].includes(normalized)
+  ) {
+    return "projects";
+  }
+
+  return "memories";
 }
 
 /**
@@ -178,11 +235,15 @@ function parseMarkdownEntry(raw, filePath, project, parseFrontmatter) {
   const titleFromFile = path.basename(filePath, ".md");
   const nowIso = new Date().toISOString();
   const title = asText(data.title) || titleFromFile;
-  const type = asText(data.type) || inferTypeFromPath(filePath);
+  const type = asText(data.type) || asText(data.memoryType) || inferTypeFromPath(filePath);
+  const sector = asText(data.sector) || inferTypeFromPath(filePath);
   const createdAt = asText(data.createdAt) || nowIso;
   const updatedAt = asText(data.updatedAt) || createdAt;
   const source = asText(data.source) || "obsidian";
   const tags = asStringArray(data.tags);
+  const scope = asText(data.scope);
+  const topic = asText(data.topic);
+  const language = asText(data.language);
 
   return {
     id: asText(data.id) || slugify(title),
@@ -194,7 +255,12 @@ function parseMarkdownEntry(raw, filePath, project, parseFrontmatter) {
     tags,
     createdAt,
     updatedAt,
-    slug: slugify(title)
+    slug: slugify(title),
+    ...(scope ? { scope } : {}),
+    ...(topic ? { topic } : {}),
+    ...(language ? { language } : {}),
+    ...(sector ? { sector } : {}),
+    ...(type ? { memoryType: type } : {})
   };
 }
 
@@ -500,7 +566,8 @@ export function createObsidianProvider(options = {}) {
      */
     async sync(entry) {
       const projectKey = normalizeProject(asText(entry.project) || "_default");
-      const typeKey = normalizeType(asText(entry.type) || "memories");
+      const rawType = asText(entry.type) || "memories";
+      const typeKey = normalizeType(asText(entry.sector) || resolveVaultSector(rawType));
       const title = asText(entry.title);
       const content = asText(entry.content);
 
@@ -563,15 +630,23 @@ export function createObsidianProvider(options = {}) {
             const nowIso = new Date().toISOString();
             const updatedAt = asText(entry.updatedAt) || nowIso;
             const finalCreatedAt = createdAt || updatedAt;
+            const scope = asText(entry.scope);
+            const topic = asText(entry.topic);
+            const language = asText(entry.language).toLowerCase();
             const frontmatter = {
               id: asText(entry.id) || slug,
               title,
               project: projectKey,
-              type: typeKey,
+              type: rawType,
+              memoryType: rawType,
+              sector: typeKey,
               source: asText(entry.source) || "lcs-cli",
               tags: asStringArray(entry.tags),
               createdAt: finalCreatedAt,
-              updatedAt
+              updatedAt,
+              ...(scope ? { scope } : {}),
+              ...(topic ? { topic } : {}),
+              ...(language ? { language } : {})
             };
             const markdown = matter.stringify(content, frontmatter);
 
@@ -581,12 +656,17 @@ export function createObsidianProvider(options = {}) {
               title,
               content,
               project: projectKey,
-              type: typeKey,
+              type: rawType,
+              memoryType: rawType,
+              sector: typeKey,
               source: frontmatter.source,
               tags: frontmatter.tags,
               createdAt: finalCreatedAt,
               updatedAt,
-              slug
+              slug,
+              ...(scope ? { scope } : {}),
+              ...(topic ? { topic } : {}),
+              ...(language ? { language } : {})
             };
 
             await upsertCacheEntry(projectKey, filePath, payload);

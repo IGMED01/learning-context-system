@@ -7,6 +7,11 @@
  *   content: string,
  *   project?: string,
  *   type?: string,
+ *   scope?: string,
+ *   topic?: string,
+ *   language?: string,
+ *   sector?: string,
+ *   memoryType?: string,
  *   source?: string,
  *   tags?: string[],
  *   createdAt?: string,
@@ -260,4 +265,3 @@ export function withRetry(provider, retryPolicy) {
     }
   };
 }
-

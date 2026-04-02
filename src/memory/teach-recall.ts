@@ -31,6 +31,8 @@ export interface ResolveTeachRecallInput {
   limit?: number;
   scope?: string;
   type?: string;
+  language?: string;
+  isolationMode?: "strict" | "relaxed";
   strictRecall?: boolean;
   retryAttempts?: number;
   retryBackoffMs?: number;
@@ -213,6 +215,9 @@ export async function resolveTeachRecall(
             project: input.project,
             scope: input.scope ?? "project",
             type: input.type,
+            language: input.language,
+            isolationMode: input.isolationMode,
+            changedFiles,
             limit: candidateLimit
           },
           {
