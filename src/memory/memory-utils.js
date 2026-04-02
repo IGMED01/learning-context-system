@@ -50,6 +50,9 @@ export function memoryEntriesToChunks(entries, options = {}) {
     content: [
       entry.title,
       entry.content,
+      typeof entry.freshnessNote === "string" && entry.freshnessNote.trim()
+        ? entry.freshnessNote.trim()
+        : "",
       options.query ? `Recall query: ${options.query}` : "",
       `Memory type: ${entry.type}`,
       `Memory scope: ${entry.scope}`

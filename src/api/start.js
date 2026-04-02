@@ -19,6 +19,9 @@ import {
 } from "./security-runtime.js";
 import { log } from "../core/logger.js";
 import { resolveSafePathWithinWorkspace } from "../utils/path-utils.js";
+import { migrate as migrateLocalOnlyToKnowledgeBackend } from "../migrations/migrateLocalOnlyToKnowledgeBackend.js";
+import { migrate as migrateMemoryJSONLAddTimestamps } from "../migrations/migrateMemoryJSONLAddTimestamps.js";
+import { migrate as migrateNotionSyncToNotionProvider } from "../migrations/migrateNotionSyncToNotionProvider.js";
 
 // Import handlers to register all routes
 import "./handlers.js";
@@ -91,6 +94,24 @@ const MIME_TYPES = {
   ".ttf":  "font/ttf",
   ".map":  "application/json",
 };
+
+async function runStartupMigrations() {
+  const results = await Promise.allSettled([
+    migrateLocalOnlyToKnowledgeBackend(process.cwd()),
+    migrateMemoryJSONLAddTimestamps(process.cwd()),
+    migrateNotionSyncToNotionProvider(process.cwd())
+  ]);
+
+  for (const result of results) {
+    if (result.status === "rejected") {
+      log("warn", "startup migration failed", {
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason)
+      });
+    }
+  }
+}
+
+await runStartupMigrations();
 
 /**
  * Try to serve a static file from ui/dist.
@@ -228,6 +249,7 @@ const PUBLIC_API_ROUTES = new Set(["/api/health"]);
 const rateLimiter = createRateLimiter({
   heavyRoutes: [
     "/api/agent",
+    "/api/agent/stream",
     "/api/mitosis",
     "/api/chat",
     "/api/eval",

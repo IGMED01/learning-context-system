@@ -37,9 +37,14 @@ import { recordCommandMetric } from "../observability/metrics-store.js";
 import { resolveEndpointContextProfile, selectEndpointContext } from "../context/context-mode.js";
 import { loadApiAxioms, formatApiAxiomsMarkdown } from "./axioms-loader.js";
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { sanitizeChunkContent } from "../guard/chunk-sanitizer.js";
 import { resolveSafePathWithinWorkspace as resolveWorkspacePath } from "../utils/path-utils.js";
+import { getSessionCosts, saveSessionCosts } from "../observability/cost-tracker.js";
+import "./commands/agent.js";
+import "./commands/costs.js";
+import "./commands/health.js";
 import "./commands/tasks.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -621,18 +626,6 @@ registerRoute("POST", "/api/guard", async (/** @type {ApiRequest} */ req) => {
     userMessage: result.userMessage,
     results: result.results,
     durationMs: result.durationMs
-  });
-});
-
-// ── GET /api/health ──────────────────────────────────────────────────
-
-registerRoute("GET", "/api/health", async () => {
-  const result = await runCli(["doctor", "--format", "json"]);
-  const parsed = tryParseJson(result.stdout ?? "");
-
-  return jsonResponse(result.exitCode === 0 ? 200 : 503, {
-    status: result.exitCode === 0 ? "healthy" : "degraded",
-    ...(parsed ?? {})
   });
 });
 
@@ -1405,6 +1398,12 @@ registerRoute("POST", "/api/chat", async (/** @type {ApiRequest} */ req) => {
   const chunks = rawChunks.slice(0, 100);
   const withContext = req.body.withContext !== false;
   const model = optionalField(req.body, "model");
+  const bodySessionId = optionalField(req.body, "sessionId");
+  const headerSessionId =
+    typeof req.headers?.["x-session-id"] === "string"
+      ? req.headers["x-session-id"].trim()
+      : "";
+  const sessionId = bodySessionId || headerSessionId || randomUUID();
   const language = typeof req.body.language === "string" ? req.body.language : undefined;
   const framework = typeof req.body.framework === "string" ? req.body.framework : undefined;
   const domain = typeof req.body.domain === "string" ? req.body.domain : undefined;
@@ -1527,7 +1526,7 @@ registerRoute("POST", "/api/chat", async (/** @type {ApiRequest} */ req) => {
     }
   }
 
-  const result = await chatCompletion({ query, context, model });
+  const result = await chatCompletion({ query, context, model, sessionId });
   const parsed = parseLlmResponse(String(result.response ?? ""));
   const selectedChunks = withContext ? contextSelection.selectedChunks.length : 0;
   const selectedTokens = withContext ? contextSelection.usedTokens : 0;
@@ -1567,6 +1566,13 @@ registerRoute("POST", "/api/chat", async (/** @type {ApiRequest} */ req) => {
     }
   });
 
+  await saveSessionCosts(sessionId, process.cwd()).catch((error) => {
+    log("warn", "failed to persist session costs", {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  });
+
   return jsonResponse(result.ok ? 200 : 503, {
     status: result.ok ? "ok" : "degraded",
     degraded: result.ok !== true,
@@ -1574,6 +1580,8 @@ registerRoute("POST", "/api/chat", async (/** @type {ApiRequest} */ req) => {
     model: result.model,
     tokens: result.tokens,
     provider: result.provider,
+    sessionId,
+    costs: getSessionCosts(sessionId),
     withContext,
     chunksUsed: selectedChunks,
     contextMode: contextSelection.mode,

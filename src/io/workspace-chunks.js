@@ -1,8 +1,10 @@
 // @ts-check
 
-import { readFile, readdir } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { basename, extname, isAbsolute, relative, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { chunkDocument } from "../processing/chunker.js";
 import {
   extractCodeSymbols,
@@ -27,7 +29,8 @@ import { buildSafeEnv } from "../core/safe-env.js";
 /**
  * @typedef {{
  *   absolutePath: string,
- *   source: string
+ *   source: string,
+ *   mtimeMs: number
  * }} WorkspaceFile
  */
 
@@ -106,6 +109,9 @@ const ALLOWED_EXTENSIONS = new Set([
 ]);
 
 const MAX_FILE_CHARS = 32000;
+const MAX_SCAN_FILES = 200;
+const PARALLEL_SCAN_CONCURRENCY = 10;
+const FRONTMATTER_MAX_LINES = 30;
 const FAST_SCANNER_RESPONSE_VERSION = "1.0.0";
 const FAST_SCANNER_MIN_TIMEOUT_MS = 200;
 const ALLOWED_FILE_NAMES = new Set(["README.md", "AGENTS.md", "agents.md", "package.json"]);
@@ -292,7 +298,8 @@ function collectWorkspaceFileCandidate(
 
   files.push({
     absolutePath,
-    source: normalizedSource
+    source: normalizedSource,
+    mtimeMs: 0
   });
 }
 
@@ -520,6 +527,92 @@ async function discoverWorkspaceFiles(
 }
 
 /**
+ * @param {WorkspaceFile[]} files
+ * @returns {Promise<WorkspaceFile[]>}
+ */
+async function hydrateWorkspaceFileFreshness(files) {
+  return Promise.all(
+    files.map(async (file) => {
+      try {
+        const metadata = await stat(file.absolutePath);
+        return {
+          ...file,
+          mtimeMs: Number.isFinite(metadata.mtimeMs) ? metadata.mtimeMs : 0
+        };
+      } catch {
+        return {
+          ...file,
+          mtimeMs: 0
+        };
+      }
+    })
+  );
+}
+
+/**
+ * @param {WorkspaceFile} file
+ */
+function shouldReadHeaderOnly(file) {
+  const normalized = normalizeSourcePath(file.source).toLowerCase();
+  return normalized === "engram.md" || normalized.endsWith("/engram.md") || normalized.includes("manifest");
+}
+
+/**
+ * @param {string} filePath
+ */
+async function readFileHeader(filePath) {
+  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const lineReader = createInterface({
+    input: stream,
+    crlfDelay: Infinity
+  });
+  /** @type {string[]} */
+  const lines = [];
+
+  try {
+    for await (const line of lineReader) {
+      lines.push(line);
+      if (lines.length >= FRONTMATTER_MAX_LINES) {
+        break;
+      }
+    }
+  } finally {
+    lineReader.close();
+    stream.destroy();
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {WorkspaceFile[]} files
+ * @param {number} [concurrency]
+ * @returns {Promise<Array<PromiseSettledResult<{ file: WorkspaceFile, content: string }>>>}
+ */
+async function readWorkspaceFilesInParallel(files, concurrency = PARALLEL_SCAN_CONCURRENCY) {
+  /** @type {Array<PromiseSettledResult<{ file: WorkspaceFile, content: string }>>} */
+  const results = [];
+
+  for (let index = 0; index < files.length; index += concurrency) {
+    const batch = files.slice(index, index + concurrency);
+    const settled = await Promise.allSettled(
+      batch.map(async (file) => {
+        const content = shouldReadHeaderOnly(file)
+          ? await readFileHeader(file.absolutePath)
+          : await readFile(file.absolutePath, "utf8");
+        return {
+          file,
+          content
+        };
+      })
+    );
+    results.push(...settled);
+  }
+
+  return results;
+}
+
+/**
  * @param {string} rootPath
  * @param {LoadWorkspaceChunksOptions} [options]
  */
@@ -543,8 +636,23 @@ export async function loadWorkspaceChunks(rootPath, options = {}) {
   /** @type {Chunk[]} */
   const chunks = [];
 
-  for (const file of files) {
-    const raw = await readFile(file.absolutePath, "utf8");
+  const filesWithFreshness = await hydrateWorkspaceFileFreshness(files);
+  const sortedFiles = filesWithFreshness.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const cappedFiles = sortedFiles.slice(0, MAX_SCAN_FILES);
+
+  if (sortedFiles.length > cappedFiles.length) {
+    stats.ignoredFiles += sortedFiles.length - cappedFiles.length;
+  }
+
+  const readResults = await readWorkspaceFilesInParallel(cappedFiles);
+
+  for (const readResult of readResults) {
+    if (readResult.status !== "fulfilled") {
+      stats.ignoredFiles += 1;
+      continue;
+    }
+
+    const { file, content: raw } = readResult.value;
     const redaction = redactSensitiveContent(raw, securityPolicy);
     const wasTruncated = redaction.content.length > MAX_FILE_CHARS;
     const content = wasTruncated

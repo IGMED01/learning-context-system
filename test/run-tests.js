@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { mkdtemp, mkdir, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
@@ -58,6 +59,7 @@ import {
   generateWithProviderFallback,
   normalizeGenerateResult
 } from "../src/llm/provider.js";
+import { chatCompletion } from "../src/llm/openrouter-provider.js";
 import { buildLlmPrompt } from "../src/llm/prompt-builder.js";
 import { parseLlmResponse } from "../src/llm/response-parser.js";
 import {
@@ -77,6 +79,14 @@ import {
   resetAllSessions,
   updateContext as updateConversationContext
 } from "../src/orchestration/conversation-manager.js";
+import {
+  calculateTokenBudgetState,
+  getCompactState,
+  recordCompactFailure,
+  recordCompactSuccess,
+  resetCompactState
+} from "../src/orchestration/context-budget.js";
+import { startBackgroundSummary } from "../src/orchestration/agent-summarizer.js";
 import { createAuthMiddleware } from "../src/api/auth-middleware.js";
 import { createNexusApiServer } from "../src/api/server.js";
 import {
@@ -85,7 +95,9 @@ import {
   resolveCorsOrigin
 } from "../src/api/security-runtime.js";
 import { createSanitizedCliErrorPayload } from "../src/api/handlers.js";
-import { matchRoute } from "../src/api/router.js";
+import { handleRequest, matchRoute } from "../src/api/router.js";
+import { createAgentStreamRawHandler } from "../src/api/commands/agent.js";
+import { getHealthStatus } from "../src/api/commands/health.js";
 import { findCommand, registerCommand } from "../src/core/command-registry.js";
 import {
   TASK_STATUS,
@@ -114,6 +126,8 @@ import { evaluateRagGoldenSetGate } from "../src/eval/rag-golden-set-gate.js";
 import { evaluateFineTuningReadinessGate } from "../src/eval/fine-tuning-readiness-gate.js";
 import { evaluateFt1FormatGate } from "../src/eval/ft1-format-gate.js";
 import { evaluateFt2IntentGate } from "../src/eval/ft2-intent-gate.js";
+import { evaluateFt3RiskGate } from "../src/eval/ft3-risk-gate.js";
+import { evaluateFt4QueryRewriteGate } from "../src/eval/ft4-query-rewrite-gate.js";
 import {
   getObservabilityReport,
   recordCommandMetric
@@ -136,6 +150,11 @@ import {
   createEngramClient,
   searchOutputToChunks
 } from "../src/memory/engram-client.js";
+import {
+  memoryAgeDays,
+  memoryFreshnessText,
+  truncateMemoryContent
+} from "../src/memory/memory-staleness.js";
 import { createExternalBatteryMemoryClient } from "../src/memory/external-battery-memory-client.js";
 import { createLocalMemoryStore } from "../src/memory/local-memory-store.js";
 import { createResilientMemoryClient } from "../src/memory/resilient-memory-client.js";
@@ -146,6 +165,17 @@ import {
   createNotionSyncClient,
   resolveNotionConfig
 } from "../src/integrations/notion-sync.js";
+import { createObsidianProvider } from "../src/integrations/obsidian-provider.js";
+import { createKnowledgeResolver } from "../src/integrations/knowledge-resolver.js";
+import { ProviderWriteError } from "../src/integrations/knowledge-provider.js";
+import {
+  clearCostSessions,
+  getSessionCosts,
+  initSession,
+  recordUsage,
+  restoreSessionCosts,
+  saveSessionCosts
+} from "../src/observability/cost-tracker.js";
 import {
   compressContent,
   NEXUS_SCORING_PROFILES,
@@ -183,6 +213,7 @@ import {
 } from "../src/ci/north-star-gate.js";
 import { buildNexusOpenApiSpec } from "../src/interface/nexus-openapi.js";
 import { createNexusApiClient } from "../src/sdk/nexus-api-client.js";
+import { atomicWrite } from "../src/integrations/fs-safe.js";
 import {
   formatDomainEvalSuiteReport,
   runDomainEvalSuite
@@ -205,6 +236,7 @@ import {
   runMitosisPipeline
 } from "../src/orchestration/agent-synthesizer.js";
 import { runRepairLoop } from "../src/orchestration/repair-loop.js";
+import { runAgentWithRecovery } from "../src/orchestration/agent-query-loop.js";
 import { spawnAgent } from "../src/orchestration/nexus-agent-runtime.js";
 import { spawnNexusAgent } from "../src/orchestration/nexus-agent-bridge.js";
 
@@ -218,6 +250,27 @@ process.env.LCS_TEST_MEMORY_QUARANTINE_DIR = path.join(TEST_MEMORY_ROOT, "memory
 
 function run(name, fn) {
   tests.push({ name, fn });
+}
+
+/**
+ * @template TEvent
+ * @template TResult
+ * @param {AsyncGenerator<TEvent, TResult, void>} generator
+ */
+async function collectGeneratorResult(generator) {
+  /** @type {TEvent[]} */
+  const events = [];
+
+  while (true) {
+    const step = await generator.next();
+    if (step.done) {
+      return {
+        events,
+        result: step.value
+      };
+    }
+    events.push(step.value);
+  }
 }
 
 /**
@@ -1054,6 +1107,202 @@ run("clean context mode supports source budgets by origin", () => {
   }
 });
 
+run("context budget computes warning autocompact and blocking thresholds", () => {
+  const previousWindow = process.env.LCS_CONTEXT_WINDOW;
+  const previousSummaryMax = process.env.LCS_SUMMARY_OUTPUT_MAX;
+  const previousWarning = process.env.LCS_WARNING_BUFFER;
+  const previousAutocompact = process.env.LCS_AUTOCOMPACT_BUFFER;
+  const previousBlocking = process.env.LCS_BLOCKING_BUFFER;
+  const previousDisable = process.env.LCS_DISABLE_AUTO_COMPACT;
+
+  try {
+    process.env.LCS_CONTEXT_WINDOW = "100";
+    process.env.LCS_SUMMARY_OUTPUT_MAX = "10";
+    process.env.LCS_WARNING_BUFFER = "30";
+    process.env.LCS_AUTOCOMPACT_BUFFER = "20";
+    process.env.LCS_BLOCKING_BUFFER = "5";
+    process.env.LCS_DISABLE_AUTO_COMPACT = "false";
+    resetCompactState();
+
+    const budget = calculateTokenBudgetState(80);
+    assert.equal(budget.aboveWarning, true);
+    assert.equal(budget.aboveAutocompact, true);
+    assert.equal(budget.aboveBlocking, false);
+    assert.equal(budget.shouldCompact, true);
+    assert.equal(typeof budget.pctLeft, "number");
+  } finally {
+    resetCompactState();
+    if (previousWindow === undefined) {
+      delete process.env.LCS_CONTEXT_WINDOW;
+    } else {
+      process.env.LCS_CONTEXT_WINDOW = previousWindow;
+    }
+    if (previousSummaryMax === undefined) {
+      delete process.env.LCS_SUMMARY_OUTPUT_MAX;
+    } else {
+      process.env.LCS_SUMMARY_OUTPUT_MAX = previousSummaryMax;
+    }
+    if (previousWarning === undefined) {
+      delete process.env.LCS_WARNING_BUFFER;
+    } else {
+      process.env.LCS_WARNING_BUFFER = previousWarning;
+    }
+    if (previousAutocompact === undefined) {
+      delete process.env.LCS_AUTOCOMPACT_BUFFER;
+    } else {
+      process.env.LCS_AUTOCOMPACT_BUFFER = previousAutocompact;
+    }
+    if (previousBlocking === undefined) {
+      delete process.env.LCS_BLOCKING_BUFFER;
+    } else {
+      process.env.LCS_BLOCKING_BUFFER = previousBlocking;
+    }
+    if (previousDisable === undefined) {
+      delete process.env.LCS_DISABLE_AUTO_COMPACT;
+    } else {
+      process.env.LCS_DISABLE_AUTO_COMPACT = previousDisable;
+    }
+  }
+});
+
+run("context budget circuit breaker opens after three consecutive compaction failures", () => {
+  const previousWindow = process.env.LCS_CONTEXT_WINDOW;
+  const previousSummaryMax = process.env.LCS_SUMMARY_OUTPUT_MAX;
+  const previousAutocompact = process.env.LCS_AUTOCOMPACT_BUFFER;
+  const previousDisable = process.env.LCS_DISABLE_AUTO_COMPACT;
+
+  try {
+    process.env.LCS_CONTEXT_WINDOW = "100";
+    process.env.LCS_SUMMARY_OUTPUT_MAX = "0";
+    process.env.LCS_AUTOCOMPACT_BUFFER = "20";
+    process.env.LCS_DISABLE_AUTO_COMPACT = "false";
+    resetCompactState();
+
+    recordCompactFailure();
+    recordCompactFailure();
+    recordCompactFailure();
+    recordCompactFailure();
+
+    const budget = calculateTokenBudgetState(90);
+    const compactState = getCompactState();
+    assert.equal(compactState.consecutiveFailures >= 3, true);
+    assert.equal(budget.aboveAutocompact, true);
+    assert.equal(budget.shouldCompact, false);
+
+    recordCompactSuccess();
+    const recovered = calculateTokenBudgetState(90);
+    assert.equal(recovered.shouldCompact, true);
+  } finally {
+    resetCompactState();
+    if (previousWindow === undefined) {
+      delete process.env.LCS_CONTEXT_WINDOW;
+    } else {
+      process.env.LCS_CONTEXT_WINDOW = previousWindow;
+    }
+    if (previousSummaryMax === undefined) {
+      delete process.env.LCS_SUMMARY_OUTPUT_MAX;
+    } else {
+      process.env.LCS_SUMMARY_OUTPUT_MAX = previousSummaryMax;
+    }
+    if (previousAutocompact === undefined) {
+      delete process.env.LCS_AUTOCOMPACT_BUFFER;
+    } else {
+      process.env.LCS_AUTOCOMPACT_BUFFER = previousAutocompact;
+    }
+    if (previousDisable === undefined) {
+      delete process.env.LCS_DISABLE_AUTO_COMPACT;
+    } else {
+      process.env.LCS_DISABLE_AUTO_COMPACT = previousDisable;
+    }
+  }
+});
+
+run("context budget can disable auto compact via env flag", () => {
+  const previousDisable = process.env.LCS_DISABLE_AUTO_COMPACT;
+  const previousWindow = process.env.LCS_CONTEXT_WINDOW;
+  const previousSummaryMax = process.env.LCS_SUMMARY_OUTPUT_MAX;
+  const previousAutocompact = process.env.LCS_AUTOCOMPACT_BUFFER;
+
+  try {
+    process.env.LCS_DISABLE_AUTO_COMPACT = "true";
+    process.env.LCS_CONTEXT_WINDOW = "100";
+    process.env.LCS_SUMMARY_OUTPUT_MAX = "0";
+    process.env.LCS_AUTOCOMPACT_BUFFER = "20";
+    resetCompactState();
+
+    const budget = calculateTokenBudgetState(90);
+    assert.equal(budget.aboveAutocompact, true);
+    assert.equal(budget.shouldCompact, false);
+  } finally {
+    resetCompactState();
+    if (previousDisable === undefined) {
+      delete process.env.LCS_DISABLE_AUTO_COMPACT;
+    } else {
+      process.env.LCS_DISABLE_AUTO_COMPACT = previousDisable;
+    }
+    if (previousWindow === undefined) {
+      delete process.env.LCS_CONTEXT_WINDOW;
+    } else {
+      process.env.LCS_CONTEXT_WINDOW = previousWindow;
+    }
+    if (previousSummaryMax === undefined) {
+      delete process.env.LCS_SUMMARY_OUTPUT_MAX;
+    } else {
+      process.env.LCS_SUMMARY_OUTPUT_MAX = previousSummaryMax;
+    }
+    if (previousAutocompact === undefined) {
+      delete process.env.LCS_AUTOCOMPACT_BUFFER;
+    } else {
+      process.env.LCS_AUTOCOMPACT_BUFFER = previousAutocompact;
+    }
+  }
+});
+
+run("conversation manager blocks new turns when context budget is over blocking threshold", () => {
+  const previousWindow = process.env.LCS_CONTEXT_WINDOW;
+  const previousSummaryMax = process.env.LCS_SUMMARY_OUTPUT_MAX;
+  const previousBlocking = process.env.LCS_BLOCKING_BUFFER;
+  const previousMaxTurns = process.env.LCS_CONVERSATION_MAX_TURNS;
+
+  try {
+    process.env.LCS_CONTEXT_WINDOW = "60";
+    process.env.LCS_SUMMARY_OUTPUT_MAX = "0";
+    process.env.LCS_BLOCKING_BUFFER = "5";
+    process.env.LCS_CONVERSATION_MAX_TURNS = "500";
+    resetAllSessions();
+
+    const session = createConversationSession("nexus");
+    addConversationTurn(session.sessionId, "user", "x".repeat(180));
+
+    assert.throws(
+      () => addConversationTurn(session.sessionId, "system", "intento adicional"),
+      /Context window at capacity/i
+    );
+  } finally {
+    resetAllSessions();
+    if (previousWindow === undefined) {
+      delete process.env.LCS_CONTEXT_WINDOW;
+    } else {
+      process.env.LCS_CONTEXT_WINDOW = previousWindow;
+    }
+    if (previousSummaryMax === undefined) {
+      delete process.env.LCS_SUMMARY_OUTPUT_MAX;
+    } else {
+      process.env.LCS_SUMMARY_OUTPUT_MAX = previousSummaryMax;
+    }
+    if (previousBlocking === undefined) {
+      delete process.env.LCS_BLOCKING_BUFFER;
+    } else {
+      process.env.LCS_BLOCKING_BUFFER = previousBlocking;
+    }
+    if (previousMaxTurns === undefined) {
+      delete process.env.LCS_CONVERSATION_MAX_TURNS;
+    } else {
+      process.env.LCS_CONVERSATION_MAX_TURNS = previousMaxTurns;
+    }
+  }
+});
+
 run("conversation manager compacts old turns into summary with retention policy", () => {
   const previousSummaryEvery = process.env.LCS_CONVERSATION_SUMMARY_EVERY;
   const previousSummaryKeep = process.env.LCS_CONVERSATION_SUMMARY_KEEP_TURNS;
@@ -1884,7 +2133,7 @@ run("workspace scanning collects repository chunks", async () => {
   const result = await loadWorkspaceChunks(".");
 
   assert.ok(result.payload.chunks.length > 5);
-  assert.ok(result.payload.chunks.some((chunk) => chunk.source === "src/cli.js"));
+  assert.ok(result.payload.chunks.some((chunk) => chunk.source.startsWith("src/")));
   assert.ok(result.payload.chunks.some((chunk) => chunk.source === "package.json"));
 });
 
@@ -2017,6 +2266,84 @@ run("workspace scanning falls back to native walk when fastScanner fails", async
 
     assert.equal(result.payload.chunks.some((chunk) => chunk.source === "src/fallback.js"), true);
     assert.equal(result.stats.discoveredFiles >= 1, true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("workspace scanning caps ingestion to 200 newest files by mtime", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-scan-cap-"));
+
+  try {
+    const baseTimestampSeconds = 1_700_000_000;
+
+    for (let index = 0; index < 205; index += 1) {
+      const fileName = `doc-${String(index).padStart(3, "0")}.md`;
+      const absolutePath = path.join(tempRoot, fileName);
+      await writeFile(absolutePath, `# ${fileName}\n`, "utf8");
+      const timestamp = new Date((baseTimestampSeconds + index) * 1000);
+      await utimes(absolutePath, timestamp, timestamp);
+    }
+
+    const result = await loadWorkspaceChunks(tempRoot);
+    const scannedSources = new Set(result.payload.chunks.map((chunk) => chunk.source));
+
+    assert.equal(result.stats.includedFiles, 200);
+    assert.equal(scannedSources.has("doc-204.md"), true);
+    assert.equal(scannedSources.has("doc-000.md"), false);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("workspace scanning tolerates unreadable sidecar candidates via Promise.allSettled", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-scan-settled-"));
+
+  try {
+    await writeFile(path.join(tempRoot, "keep.md"), "# Keep me\n", "utf8");
+    const sidecarScript = path.join(tempRoot, "fastscan-missing.mjs");
+    await writeFile(
+      sidecarScript,
+      [
+        "import { readFileSync } from 'node:fs';",
+        "JSON.parse(readFileSync(0, 'utf8'));",
+        "process.stdout.write(JSON.stringify({ version: '1.0.0', files: ['keep.md', 'missing.md'] }));"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const result = await loadWorkspaceChunks(tempRoot, {
+      scan: {
+        fastScanner: {
+          enabled: true,
+          binaryPath: process.execPath,
+          arguments: [sidecarScript],
+          timeoutMs: 3000
+        }
+      }
+    });
+
+    assert.equal(result.payload.chunks.some((chunk) => chunk.source === "keep.md"), true);
+    assert.equal(result.payload.chunks.some((chunk) => chunk.source === "missing.md"), false);
+    assert.equal(result.stats.includedFiles, 1);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("workspace scanning reads only header lines for engram manifests", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-scan-header-"));
+
+  try {
+    const lines = Array.from({ length: 60 }, (_, index) => `line-${index + 1}`);
+    await writeFile(path.join(tempRoot, "ENGRAM.md"), lines.join("\n"), "utf8");
+
+    const result = await loadWorkspaceChunks(tempRoot);
+    const manifestChunk = result.payload.chunks.find((chunk) => chunk.source === "ENGRAM.md");
+
+    assert.ok(manifestChunk);
+    assert.match(manifestChunk.content, /line-30/);
+    assert.doesNotMatch(manifestChunk.content, /line-31/);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
@@ -3119,6 +3446,55 @@ run("project doctor avoids cmd.exe wrappers for npm checks on Windows", async ()
 });
 
 run("code gate keeps shell execution disabled for external tool runners", async () => {
+  const sharedRunnerSource = await readFile(
+    path.join(process.cwd(), "src/tools/gate-tools/shared.js"),
+    "utf8"
+  );
+  const typecheckToolSource = await readFile(
+    path.join(process.cwd(), "src/tools/gate-tools/typecheck.js"),
+    "utf8"
+  );
+  const lintToolSource = await readFile(
+    path.join(process.cwd(), "src/tools/gate-tools/lint.js"),
+    "utf8"
+  );
+  const buildToolSource = await readFile(
+    path.join(process.cwd(), "src/tools/gate-tools/build.js"),
+    "utf8"
+  );
+  const testToolSource = await readFile(
+    path.join(process.cwd(), "src/tools/gate-tools/test.js"),
+    "utf8"
+  );
+
+  assert.match(
+    sharedRunnerSource,
+    /execFile\(\s*command,\s*args,\s*\{[\s\S]*?shell:\s*false/iu,
+    "gate tool command runner should keep shell disabled"
+  );
+  assert.match(
+    typecheckToolSource,
+    /command:\s*"npx"/iu,
+    "typecheck tool should run via npx"
+  );
+  assert.match(
+    lintToolSource,
+    /command:\s*"npm"/iu,
+    "lint tool should run via npm"
+  );
+  assert.match(
+    buildToolSource,
+    /command:\s*"npm"/iu,
+    "build tool should run via npm"
+  );
+  assert.match(
+    testToolSource,
+    /command:\s*"npm"/iu,
+    "test tool should run via npm"
+  );
+});
+
+run("code gate orchestrator runs tools in parallel via Promise.all", async () => {
   const codeGateSource = await readFile(
     path.join(process.cwd(), "src/guard/code-gate.js"),
     "utf8"
@@ -3126,13 +3502,8 @@ run("code gate keeps shell execution disabled for external tool runners", async 
 
   assert.match(
     codeGateSource,
-    /execFile\(\s*"npx"[\s\S]*?shell:\s*false/iu,
-    "typecheck runner should keep shell disabled"
-  );
-  assert.match(
-    codeGateSource,
-    /execFile\(\s*"npm"[\s\S]*?shell:\s*false/iu,
-    "npm-based code gate runners should keep shell disabled"
+    /Promise\.all\(\s*activeTools\.map/iu,
+    "runCodeGate should execute selected tools in parallel"
   );
 });
 
@@ -4319,6 +4690,25 @@ run("engram client fails closed on Windows permission errors without cmd.exe fal
   );
 });
 
+run("NEXUS:5 fs-safe atomicWrite replaces target content without temp residue", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-atomic-write-"));
+  const targetPath = path.join(tempRoot, "state.json");
+
+  try {
+    await writeFile(targetPath, "{\"version\":1}\n", "utf8");
+    await atomicWrite(targetPath, "{\"version\":2}\n");
+
+    const content = await readFile(targetPath, "utf8");
+    const files = await readdir(tempRoot);
+    const tmpArtifacts = files.filter((entry) => entry.startsWith(".tmp."));
+
+    assert.equal(content.trim(), "{\"version\":2}");
+    assert.equal(tmpArtifacts.length, 0);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 run("local memory store saves and searches memories with engram-like output", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-local-memory-store-"));
   const store = createLocalMemoryStore({
@@ -4356,6 +4746,39 @@ run("local memory store saves and searches memories with engram-like output", as
     });
     assert.ok(chunks.length >= 1, "Expected at least 1 chunk from TF-IDF search");
     assert.match(chunks[0].content, /Auth validation order/);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:3 local memory store persists updatedAt and millisecond timestamps", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-local-memory-staleness-"));
+  const store = createLocalMemoryStore({
+    filePath: path.join(tempRoot, "memory-store.jsonl"),
+    baseDir: path.join(tempRoot, "memory")
+  });
+
+  try {
+    await store.save({
+      title: "Memory freshness baseline",
+      content: "Persist created and updated timestamps for staleness checks.",
+      type: "architecture",
+      project: "learning-context-system",
+      scope: "project"
+    });
+
+    const listed = await store.list({
+      project: "learning-context-system",
+      limit: 5
+    });
+
+    assert.equal(listed.length, 1);
+    assert.equal(typeof listed[0].createdAt, "string");
+    assert.equal(typeof listed[0].updatedAt, "string");
+    assert.equal(typeof listed[0].createdAtMs, "number");
+    assert.equal(typeof listed[0].updatedAtMs, "number");
+    assert.equal(Date.parse(String(listed[0].updatedAt)) >= Date.parse(String(listed[0].createdAt)), true);
+    assert.equal(Number(listed[0].updatedAtMs) >= Number(listed[0].createdAtMs), true);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
@@ -4738,6 +5161,194 @@ run("notion client fails fast when required config is missing", async () => {
   );
 });
 
+run("knowledge resolver local-only syncs and lists entries", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-knowledge-local-"));
+
+  try {
+    const resolver = createKnowledgeResolver({
+      cwd: tempRoot,
+      backend: "local-only",
+      syncConfig: {
+        knowledgeBackend: "local-only",
+        dlq: { enabled: true, path: ".lcs/dlq", ttlDays: 7 }
+      }
+    });
+
+    const synced = await resolver.sync({
+      title: "Memory sync learning",
+      content: "Use local-only backend to avoid external outage coupling.",
+      project: "learning-context-system",
+      source: "test-suite",
+      tags: ["knowledge", "local"]
+    });
+
+    assert.equal(synced.backend, "local-only");
+    assert.equal(synced.status, "synced");
+    assert.equal(typeof synced.path, "string");
+
+    const listed = await resolver.list("learning-context-system", { limit: 5 });
+    assert.equal(Array.isArray(listed), true);
+    assert.equal(listed.length >= 1, true);
+    assert.equal(listed[0].title.length > 0, true);
+    assert.equal(typeof listed[0].content, "string");
+
+    await resolver.stop();
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("knowledge resolver queues DLQ on transient error and retries pending entries", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-knowledge-dlq-"));
+  let attempts = 0;
+
+  try {
+    const resolver = createKnowledgeResolver({
+      cwd: tempRoot,
+      backend: "local-only",
+      syncConfig: {
+        knowledgeBackend: "local-only",
+        dlq: { enabled: true, path: ".lcs/dlq", ttlDays: 7 },
+        retryPolicy: { maxAttempts: 1, backoffMs: 1, maxBackoffMs: 5 }
+      },
+      providers: {
+        localOnly: {
+          name: "local-only",
+          async sync(entry) {
+            attempts += 1;
+            if (attempts === 1) {
+              throw new ProviderWriteError("temporary failure", {
+                provider: "local-only",
+                transient: true
+              });
+            }
+
+            return {
+              id: "entry-1",
+              action: "append",
+              status: "synced",
+              backend: "local-only",
+              title: entry.title,
+              project: entry.project ?? "",
+              source: entry.source ?? "lcs-cli",
+              tags: entry.tags ?? [],
+              parentPageId: "",
+              appendedBlocks: 1,
+              createdAt: "2026-04-02T00:00:00.000Z"
+            };
+          },
+          async delete(id) {
+            return { deleted: false, id, backend: "local-only" };
+          },
+          async search() {
+            return [];
+          },
+          async list() {
+            return [];
+          },
+          async health() {
+            return { healthy: true, provider: "local-only", detail: "ok" };
+          },
+          async getPendingSyncs() {
+            return [];
+          }
+        }
+      }
+    });
+
+    const queued = await resolver.sync({
+      title: "Queued knowledge",
+      content: "Retry should move this out of DLQ.",
+      project: "learning-context-system",
+      source: "test-suite"
+    });
+    assert.equal(queued.status, "queued");
+    assert.equal(Array.isArray(queued.pendingSyncs), true);
+    assert.equal(queued.pendingSyncs.length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    const retryResult = await resolver.retryPending("learning-context-system");
+    assert.equal(retryResult.retried >= 1, true);
+    assert.equal(retryResult.succeeded >= 1, true);
+
+    const pending = await resolver.getPendingSyncs("learning-context-system");
+    assert.equal(pending.length, 0);
+
+    await resolver.stop();
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("obsidian provider rejects traversal-like slugs", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-obsidian-slug-"));
+
+  try {
+    const provider = createObsidianProvider({
+      cwd: tempRoot
+    });
+
+    await assert.rejects(
+      () =>
+        provider.sync({
+          title: "Invalid slug",
+          content: "Traversal slug should be rejected.",
+          project: "learning-context-system",
+          slug: "../escape"
+        }),
+      /slug/i
+    );
+
+    await provider.stop?.();
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("cost tracker aggregates usage and restores persisted session", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-cost-tracker-"));
+
+  try {
+    clearCostSessions();
+    initSession("session-a");
+    recordUsage("session-a", {
+      modelId: "claude-sonnet-4-6",
+      provider: "anthropic",
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: 20,
+      cacheWriteTokens: 10,
+      costUSD: 0.0123,
+      durationMs: 420
+    });
+    recordUsage("session-a", {
+      modelId: "llama-3.3-70b-versatile",
+      provider: "openrouter",
+      inputTokens: 80,
+      outputTokens: 40,
+      costUSD: 0.004,
+      durationMs: 260
+    });
+
+    const beforeSave = getSessionCosts("session-a");
+    assert.ok(beforeSave);
+    assert.equal(beforeSave.totalCostUSD > 0, true);
+    assert.equal(beforeSave.totalDurationMs >= 680, true);
+
+    await saveSessionCosts("session-a", tempRoot);
+    clearCostSessions();
+
+    const restored = await restoreSessionCosts("session-a", tempRoot);
+    assert.ok(restored);
+    assert.equal(restored.sessionId, "session-a");
+    assert.equal(restored.totalCostUSD > 0, true);
+    assert.equal(Object.keys(restored.modelUsage).length >= 2, true);
+  } finally {
+    clearCostSessions();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 run("observability store aggregates degraded runs and recall hit rate", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-observability-"));
 
@@ -4943,6 +5554,78 @@ run("engram search output is converted into memory chunks", () => {
   assert.match(chunks[0].source, /engram:\/\/learning-context-system\/2/);
   assert.match(chunks[0].content, /Recall query: CLI Engram integration/);
   assert.equal(chunks[0].priority > 0.85, true);
+});
+
+run("NEXUS:3 memory staleness computes full-day age and freshness caveats", () => {
+  const dayMs = 86_400_000;
+  const now = Date.now();
+
+  assert.equal(memoryAgeDays(now + dayMs), 0);
+  assert.equal(memoryAgeDays(now - (2 * dayMs + 10_000)), 2);
+  assert.equal(memoryFreshnessText(now).length, 0);
+  assert.equal(/2 days old/i.test(memoryFreshnessText(now - 2 * dayMs)), true);
+});
+
+run("NEXUS:3 memory staleness truncation enforces line and byte caps", () => {
+  const longByLines = Array.from({ length: 205 }, (_, index) => `line-${index + 1}`).join("\n");
+  const lineResult = truncateMemoryContent(longByLines, 200, 500_000);
+
+  assert.equal(lineResult.wasLineTruncated, true);
+  assert.equal(lineResult.wasByteTruncated, false);
+  assert.equal(lineResult.content.split("\n").length, 200);
+  assert.equal(lineResult.content.includes("line-201"), false);
+
+  const longByBytes = Array.from({ length: 120 }, (_, index) => `payload-${index + 1}-${"x".repeat(450)}`).join("\n");
+  const byteResult = truncateMemoryContent(longByBytes, 400, 25_600);
+
+  assert.equal(byteResult.wasByteTruncated, true);
+  assert.equal(Buffer.byteLength(byteResult.content, "utf8") <= 25_600, true);
+});
+
+run("NEXUS:3 engram search returns freshness note and truncation metadata", async () => {
+  const dayMs = 86_400_000;
+  const staleTimestamp = new Date(Date.now() - 2 * dayMs).toISOString();
+  const freshTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const oversizedLines = Array.from({ length: 210 }, (_, index) => `line-${index + 1}`);
+  const stdout = [
+    "Found 2 memories:",
+    "",
+    "[1] #old-1 (architecture) - Old auth decision",
+    ...oversizedLines.map((line) => `    ${line}`),
+    `    ${staleTimestamp} | project: learning-context-system | scope: project`,
+    "",
+    "[2] #fresh-1 (learning) - Fresh auth reminder",
+    "    Keep middleware order stable.",
+    `    ${freshTimestamp} | project: learning-context-system | scope: project`
+  ].join("\n");
+
+  const client = createEngramClient({
+    cwd: "C:/repo",
+    binaryPath: "C:/repo/tools/engram/engram.exe",
+    dataDir: "C:/repo/.engram",
+    exec: async () => ({
+      stdout,
+      stderr: ""
+    })
+  });
+
+  const result = await client.search("auth", {
+    project: "learning-context-system",
+    limit: 2
+  });
+
+  assert.equal(result.entries.length, 2);
+  const staleEntry = result.entries.find((entry) => entry.id.includes("old-1"));
+  const freshEntry = result.entries.find((entry) => entry.id.includes("fresh-1"));
+  assert.ok(staleEntry);
+  assert.ok(freshEntry);
+  assert.equal(typeof staleEntry.freshnessNote, "string");
+  assert.equal(staleEntry.truncated, true);
+  assert.equal(staleEntry.content.includes("line-201"), false);
+  assert.equal(typeof staleEntry.createdAtMs, "number");
+  assert.equal(typeof staleEntry.updatedAtMs, "number");
+  assert.equal(freshEntry.freshnessNote, null);
+  assert.equal(freshEntry.truncated, false);
 });
 
 run("teach recall query builder derives shorter concept queries", () => {
@@ -8006,6 +8689,73 @@ run("NEXUS:6 provider registry resolves registered provider", async () => {
   assert.equal(output.content, "ok");
 });
 
+run("NEXUS:3 openrouter provider reports per-provider failures when all providers fail", async () => {
+  const previousOpenRouter = process.env.OPENROUTER_API_KEY;
+  const previousGroq = process.env.GROQ_API_KEY;
+  const previousCerebras = process.env.CEREBRAS_API_KEY;
+  const previousFetch = globalThis.fetch;
+
+  try {
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+    process.env.GROQ_API_KEY = "test-groq";
+    process.env.CEREBRAS_API_KEY = "test-cerebras";
+
+    globalThis.fetch = async (url) => {
+      const rawUrl = String(url);
+
+      if (rawUrl.includes("openrouter.ai")) {
+        return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      if (rawUrl.includes("api.groq.com")) {
+        throw new Error("groq network timeout");
+      }
+
+      return new Response("cerebras upstream error", {
+        status: 503,
+        headers: {
+          "content-type": "text/plain"
+        }
+      });
+    };
+
+    const result = await chatCompletion({
+      query: "Diagnose failing providers"
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.provider, "none");
+    assert.equal(Array.isArray(result.failures), true);
+    assert.equal(result.failures.length, 3);
+    assert.equal(result.failures.some((entry) => entry.provider === "openrouter"), true);
+    assert.equal(result.failures.some((entry) => entry.provider === "groq"), true);
+    assert.equal(result.failures.some((entry) => entry.provider === "cerebras"), true);
+    assert.equal(result.failures.every((entry) => typeof entry.error === "string" && entry.error.length > 0), true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousOpenRouter === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = previousOpenRouter;
+    }
+    if (previousGroq === undefined) {
+      delete process.env.GROQ_API_KEY;
+    } else {
+      process.env.GROQ_API_KEY = previousGroq;
+    }
+    if (previousCerebras === undefined) {
+      delete process.env.CEREBRAS_API_KEY;
+    } else {
+      process.env.CEREBRAS_API_KEY = previousCerebras;
+    }
+  }
+});
+
 run("NEXUS:5 pipeline builder runs ingest-process-store-recall end-to-end", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-pipeline-"));
   const executors = createDefaultExecutors({
@@ -8620,6 +9370,140 @@ run("NEXUS:7 FT-2 intent gate enforces routing accuracy and lift", () => {
   assert.equal(failing.summary.candidateAccuracy < 0.8, true);
 });
 
+run("NEXUS:7 FT-3 risk gate enforces high-risk recall and under-risk control", () => {
+  const passing = evaluateFt3RiskGate({
+    suiteName: "ft3-passing",
+    thresholds: {
+      minCandidateAccuracy: 1,
+      minCandidateMacroF1: 1,
+      minHighRiskRecall: 1,
+      minAccuracyLift: 0.3,
+      maxUnderRiskRate: 0,
+      maxUnknownRate: 0
+    },
+    cases: [
+      {
+        id: "risk-1",
+        expectedRisk: "critical",
+        baselineRisk: "high",
+        candidateRisk: "critical"
+      },
+      {
+        id: "risk-2",
+        expectedRisk: "high",
+        baselineRisk: "medium",
+        candidateRisk: "high"
+      },
+      {
+        id: "risk-3",
+        expectedRisk: "medium",
+        baselineRisk: "low",
+        candidateRisk: "medium"
+      },
+      {
+        id: "risk-4",
+        expectedRisk: "low",
+        baselineRisk: "unknown",
+        candidateRisk: "low"
+      }
+    ]
+  });
+
+  assert.equal(passing.passed, true);
+  assert.equal(passing.summary.candidateAccuracy, 1);
+  assert.equal(passing.summary.candidateHighRiskRecall, 1);
+  assert.equal(passing.summary.candidateUnderRiskRate, 0);
+  assert.equal(passing.summary.accuracyLift >= 0.3, true);
+
+  const failing = evaluateFt3RiskGate({
+    suiteName: "ft3-failing",
+    thresholds: {
+      minCandidateAccuracy: 0.8,
+      minCandidateMacroF1: 0.8,
+      minHighRiskRecall: 1,
+      minAccuracyLift: 0.1,
+      maxUnderRiskRate: 0.1,
+      maxUnknownRate: 0.2
+    },
+    cases: [
+      {
+        id: "risk-bad-1",
+        expectedRisk: "critical",
+        baselineRisk: "high",
+        candidateRisk: "medium"
+      },
+      {
+        id: "risk-bad-2",
+        expectedRisk: "high",
+        baselineRisk: "medium",
+        candidateRisk: "unknown"
+      }
+    ]
+  });
+
+  assert.equal(failing.passed, false);
+  assert.equal(failing.summary.candidateHighRiskRecall < 1, true);
+  assert.equal(failing.summary.candidateUnderRiskRate > 0.1, true);
+});
+
+run("NEXUS:7 FT-4 query rewrite gate enforces keyword lift with intent preservation", () => {
+  const passing = evaluateFt4QueryRewriteGate({
+    suiteName: "ft4-passing",
+    thresholds: {
+      minCandidateKeywordRecall: 1,
+      minKeywordRecallLift: 0.5,
+      minRewriteRate: 1,
+      minIntentPreservationRate: 1,
+      maxLengthRatio: 1.8
+    },
+    cases: [
+      {
+        id: "rewrite-1",
+        originalQuery: "bloquear suitePath traversal api eval",
+        expectedKeywords: ["suitepath", "traversal", "api eval"],
+        baselineRewrite: "bloquear traversal",
+        candidateRewrite: "bloquear suitePath traversal api eval dentro de workspace root"
+      },
+      {
+        id: "rewrite-2",
+        originalQuery: "validar jwt issuer audience hs256",
+        expectedKeywords: ["jwt", "issuer", "audience", "hs256"],
+        baselineRewrite: "validar token",
+        candidateRewrite: "validar jwt hs256 con issuer y audience"
+      }
+    ]
+  });
+
+  assert.equal(passing.passed, true);
+  assert.equal(passing.summary.candidateKeywordRecall, 1);
+  assert.equal(passing.summary.keywordRecallLift >= 0.5, true);
+  assert.equal(passing.summary.intentPreservationRate, 1);
+
+  const failing = evaluateFt4QueryRewriteGate({
+    suiteName: "ft4-failing",
+    thresholds: {
+      minCandidateKeywordRecall: 0.8,
+      minKeywordRecallLift: 0.2,
+      minRewriteRate: 0.5,
+      minIntentPreservationRate: 0.8,
+      maxLengthRatio: 1.5
+    },
+    cases: [
+      {
+        id: "rewrite-bad-1",
+        originalQuery: "validar jwt issuer audience hs256",
+        expectedKeywords: ["jwt", "issuer", "audience", "hs256"],
+        baselineRewrite: "token",
+        candidateRewrite: "explica arquitectura general sin detalles"
+      }
+    ]
+  });
+
+  assert.equal(failing.passed, false);
+  assert.equal(failing.summary.candidateKeywordRecall < 0.8, true);
+  assert.equal(failing.summary.intentPreservationRate < 0.8, true);
+});
+
 run("NEXUS:7 conversation noise gate validates 100-turn stress and A/B reduction signals", () => {
   const passing = evaluateConversationNoiseGate({
     baseline: {
@@ -8953,6 +9837,7 @@ run("NEXUS:10 resolveCorsOrigin stays local-first by default and honors explicit
   assert.equal(resolveCorsOrigin(undefined, "127.0.0.1", 3100), "http://127.0.0.1:3100");
   assert.equal(resolveCorsOrigin(undefined, "0.0.0.0", 3100), "http://127.0.0.1:3100");
   assert.equal(resolveCorsOrigin("https://app.example.com", "0.0.0.0", 3100), "https://app.example.com");
+  assert.equal(resolveCorsOrigin("*", "0.0.0.0", 3100), "http://127.0.0.1:3100");
 });
 
 run("NEXUS:10 rate limiter ignores X-Forwarded-For unless trust proxy is enabled", async () => {
@@ -9033,13 +9918,95 @@ run("NEXUS:10 base security headers include a CSP baseline", () => {
 
   applyBaseSecurityHeaders(response);
 
-  assert.match(headers.get("Content-Security-Policy") ?? "", /default-src 'self'/);
-  assert.match(headers.get("Content-Security-Policy") ?? "", /object-src 'none'/);
+  const csp = headers.get("Content-Security-Policy") ?? "";
+  assert.match(csp, /default-src 'self'/);
+  assert.match(csp, /object-src 'none'/);
+  assert.match(csp, /script-src 'self'/);
+  assert.equal(/unsafe-inline/i.test(csp), false);
+  assert.match(csp, /connect-src 'self'/);
   assert.equal(headers.get("X-Frame-Options"), "DENY");
   assert.equal(headers.get("Cross-Origin-Opener-Policy"), "same-origin");
   assert.equal(headers.get("Cross-Origin-Resource-Policy"), "same-origin");
   assert.equal(headers.get("Origin-Agent-Cluster"), "?1");
   assert.equal(headers.get("X-Permitted-Cross-Domain-Policies"), "none");
+});
+
+run("NEXUS:10 base security headers include configured connect-src extras", () => {
+  const previousExtra = process.env.LCS_CONNECT_SRC_EXTRA;
+  process.env.LCS_CONNECT_SRC_EXTRA = "https://api.example.com,wss://socket.example.com,invalid-entry";
+
+  try {
+    /** @type {Map<string, string>} */
+    const headers = new Map();
+    const response = {
+      setHeader(name, value) {
+        headers.set(String(name), String(value));
+      }
+    };
+
+    applyBaseSecurityHeaders(response);
+    const csp = headers.get("Content-Security-Policy") ?? "";
+
+    assert.match(csp, /connect-src 'self' https:\/\/api\.example\.com wss:\/\/socket\.example\.com/);
+    assert.equal(csp.includes("invalid-entry"), false);
+  } finally {
+    if (previousExtra === undefined) {
+      delete process.env.LCS_CONNECT_SRC_EXTRA;
+    } else {
+      process.env.LCS_CONNECT_SRC_EXTRA = previousExtra;
+    }
+  }
+});
+
+run("NEXUS:10 router sanitizes internal errors and returns request id", async () => {
+  const uniquePath = `/api/router-error-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+  registerCommand({
+    method: "GET",
+    path: uniquePath,
+    handler: async () => {
+      throw new Error("sensitive stack detail");
+    }
+  });
+
+  /** @type {Record<string, string>} */
+  const headers = {};
+  let statusCode = 0;
+  let payload = "";
+  const httpReq = {
+    method: "GET",
+    url: uniquePath,
+    headers: {},
+    socket: {
+      remoteAddress: "127.0.0.1"
+    }
+  };
+  const httpRes = {
+    setHeader(name, value) {
+      headers[String(name)] = String(value);
+    },
+    writeHead(status, outHeaders) {
+      statusCode = status;
+      for (const [key, value] of Object.entries(outHeaders ?? {})) {
+        headers[String(key)] = String(value);
+      }
+    },
+    end(value) {
+      payload = String(value ?? "");
+    }
+  };
+
+  await handleRequest(httpReq, httpRes, { corsOrigin: "http://localhost:3100" });
+  const parsed = JSON.parse(payload);
+
+  assert.equal(statusCode, 500);
+  assert.equal(parsed.error, true);
+  assert.equal(parsed.message, "Internal server error");
+  assert.equal(typeof parsed.requestId, "string");
+  assert.equal(parsed.message.includes("sensitive"), false);
+  assert.match(String(parsed.requestId), /^[0-9a-f-]{36}$/i);
+  assert.equal(typeof headers["X-Request-Id"], "string");
+  assert.equal(headers["X-Request-Id"], parsed.requestId);
 });
 
 run("NEXUS:10 demo page avoids dynamic innerHTML sinks", async () => {
@@ -9739,6 +10706,423 @@ run("NEXUS benchmark compares raw context versus selected context on real worksp
   assert.equal(report.results.some((result) => result.memory.recoveredChunks > 0), true);
 });
 
+run("NEXUS:3 health command is registered and returns component checks", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-health-command-"));
+  const previousOpenAi = process.env.OPENAI_API_KEY;
+
+  try {
+    await mkdir(path.join(tempRoot, ".lcs", "memory"), { recursive: true });
+    process.env.OPENAI_API_KEY = "test-health-provider";
+
+    const health = await getHealthStatus(tempRoot);
+    const commandMatch = await findCommand("GET", "/api/health");
+
+    assert.ok(commandMatch);
+    assert.equal(health.schemaVersion, "1.0.0");
+    assert.equal(["healthy", "degraded", "unhealthy"].includes(health.status), true);
+    assert.equal(typeof health.timestamp, "string");
+    assert.equal(health.checks.memory.status, "ok");
+    assert.equal(health.checks.axioms.status, "degraded");
+    assert.equal(health.checks.engram.status, "unavailable");
+    assert.equal(health.checks.llmProviders.status, "ok");
+    assert.equal(Array.isArray(health.checks.llmProviders.providers), true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+    if (previousOpenAi === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = previousOpenAi;
+    }
+  }
+});
+
+run("NEXUS:7 costs command returns restored session costs", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-costs-command-"));
+
+  try {
+    clearCostSessions();
+    initSession("session-costs-test");
+    recordUsage("session-costs-test", {
+      modelId: "gpt-4o-mini",
+      provider: "openrouter",
+      inputTokens: 120,
+      outputTokens: 60,
+      costUSD: 0.0021,
+      durationMs: 230
+    });
+    await saveSessionCosts("session-costs-test", tempRoot);
+    clearCostSessions();
+
+    const commandMatch = await findCommand("GET", "/api/costs/session-costs-test");
+    assert.ok(commandMatch);
+
+    const response = await commandMatch.command.handler({
+      method: "GET",
+      path: "/api/costs/session-costs-test",
+      body: {},
+      query: {},
+      params: { sessionId: "session-costs-test" },
+      headers: { "x-data-dir": tempRoot }
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.status, "ok");
+    assert.equal(response.body.sessionId, "session-costs-test");
+    assert.equal(typeof response.body.summary, "string");
+    assert.match(String(response.body.summary), /Session cost:/);
+  } finally {
+    clearCostSessions();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("NEXUS:3 agent stream command is registered and emits SSE lifecycle events", async () => {
+  const commandMatch = await findCommand("POST", "/api/agent/stream");
+  assert.ok(commandMatch);
+  assert.equal(typeof commandMatch.command.rawHandler, "function");
+
+  /** @type {string[]} */
+  const writes = [];
+  const socket = new EventEmitter();
+  /** @type {AbortSignal | null} */
+  let capturedSignal = null;
+
+  const rawHandler = createAgentStreamRawHandler({
+    runAgentWithRecoveryFn: async function* (opts) {
+      capturedSignal = opts.signal ?? null;
+      yield { phase: "select", status: "started", taskId: "task-1" };
+      yield { phase: "done", status: "success", taskId: "task-1" };
+      return {
+        success: true,
+        output: "ok",
+        taskId: "task-1",
+        attempts: 1
+      };
+    }
+  });
+
+  const httpRes = {
+    writableEnded: false,
+    destroyed: false,
+    statusCode: 0,
+    headers: {},
+    writeHead(status, headers) {
+      this.statusCode = status;
+      this.headers = headers;
+    },
+    write(chunk) {
+      writes.push(String(chunk));
+      return true;
+    },
+    end() {
+      this.writableEnded = true;
+    }
+  };
+
+  await rawHandler(
+    {
+      method: "POST",
+      path: "/api/agent/stream",
+      body: {
+        task: "stream status",
+        project: "learning-context-system"
+      },
+      headers: {},
+      query: {},
+      params: {}
+    },
+    {
+      httpReq: {
+        socket,
+        aborted: false
+      },
+      httpRes,
+      corsOrigin: "http://localhost",
+      startMs: Date.now()
+    }
+  );
+
+  assert.equal(Boolean(capturedSignal), true);
+  assert.equal(httpRes.statusCode, 200);
+  assert.equal(String(httpRes.headers["Content-Type"]).includes("text/event-stream"), true);
+  assert.equal(httpRes.writableEnded, true);
+
+  const payload = writes.join("");
+  const events = Array.from(payload.matchAll(/data:\s*(.+)\n\n/g))
+    .map((match) => JSON.parse(match[1]));
+  assert.equal(events.length >= 3, true);
+  assert.equal(events[0].phase, "meta");
+  assert.equal(events.some((event) => event.phase === "select" && event.status === "started"), true);
+  assert.equal(events.some((event) => event.phase === "done" && event.status === "success"), true);
+});
+
+run("NEXUS:3 agent stream aborts loop when client disconnects", async () => {
+  const socket = new EventEmitter();
+  /** @type {string[]} */
+  const writes = [];
+  /** @type {AbortSignal | null} */
+  let capturedSignal = null;
+
+  const rawHandler = createAgentStreamRawHandler({
+    runAgentWithRecoveryFn: async function* (opts) {
+      capturedSignal = opts.signal ?? null;
+      yield { phase: "select", status: "started", taskId: "task-2" };
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      yield {
+        phase: "done",
+        status: opts.signal?.aborted ? "cancelled" : "success",
+        taskId: "task-2"
+      };
+      return {
+        success: !opts.signal?.aborted,
+        output: "",
+        taskId: "task-2",
+        error: opts.signal?.aborted ? "cancelled" : undefined,
+        attempts: 1
+      };
+    }
+  });
+
+  const httpRes = {
+    writableEnded: false,
+    destroyed: false,
+    statusCode: 0,
+    headers: {},
+    writeHead(status, headers) {
+      this.statusCode = status;
+      this.headers = headers;
+    },
+    write(chunk) {
+      writes.push(String(chunk));
+      return true;
+    },
+    end() {
+      this.writableEnded = true;
+    }
+  };
+
+  const handlerPromise = rawHandler(
+    {
+      method: "POST",
+      path: "/api/agent/stream",
+      body: { task: "cancel stream" },
+      headers: {},
+      query: {},
+      params: {}
+    },
+    {
+      httpReq: {
+        socket,
+        aborted: false
+      },
+      httpRes,
+      corsOrigin: "http://localhost",
+      startMs: Date.now()
+    }
+  );
+
+  setTimeout(() => {
+    socket.emit("close");
+  }, 1);
+
+  await handlerPromise;
+
+  assert.equal(Boolean(capturedSignal), true);
+  assert.equal(capturedSignal?.aborted, true);
+  assert.equal(httpRes.statusCode, 200);
+  assert.equal(httpRes.writableEnded, true);
+
+  const payload = writes.join("");
+  const events = Array.from(payload.matchAll(/data:\s*(.+)\n\n/g))
+    .map((match) => JSON.parse(match[1]));
+  assert.equal(events.some((event) => event.phase === "done" && event.status === "cancelled"), true);
+});
+
+run("NEXUS:3 background summarizer emits capped summaries without overlap", async () => {
+  const previousDisable = process.env.LCS_DISABLE_AGENT_SUMMARY;
+  delete process.env.LCS_DISABLE_AGENT_SUMMARY;
+
+  let currentConcurrent = 0;
+  let maxConcurrent = 0;
+  /** @type {string[]} */
+  const summaries = [];
+  const controller = startBackgroundSummary(
+    "op-background-summary",
+    () => ["Selecting context", "Running repair attempt", "Analyzing gate output"],
+    (summary) => summaries.push(summary),
+    {
+      intervalMs: 10,
+      summarize: async ({ signal }) => {
+        currentConcurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, currentConcurrent);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        currentConcurrent -= 1;
+        return {
+          success: !signal.aborted,
+          output: "x".repeat(160)
+        };
+      }
+    }
+  );
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 90));
+  } finally {
+    controller.stop();
+    if (previousDisable === undefined) {
+      delete process.env.LCS_DISABLE_AGENT_SUMMARY;
+    } else {
+      process.env.LCS_DISABLE_AGENT_SUMMARY = previousDisable;
+    }
+  }
+
+  assert.equal(summaries.length >= 1, true);
+  assert.equal(summaries.every((summary) => summary.length <= 100), true);
+  assert.equal(maxConcurrent, 1);
+});
+
+run("NEXUS:3 background summarizer stop before timer prevents summary generation", async () => {
+  const previousDisable = process.env.LCS_DISABLE_AGENT_SUMMARY;
+  delete process.env.LCS_DISABLE_AGENT_SUMMARY;
+
+  let summarizeCalls = 0;
+  const controller = startBackgroundSummary(
+    "op-background-summary-stop",
+    () => ["waiting"],
+    () => {
+      throw new Error("summary callback should not be invoked after immediate stop");
+    },
+    {
+      intervalMs: 100,
+      summarize: async () => {
+        summarizeCalls += 1;
+        return { success: true, output: "should-not-run" };
+      }
+    }
+  );
+
+  try {
+    controller.stop();
+    await new Promise((resolve) => setTimeout(resolve, 140));
+  } finally {
+    if (previousDisable === undefined) {
+      delete process.env.LCS_DISABLE_AGENT_SUMMARY;
+    } else {
+      process.env.LCS_DISABLE_AGENT_SUMMARY = previousDisable;
+    }
+  }
+
+  assert.equal(summarizeCalls, 0);
+});
+
+run("NEXUS:3 background summarizer honors LCS_DISABLE_AGENT_SUMMARY flag", async () => {
+  const previousDisable = process.env.LCS_DISABLE_AGENT_SUMMARY;
+  process.env.LCS_DISABLE_AGENT_SUMMARY = "true";
+
+  let summarizeCalls = 0;
+  const controller = startBackgroundSummary(
+    "op-background-summary-disabled",
+    () => ["should not run"],
+    () => {
+      throw new Error("summary callback should not fire when disabled");
+    },
+    {
+      intervalMs: 5,
+      summarize: async () => {
+        summarizeCalls += 1;
+        return { success: true, output: "disabled check" };
+      }
+    }
+  );
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  } finally {
+    controller.stop();
+    if (previousDisable === undefined) {
+      delete process.env.LCS_DISABLE_AGENT_SUMMARY;
+    } else {
+      process.env.LCS_DISABLE_AGENT_SUMMARY = previousDisable;
+    }
+  }
+
+  assert.equal(summarizeCalls, 0);
+});
+
+run("NEXUS:3 agent stream forwards summary events and stops summary controller", async () => {
+  const socket = new EventEmitter();
+  /** @type {string[]} */
+  const writes = [];
+  let stopCalled = false;
+
+  const rawHandler = createAgentStreamRawHandler({
+    runAgentWithRecoveryFn: async function* () {
+      yield { phase: "select", status: "started", taskId: "task-3" };
+      yield { phase: "done", status: "success", taskId: "task-3" };
+      return {
+        success: true,
+        output: "ok",
+        taskId: "task-3",
+        attempts: 1
+      };
+    },
+    startBackgroundSummaryFn: (_operationId, _getTranscript, onSummary) => {
+      onSummary("Analyzing selected context");
+      return {
+        stop() {
+          stopCalled = true;
+        }
+      };
+    }
+  });
+
+  const httpRes = {
+    writableEnded: false,
+    destroyed: false,
+    statusCode: 0,
+    headers: {},
+    writeHead(status, headers) {
+      this.statusCode = status;
+      this.headers = headers;
+    },
+    write(chunk) {
+      writes.push(String(chunk));
+      return true;
+    },
+    end() {
+      this.writableEnded = true;
+    }
+  };
+
+  await rawHandler(
+    {
+      method: "POST",
+      path: "/api/agent/stream",
+      body: { task: "summary stream" },
+      headers: {},
+      query: {},
+      params: {}
+    },
+    {
+      httpReq: {
+        socket,
+        aborted: false
+      },
+      httpRes,
+      corsOrigin: "http://localhost",
+      startMs: Date.now()
+    }
+  );
+
+  const payload = writes.join("");
+  const events = Array.from(payload.matchAll(/data:\s*(.+)\n\n/g))
+    .map((match) => JSON.parse(match[1]));
+
+  assert.equal(events.some((event) => event.phase === "summary"), true);
+  assert.equal(events.some((event) => event.phase === "done" && event.status === "success"), true);
+  assert.equal(stopCalled, true);
+});
+
 run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "nexus-api-server-"));
   const apiKey = "nexus-test-key";
@@ -9903,7 +11287,7 @@ run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () 
     assert.equal(health.status, 200);
     assert.equal(blockedStatus.status, 401);
     assert.equal(blockedPayload.errorCode, "auth_unauthorized");
-    assert.match(blockedPayload.requestId, /^req-/);
+    assert.match(String(blockedPayload.requestId ?? ""), /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     assert.equal(sync.status, 200);
     assert.equal(syncPayload.lastSync.status, "ok");
     assert.match(syncPayload.lastSync.runId, /^sync-/);
@@ -9927,7 +11311,7 @@ run("NEXUS:10 API server exposes health sync pipeline and ask routes", async () 
     assert.equal(askPayload.fallback.summary.failedAttempts, 0);
     assert.equal(askMissingQuestion.status, 400);
     assert.equal(askMissingQuestionPayload.errorCode, "missing_question");
-    assert.match(askMissingQuestionPayload.requestId, /^req-/);
+    assert.match(String(askMissingQuestionPayload.requestId ?? ""), /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     assert.equal(askInvalidJson.status, 400);
     assert.equal(askInvalidJsonPayload.errorCode, "invalid_json");
     assert.equal(evalSuite.status, 200);
@@ -11280,7 +12664,7 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
     assert.equal(typeof fallbackPayload.fallback.summary.totalDurationMs, "number");
     assert.equal(unknownRoute.status, 404);
     assert.equal(unknownRoutePayload.errorCode, "route_not_found");
-    assert.match(unknownRoutePayload.requestId, /^req-/);
+    assert.match(String(unknownRoutePayload.requestId ?? ""), /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     if (openapiResponse.status === 200) {
       assert.equal(Boolean(openapiPayload.paths["/api/versioning/prompts"]), true);
       assert.equal(Boolean(openapiPayload.paths["/api/observability/alerts"]), true);
@@ -11306,6 +12690,137 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
 });
 
 // ── NEXUS:4 Code Gate Tests ───────────────────────────────────────────────────
+
+run("NEXUS:3 agent query loop yields expected phases and completes on agent success", async () => {
+  clearTaskStore();
+  let spawnCalls = 0;
+
+  const { events, result } = await collectGeneratorResult(
+    runAgentWithRecovery(
+      {
+        task: "Implement endpoint hardening",
+        maxRepairIterations: 2
+      },
+      {
+        spawnAgent: async () => {
+          spawnCalls += 1;
+          return {
+            success: true,
+            output: "patched code"
+          };
+        },
+        repairLoop: async () => {
+          throw new Error("repair loop should not run on first-attempt success");
+        }
+      }
+    )
+  );
+
+  assert.equal(spawnCalls, 1);
+  assert.equal(result.success, true);
+  assert.equal(result.output, "patched code");
+  assert.deepEqual(
+    events.map((event) => `${event.phase}:${event.status}`),
+    [
+      "select:started",
+      "select:done",
+      "axioms:started",
+      "axioms:done",
+      "agent:started",
+      "agent:success",
+      "done:success"
+    ]
+  );
+  assert.equal(getTask(result.taskId)?.status, TASK_STATUS.COMPLETED);
+});
+
+run("NEXUS:3 agent query loop exits after successful repair without retrying agent", async () => {
+  clearTaskStore();
+  let spawnCalls = 0;
+  let repairCalls = 0;
+
+  const { events, result } = await collectGeneratorResult(
+    runAgentWithRecovery(
+      {
+        task: "Fix failing typecheck",
+        workspace: process.cwd(),
+        maxRepairIterations: 3
+      },
+      {
+        spawnAgent: async () => {
+          spawnCalls += 1;
+          return {
+            success: false,
+            output: "export const value: number = 'oops';",
+            error: "typecheck failed"
+          };
+        },
+        repairLoop: async () => {
+          repairCalls += 1;
+          return {
+            success: true,
+            finalCode: "export const value: number = 1;",
+            attempts: [],
+            totalAttempts: 1,
+            reason: "pass",
+            finalGateResult: null,
+            durationMs: 0,
+            taskId: "repair-1"
+          };
+        }
+      }
+    )
+  );
+
+  assert.equal(spawnCalls, 1);
+  assert.equal(repairCalls, 1);
+  assert.equal(result.success, true);
+  assert.equal(result.output, "export const value: number = 1;");
+  assert.equal(
+    events.filter((event) => event.phase === "agent" && event.status === "started").length,
+    1
+  );
+  assert.equal(
+    events.some((event) => event.phase === "repair" && event.status === "success"),
+    true
+  );
+  assert.equal(getTask(result.taskId)?.status, TASK_STATUS.COMPLETED);
+});
+
+run("NEXUS:3 agent query loop cancels cleanly when abort signal is already aborted", async () => {
+  clearTaskStore();
+  const abortController = new AbortController();
+  abortController.abort();
+  let spawnCalls = 0;
+
+  const { events, result } = await collectGeneratorResult(
+    runAgentWithRecovery(
+      {
+        task: "Run cancelled request",
+        signal: abortController.signal
+      },
+      {
+        spawnAgent: async () => {
+          spawnCalls += 1;
+          return {
+            success: true,
+            output: "should-not-run"
+          };
+        }
+      }
+    )
+  );
+
+  assert.equal(spawnCalls, 0);
+  assert.equal(result.success, false);
+  assert.equal(result.error, "cancelled");
+  assert.equal(result.attempts, 0);
+  assert.deepEqual(
+    events.map((event) => `${event.phase}:${event.status}`),
+    ["done:cancelled"]
+  );
+  assert.equal(getTask(result.taskId)?.status, TASK_STATUS.CANCELLED);
+});
 
 run("NEXUS:4 code gate runs typecheck and reports pass on clean cwd", async () => {
   // Test that runCodeGate correctly aggregates tool results.

@@ -9,6 +9,8 @@
  */
 
 import { findCommand } from "../core/command-registry.js";
+import { randomUUID } from "node:crypto";
+import { log } from "../core/logger.js";
 
 /** @type {ApiRoute[]} */
 const routes = [];
@@ -213,10 +215,13 @@ function corsHeaders(origin) {
  */
 export async function handleRequest(httpReq, httpRes, config) {
   const startMs = Date.now();
+  const requestId = randomUUID();
+  httpRes.setHeader("X-Request-Id", requestId);
 
   if (httpReq.method === "OPTIONS") {
     httpRes.writeHead(204, {
       "Content-Type": "application/json",
+      "X-Request-Id": requestId,
       ...corsHeaders(config.corsOrigin)
     });
     httpRes.end();
@@ -243,8 +248,27 @@ export async function handleRequest(httpReq, httpRes, config) {
         apiResponse = errorResponse(404, `No route matches ${apiReq.method} ${apiReq.path}`);
       } else {
         apiReq.params = commandMatch.params;
-        const chainedHandler = buildMiddlewareChain(commandMatch.command.handler);
-        apiResponse = await chainedHandler(apiReq);
+        const command = commandMatch.command;
+
+        if (typeof command.rawHandler === "function") {
+          const handled = await command.rawHandler(apiReq, {
+            httpReq,
+            httpRes,
+            corsOrigin: config.corsOrigin,
+            startMs
+          });
+
+          if (handled !== false) {
+            return;
+          }
+        }
+
+        if (typeof command.handler !== "function") {
+          apiResponse = errorResponse(500, `Command has no JSON handler: ${apiReq.method} ${apiReq.path}`);
+        } else {
+          const chainedHandler = buildMiddlewareChain(command.handler);
+          apiResponse = await chainedHandler(apiReq);
+        }
       }
     }
   } catch (err) {
@@ -252,12 +276,25 @@ export async function handleRequest(httpReq, httpRes, config) {
     const invalidJson = /invalid json/i.test(message);
     const requestTooLarge = /request body too large/i.test(message);
     const status = requestTooLarge ? 413 : invalidJson ? 400 : 500;
-    apiResponse = errorResponse(status, message);
+    if (status === 500) {
+      log("error", "Unhandled API router error", {
+        requestId,
+        message,
+        stack: err instanceof Error ? err.stack : undefined
+      });
+      apiResponse = errorResponse(500, "Internal server error", {
+        requestId,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      apiResponse = errorResponse(status, message, { requestId });
+    }
   }
 
   const responseHeaders = {
     "Content-Type": "application/json",
     "X-Response-Time": `${Date.now() - startMs}ms`,
+    "X-Request-Id": requestId,
     ...corsHeaders(config.corsOrigin),
     ...(apiResponse.headers ?? {})
   };

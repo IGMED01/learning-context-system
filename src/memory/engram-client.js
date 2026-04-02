@@ -4,6 +4,10 @@ import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { buildSafeEnv } from "../core/safe-env.js";
+import {
+  memoryFreshnessText,
+  truncateMemoryContent
+} from "./memory-staleness.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
 /** @typedef {import("../types/core-contracts.d.ts").EngramResolvedConfig} EngramResolvedConfig */
@@ -161,21 +165,29 @@ function memoryTypeProfile(type) {
 
 /**
  * @param {string} metadataLine
+ * @returns {number}
  */
-function recencyFromMetadata(metadataLine) {
+function parseMetadataTimestampMs(metadataLine) {
   const timestampText = metadataLine.split("|")[0]?.trim();
 
   if (!timestampText) {
-    return 0.72;
+    return Date.now();
   }
 
   const parsed = new Date(timestampText.replace(" ", "T"));
-
   if (Number.isNaN(parsed.getTime())) {
-    return 0.72;
+    return Date.now();
   }
 
-  const ageDays = Math.max(0, (Date.now() - parsed.getTime()) / (1000 * 60 * 60 * 24));
+  return parsed.getTime();
+}
+
+/**
+ * @param {string} metadataLine
+ */
+function recencyFromMetadata(metadataLine) {
+  const timestampMs = parseMetadataTimestampMs(metadataLine);
+  const ageDays = Math.max(0, (Date.now() - timestampMs) / (1000 * 60 * 60 * 24));
   return clamp(1 - ageDays / 30, 0.45, 1);
 }
 
@@ -224,12 +236,17 @@ export function searchOutputToChunks(raw, options = {}) {
     const metadataLine = trimmedDetails[trimmedDetails.length - 1] ?? "";
     const bodyLines =
       metadataLine && metadataLine.includes("|") ? trimmedDetails.slice(0, -1) : trimmedDetails;
-    const body = bodyLines.join(" ").trim();
+    const body = bodyLines.join("\n").trim();
+    const { content: truncatedBody, wasLineTruncated, wasByteTruncated } = truncateMemoryContent(body);
+    const flattenedBody = truncatedBody.replace(/\s+/gu, " ").trim();
     const projectMatch = metadataLine.match(/project:\s*([^|]+)/i);
     const scopeMatch = metadataLine.match(/scope:\s*([^|]+)/i);
     const project = projectMatch?.[1]?.trim() ?? options.project ?? "global";
     const scope = scopeMatch?.[1]?.trim() ?? "project";
     const profile = memoryTypeProfile(type);
+    const createdAtMs = parseMetadataTimestampMs(metadataLine);
+    const freshnessNote = memoryFreshnessText(createdAtMs);
+    const truncated = wasLineTruncated || wasByteTruncated;
 
     return {
       id: `engram-memory-${observationId}`,
@@ -237,7 +254,8 @@ export function searchOutputToChunks(raw, options = {}) {
       kind: "memory",
       content: [
         title,
-        body,
+        flattenedBody,
+        freshnessNote || "",
         metadataLine ? `Metadata: ${metadataLine}` : "",
         options.query ? `Recall query: ${options.query}` : "",
         `Memory type: ${type}`,
@@ -248,7 +266,17 @@ export function searchOutputToChunks(raw, options = {}) {
       certainty: profile.certainty,
       recency: recencyFromMetadata(metadataLine),
       teachingValue: profile.teachingValue,
-      priority: clamp(profile.priority + (Number(rank) === 1 ? 0.04 : 0))
+      priority: clamp(profile.priority + (Number(rank) === 1 ? 0.04 : 0)),
+      tags: {
+        memoryType: type,
+        memoryScope: scope,
+        createdAtMs,
+        updatedAtMs: createdAtMs,
+        freshnessNote: freshnessNote || null,
+        truncated,
+        truncatedByLine: wasLineTruncated,
+        truncatedByBytes: wasByteTruncated
+      }
     };
   });
 }
@@ -494,16 +522,47 @@ export function createEngramClient(options = {}) {
     const chunks = searchOutputToChunks(result.stdout, { query, project: searchOpts.project });
 
     /** @type {MemoryEntry[]} */
-    const entries = chunks.map((chunk) => ({
-      id: chunk.id,
-      title: chunk.content.split(".")[0] ?? chunk.id,
-      content: chunk.content,
-      type: "memory",
-      project: searchOpts.project ?? "",
-      scope: searchOpts.scope ?? "project",
-      topic: "",
-      createdAt: new Date().toISOString()
-    }));
+    const entries = chunks.map((chunk) => {
+      const metadata =
+        chunk.tags && typeof chunk.tags === "object" && !Array.isArray(chunk.tags)
+          ? /** @type {Record<string, unknown>} */ (chunk.tags)
+          : {};
+      const createdAtMs =
+        typeof metadata.createdAtMs === "number" && Number.isFinite(metadata.createdAtMs)
+          ? metadata.createdAtMs
+          : Date.now();
+      const updatedAtMs =
+        typeof metadata.updatedAtMs === "number" && Number.isFinite(metadata.updatedAtMs)
+          ? metadata.updatedAtMs
+          : createdAtMs;
+      const freshnessNote =
+        typeof metadata.freshnessNote === "string" && metadata.freshnessNote.trim()
+          ? metadata.freshnessNote.trim()
+          : null;
+      const truncated = metadata.truncated === true;
+
+      return {
+        id: chunk.id,
+        title: chunk.content.split(".")[0] ?? chunk.id,
+        content: chunk.content,
+        type:
+          typeof metadata.memoryType === "string" && metadata.memoryType.trim()
+            ? metadata.memoryType.trim()
+            : "memory",
+        project: searchOpts.project ?? "",
+        scope:
+          typeof metadata.memoryScope === "string" && metadata.memoryScope.trim()
+            ? metadata.memoryScope.trim()
+            : searchOpts.scope ?? "project",
+        topic: "",
+        createdAt: new Date(createdAtMs).toISOString(),
+        updatedAt: new Date(updatedAtMs).toISOString(),
+        createdAtMs,
+        updatedAtMs,
+        freshnessNote,
+        truncated
+      };
+    });
 
     return {
       entries,
@@ -546,16 +605,46 @@ export function createEngramClient(options = {}) {
     const chunks = searchOutputToChunks(result.stdout, { project: listOpts.project });
     const limit = listOpts.limit ?? 50;
 
-    return chunks.slice(0, limit).map((chunk) => ({
-      id: chunk.id,
-      title: chunk.content.split(".")[0] ?? chunk.id,
-      content: chunk.content,
-      type: "memory",
-      project: listOpts.project ?? "",
-      scope: "project",
-      topic: "",
-      createdAt: new Date().toISOString()
-    }));
+    return chunks.slice(0, limit).map((chunk) => {
+      const metadata =
+        chunk.tags && typeof chunk.tags === "object" && !Array.isArray(chunk.tags)
+          ? /** @type {Record<string, unknown>} */ (chunk.tags)
+          : {};
+      const createdAtMs =
+        typeof metadata.createdAtMs === "number" && Number.isFinite(metadata.createdAtMs)
+          ? metadata.createdAtMs
+          : Date.now();
+      const updatedAtMs =
+        typeof metadata.updatedAtMs === "number" && Number.isFinite(metadata.updatedAtMs)
+          ? metadata.updatedAtMs
+          : createdAtMs;
+      const freshnessNote =
+        typeof metadata.freshnessNote === "string" && metadata.freshnessNote.trim()
+          ? metadata.freshnessNote.trim()
+          : null;
+
+      return {
+        id: chunk.id,
+        title: chunk.content.split(".")[0] ?? chunk.id,
+        content: chunk.content,
+        type:
+          typeof metadata.memoryType === "string" && metadata.memoryType.trim()
+            ? metadata.memoryType.trim()
+            : "memory",
+        project: listOpts.project ?? "",
+        scope:
+          typeof metadata.memoryScope === "string" && metadata.memoryScope.trim()
+            ? metadata.memoryScope.trim()
+            : "project",
+        topic: "",
+        createdAt: new Date(createdAtMs).toISOString(),
+        updatedAt: new Date(updatedAtMs).toISOString(),
+        createdAtMs,
+        updatedAtMs,
+        freshnessNote,
+        truncated: metadata.truncated === true
+      };
+    });
   }
 
   /**

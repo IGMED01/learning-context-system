@@ -397,6 +397,11 @@ export interface MemoryEntry {
   scope: string;
   topic: string;
   createdAt: string;
+  updatedAt?: string;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+  freshnessNote?: string | null;
+  truncated?: boolean;
   sourceKind?: string;
   protected?: boolean;
   reviewStatus?: string;

@@ -5,7 +5,10 @@ import path from "node:path";
 import { buildCliJsonContract } from "../contracts/cli-contracts.js";
 import { defaultProjectConfig } from "../contracts/config-contracts.js";
 import { selectContextWindow } from "../context/noise-canceler.js";
-import { createNotionSyncClient } from "../integrations/notion-sync.js";
+import {
+  createKnowledgeResolver,
+  resolveKnowledgeSyncConfig
+} from "../integrations/knowledge-resolver.js";
 import { loadProjectConfig } from "../io/config-file.js";
 import { loadChunkFile } from "../io/json-file.js";
 import { writeTextFile } from "../io/text-file.js";
@@ -157,7 +160,12 @@ import {
  *   engramClient?: MemoryClientLike,
  *   externalBatteryClient?: MemoryClientLike,
  *   localMemoryClient?: MemoryClientLike,
- *   notionClient?: ReturnType<typeof createNotionSyncClient>
+ *   notionClient?: {
+ *     sync?: (entry: import("../integrations/knowledge-provider.js").KnowledgeEntry) => Promise<Record<string, unknown>>,
+ *     appendKnowledgeEntry?: (entry: Record<string, unknown>) => Promise<Record<string, unknown>>,
+ *     health?: () => Promise<Record<string, unknown>>
+ *   },
+ *   knowledgeResolver?: ReturnType<typeof createKnowledgeResolver>
  * }} AppDependencies
  */
 
@@ -749,18 +757,173 @@ async function closeMemoryClient(memoryClient, input) {
 }
 
 /**
- * @param {CliOptions} options
- * @param {AppDependencies} dependencies
+ * @param {unknown} value
  */
-function getNotionClient(options, dependencies) {
-  if (dependencies.notionClient) {
-    return dependencies.notionClient;
+function parseKnowledgeBackendMode(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "notion" || normalized === "obsidian" || normalized === "local-only") {
+    return normalized;
   }
 
-  return createNotionSyncClient({
-    token: options["notion-token"],
-    parentPageId: options["notion-page-id"],
-    apiBaseUrl: options["notion-api-base-url"]
+  return "";
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function normalizeKnowledgeTags(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+}
+
+/**
+ * @param {Record<string, unknown>} input
+ * @param {{
+ *   title: string,
+ *   project: string,
+ *   source: string,
+ *   tags: string[],
+ *   backend: string
+ * }} fallback
+ */
+function normalizeKnowledgeSyncResult(input, fallback) {
+  const appendedBlocksRaw = Number(input.appendedBlocks);
+  const appendedBlocks = Number.isFinite(appendedBlocksRaw)
+    ? Math.max(0, Math.trunc(appendedBlocksRaw))
+    : 0;
+  const pendingSyncs = Array.isArray(input.pendingSyncs) ? input.pendingSyncs : [];
+  const parentPageId =
+    typeof input.parentPageId === "string"
+      ? input.parentPageId
+      : typeof input.path === "string"
+        ? input.path
+        : "";
+  const createdAt =
+    typeof input.createdAt === "string" && input.createdAt.trim()
+      ? input.createdAt
+      : new Date().toISOString();
+
+  return {
+    id: typeof input.id === "string" ? input.id : "",
+    action: typeof input.action === "string" && input.action ? input.action : "append",
+    status: typeof input.status === "string" && input.status ? input.status : "synced",
+    backend:
+      typeof input.backend === "string" && input.backend.trim()
+        ? input.backend
+        : fallback.backend,
+    title:
+      typeof input.title === "string" && input.title.trim()
+        ? input.title
+        : fallback.title,
+    project:
+      typeof input.project === "string"
+        ? input.project
+        : fallback.project,
+    source:
+      typeof input.source === "string" && input.source.trim()
+        ? input.source
+        : fallback.source,
+    tags: normalizeKnowledgeTags(input.tags).length
+      ? normalizeKnowledgeTags(input.tags)
+      : fallback.tags,
+    parentPageId,
+    appendedBlocks,
+    createdAt,
+    pendingSyncs
+  };
+}
+
+/**
+ * @param {CliOptions} options
+ * @param {AppDependencies} dependencies
+ * @param {LoadedConfigInfo} loadedConfig
+ */
+function getKnowledgeResolver(options, dependencies, loadedConfig) {
+  if (dependencies.knowledgeResolver) {
+    return dependencies.knowledgeResolver;
+  }
+
+  const cliBackend = parseKnowledgeBackendMode(options["knowledge-backend"]);
+  const syncConfig = resolveKnowledgeSyncConfig(loadedConfig.config.sync);
+  const hasNotionHints = Boolean(
+    options["notion-token"] || options["notion-page-id"] || dependencies.notionClient
+  );
+  const inferredBackend =
+    hasNotionHints
+      ? "notion"
+      : cliBackend || syncConfig.knowledgeBackend;
+
+  return createKnowledgeResolver({
+    cwd: process.cwd(),
+    backend: inferredBackend,
+    syncConfig: {
+      ...syncConfig,
+      knowledgeBackend: inferredBackend
+    },
+    notion: {
+      token: options["notion-token"],
+      parentPageId: options["notion-page-id"],
+      apiBaseUrl: options["notion-api-base-url"]
+    },
+    obsidian: {
+      vaultDir: options["obsidian-vault"]
+    },
+    providers: dependencies.notionClient
+      ? {
+          notion: {
+            name: "notion",
+            sync: async (entry) => {
+              /** @type {Record<string, unknown>} */
+              let raw;
+              if (typeof dependencies.notionClient?.sync === "function") {
+                raw = await dependencies.notionClient.sync(entry);
+              } else if (typeof dependencies.notionClient?.appendKnowledgeEntry === "function") {
+                raw = await dependencies.notionClient.appendKnowledgeEntry(entry);
+              } else {
+                throw new Error("Injected notionClient does not implement sync/appendKnowledgeEntry.");
+              }
+
+              return normalizeKnowledgeSyncResult(raw, {
+                title: typeof entry.title === "string" ? entry.title : "",
+                project: typeof entry.project === "string" ? entry.project : "",
+                source:
+                  typeof entry.source === "string" && entry.source.trim()
+                    ? entry.source
+                    : "lcs-cli",
+                tags: Array.isArray(entry.tags)
+                  ? entry.tags.filter((tag) => typeof tag === "string")
+                  : [],
+                backend: "notion"
+              });
+            },
+            delete: async (id) => ({ deleted: false, id, backend: "notion" }),
+            search: async () => [],
+            list: async () => [],
+            health: async () => {
+              if (typeof dependencies.notionClient?.health === "function") {
+                const raw = await dependencies.notionClient.health();
+                return {
+                  healthy: raw?.healthy === true,
+                  provider: typeof raw?.provider === "string" ? raw.provider : "notion",
+                  detail:
+                    typeof raw?.detail === "string" && raw.detail.trim()
+                      ? raw.detail
+                      : "injected"
+                };
+              }
+
+              return { healthy: true, provider: "notion", detail: "injected" };
+            },
+            getPendingSyncs: async () => []
+          }
+        }
+      : undefined
   });
 }
 
@@ -1122,6 +1285,10 @@ function applyConfigDefaults(command, rawOptions, loadedConfig) {
 
   if (!options["memory-backend"]) {
     options["memory-backend"] = config.memory.backend || "resilient";
+  }
+
+  if (!options["knowledge-backend"] && config.sync?.knowledgeBackend) {
+    options["knowledge-backend"] = config.sync.knowledgeBackend;
   }
 
   if (!options["engram-bin"] && config.engram?.binaryPath) {
@@ -1486,13 +1653,33 @@ export async function runCli(argv, dependencies = {}) {
   }
 
   if (command === "sync-knowledge") {
-    const notion = getNotionClient(options, dependencies);
-    const result = await notion.appendKnowledgeEntry({
-      title: requireOption(options, "title"),
-      content: getContentOption(options),
-      project: options.project,
-      source: options.source,
-      tags: listOption(options, "tags")
+    const title = requireOption(options, "title");
+    const content = getContentOption(options);
+    const project = options.project ?? "";
+    const source = options.source ?? "lcs-cli";
+    const tags = listOption(options, "tags");
+    const resolver = getKnowledgeResolver(options, dependencies, loadedConfig);
+    const backend = parseKnowledgeBackendMode(options["knowledge-backend"]) || resolver.backend;
+    /** @type {import("../integrations/knowledge-provider.js").KnowledgeEntry} */
+    const syncInput = {
+      title,
+      content,
+      project,
+      source,
+      tags
+    };
+    if (options.type !== undefined) {
+      syncInput.type = options.type;
+    }
+    const rawResult = /** @type {Record<string, unknown>} */ (
+      await resolver.sync(syncInput)
+    );
+    const result = normalizeKnowledgeSyncResult(rawResult, {
+      title,
+      project,
+      source,
+      tags,
+      backend
     });
     const metric = buildCommandMetric("sync-knowledge", startedAt);
     await safeRecordCommandMetric(metric);

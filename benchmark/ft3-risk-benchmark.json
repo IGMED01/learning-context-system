@@ -1,0 +1,83 @@
+{
+  "suite": "ft3-risk-pilot-v1",
+  "thresholds": {
+    "minCandidateAccuracy": 0.9,
+    "minCandidateMacroF1": 0.88,
+    "minHighRiskRecall": 1,
+    "minAccuracyLift": 0.2,
+    "maxUnderRiskRate": 0.05,
+    "maxUnknownRate": 0.05
+  },
+  "cases": [
+    {
+      "id": "ft3-001",
+      "input": "El endpoint /api/demo sigue abierto en producción sin auth.",
+      "expectedRisk": "critical",
+      "baselineRisk": "high",
+      "candidateRisk": "critical"
+    },
+    {
+      "id": "ft3-002",
+      "input": "Se detectó prompt injection en chunks sin sanitizar.",
+      "expectedRisk": "critical",
+      "baselineRisk": "high",
+      "candidateRisk": "critical"
+    },
+    {
+      "id": "ft3-003",
+      "input": "Path traversal en suitePath de /api/eval.",
+      "expectedRisk": "high",
+      "baselineRisk": "medium",
+      "candidateRisk": "high"
+    },
+    {
+      "id": "ft3-004",
+      "input": "JWT sin validar issuer y audience.",
+      "expectedRisk": "high",
+      "baselineRisk": "medium",
+      "candidateRisk": "high"
+    },
+    {
+      "id": "ft3-005",
+      "input": "Rate limiter no aplica limpieza bajo alta cardinalidad.",
+      "expectedRisk": "medium",
+      "baselineRisk": "low",
+      "candidateRisk": "medium"
+    },
+    {
+      "id": "ft3-006",
+      "input": "Request timeout no definido en server HTTP.",
+      "expectedRisk": "medium",
+      "baselineRisk": "low",
+      "candidateRisk": "medium"
+    },
+    {
+      "id": "ft3-007",
+      "input": "Error body devuelve stack trace al cliente.",
+      "expectedRisk": "high",
+      "baselineRisk": "medium",
+      "candidateRisk": "high"
+    },
+    {
+      "id": "ft3-008",
+      "input": "No se limpian memorias de test en el store local.",
+      "expectedRisk": "low",
+      "baselineRisk": "unknown",
+      "candidateRisk": "low"
+    },
+    {
+      "id": "ft3-009",
+      "input": "OpenAPI expone rutas internas y detalles de auth.",
+      "expectedRisk": "high",
+      "baselineRisk": "medium",
+      "candidateRisk": "high"
+    },
+    {
+      "id": "ft3-010",
+      "input": "persistencia de costos no disponible para auditoría de sesiones.",
+      "expectedRisk": "medium",
+      "baselineRisk": "low",
+      "candidateRisk": "medium"
+    }
+  ]
+}

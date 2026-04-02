@@ -6,6 +6,13 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { log } from "../core/logger.js";
+import {
+  calculateTokenBudgetState,
+  recordCompactFailure,
+  recordCompactSuccess,
+  resetCompactState
+} from "./context-budget.js";
 
 /** @type {Map<string, ConversationSession>} */
 const sessions = new Map();
@@ -272,6 +279,43 @@ function estimateTokens(value) {
   }
 
   return Math.max(1, Math.ceil(normalized.length / 4));
+}
+
+/**
+ * @param {ConversationSession} session
+ * @param {string} [pendingContent]
+ */
+function estimateSessionTokenUsage(session, pendingContent = "") {
+  let total = estimateTokens(getSummary(session));
+
+  for (const turn of session.turns) {
+    total += estimateTokens(turn.content) + 4;
+  }
+
+  if (pendingContent) {
+    total += estimateTokens(pendingContent) + 4;
+  }
+
+  return total;
+}
+
+/**
+ * @param {ConversationSession} session
+ * @returns {boolean}
+ */
+function compactConversationByBudget(session) {
+  const policy = resolveConversationPolicy();
+  const keepTurns = Math.max(1, policy.summaryKeepTurns);
+
+  if (session.turns.length <= keepTurns) {
+    return false;
+  }
+
+  const turnsBeyondKeep = session.turns.length - keepTurns;
+  const pruneCount = Math.max(1, Math.ceil(turnsBeyondKeep * 0.5));
+  pruneTurnsIntoSummary(session, pruneCount);
+  updateContradictionState(session);
+  return true;
 }
 
 /**
@@ -819,11 +863,41 @@ export function addTurn(sessionId, role, content, metadata) {
   cleanupExpiredSessions();
   const session = sessions.get(sessionId);
   if (!session) return undefined;
+  const normalizedContent = normalizeText(content);
+  const estimatedTokens = estimateSessionTokenUsage(session, normalizedContent);
+  const budget = calculateTokenBudgetState(estimatedTokens);
+
+  if (budget.aboveBlocking) {
+    throw new Error("Context window at capacity. Start a new session.");
+  }
+
+  if (budget.aboveWarning) {
+    log("warn", "conversation context approaching token limit", {
+      sessionId,
+      estimatedTokens,
+      pctLeft: Number(budget.pctLeft.toFixed(4))
+    });
+  }
+
+  if (budget.shouldCompact) {
+    try {
+      const compacted = compactConversationByBudget(session);
+      if (compacted) {
+        recordCompactSuccess();
+      }
+    } catch (error) {
+      recordCompactFailure();
+      log("error", "conversation auto-compaction failed", {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
 
   /** @type {ConversationTurn} */
   const turn = {
     role,
-    content: normalizeText(content),
+    content: normalizedContent,
     timestamp: new Date().toISOString(),
     metadata
   };
@@ -1048,6 +1122,7 @@ export function resetAllSessions() {
   policyRecomputations = 0;
   contextCacheHits = 0;
   contextComputations = 0;
+  resetCompactState();
 }
 
 /**

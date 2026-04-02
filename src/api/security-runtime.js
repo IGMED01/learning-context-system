@@ -33,6 +33,22 @@ function parseBoolean(value) {
 }
 
 /**
+ * @param {string | undefined} value
+ * @returns {string[]}
+ */
+function parseConnectSrcExtras(value) {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => /^(https?|wss?):\/\/[^\s]+$/iu.test(entry));
+}
+
+/**
  * Resolves a safe CORS origin for the API runtime.
  * Defaults stay local-first unless an explicit origin is configured.
  *
@@ -43,7 +59,7 @@ function parseBoolean(value) {
  */
 export function resolveCorsOrigin(explicitOrigin, host, port) {
   const normalizedExplicit = String(explicitOrigin ?? "").trim();
-  if (normalizedExplicit) {
+  if (normalizedExplicit && normalizedExplicit !== "*") {
     return normalizedExplicit;
   }
 
@@ -73,6 +89,9 @@ function resolveClientIp(request, trustProxy) {
  * @param {ServerResponse} response
  */
 export function applyBaseSecurityHeaders(response) {
+  const connectSrcExtras = parseConnectSrcExtras(process.env.LCS_CONNECT_SRC_EXTRA);
+  const connectSrc = ["'self'", ...connectSrcExtras].join(" ");
+
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("Referrer-Policy", "no-referrer");
@@ -90,9 +109,9 @@ export function applyBaseSecurityHeaders(response) {
       "object-src 'none'",
       "img-src 'self' data:",
       "font-src 'self' data:",
-      "style-src 'self' 'unsafe-inline'",
-      "script-src 'self' 'unsafe-inline'",
-      "connect-src 'self' http: https:"
+      "style-src 'self'",
+      "script-src 'self'",
+      `connect-src ${connectSrc}`
     ].join("; ")
   );
 }

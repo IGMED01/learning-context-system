@@ -5,6 +5,7 @@ import path from "node:path";
 import { purgeExpiredTempMemories } from "./memory-hygiene.js";
 import { createChunkRepository } from "../storage/chunk-repository.js";
 import { buildCloseSummaryContent } from "./memory-utils.js";
+import { atomicWrite } from "../integrations/fs-safe.js";
 
 /**
  * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
@@ -48,6 +49,37 @@ function slugify(value) {
 function truncate(value, maxLength) {
   const compacted = compactLine(value);
   return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 3)}...` : compacted;
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} fallbackIso
+ * @returns {string}
+ */
+function normalizeIsoTimestamp(value, fallbackIso) {
+  if (typeof value === "string" && value.trim()) {
+    const parsed = new Date(value.trim());
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+
+  return fallbackIso;
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} fallbackIso
+ * @returns {number}
+ */
+function normalizeTimestampMs(value, fallbackIso) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return Math.trunc(numeric);
+  }
+
+  const parsedFallback = Date.parse(fallbackIso);
+  return Number.isFinite(parsedFallback) ? parsedFallback : Date.now();
 }
 
 // ── TF-IDF Search Engine ─────────────────────────────────────────────
@@ -336,10 +368,11 @@ async function readEntries(filePath) {
         }
 
         const candidate = /** @type {Record<string, unknown>} */ (parsed);
-        const createdAt =
-          typeof candidate.createdAt === "string" && candidate.createdAt
-            ? candidate.createdAt
-            : new Date().toISOString();
+        const fallbackIso = new Date().toISOString();
+        const createdAt = normalizeIsoTimestamp(candidate.createdAt, fallbackIso);
+        const updatedAt = normalizeIsoTimestamp(candidate.updatedAt, createdAt);
+        const createdAtMs = normalizeTimestampMs(candidate.createdAtMs, createdAt);
+        const updatedAtMs = normalizeTimestampMs(candidate.updatedAtMs, updatedAt);
 
         entries.push({
           id: typeof candidate.id === "string" ? candidate.id : slugify(createdAt),
@@ -350,6 +383,14 @@ async function readEntries(filePath) {
           scope: typeof candidate.scope === "string" ? candidate.scope : "project",
           topic: typeof candidate.topic === "string" ? candidate.topic : "",
           createdAt,
+          updatedAt,
+          createdAtMs,
+          updatedAtMs,
+          freshnessNote:
+            typeof candidate.freshnessNote === "string" && candidate.freshnessNote.trim()
+              ? candidate.freshnessNote.trim()
+              : null,
+          truncated: candidate.truncated === true,
           ...extractHygieneMetadata(candidate)
         });
       } catch {
@@ -439,7 +480,7 @@ async function writeEntries(filePath, entries) {
   const dir = path.dirname(filePath);
   await mkdir(dir, { recursive: true });
   const lines = entries.map((e) => JSON.stringify(e));
-  await writeFile(filePath, lines.join("\n") + (lines.length ? "\n" : ""), "utf8");
+  await atomicWrite(filePath, lines.join("\n") + (lines.length ? "\n" : ""), "utf8");
 }
 
 /**
@@ -450,10 +491,11 @@ function mapChunksToEntries(chunks) {
   return chunks
     .map((chunk) => {
       const metadata = asRecord(chunk.metadata);
-      const createdAt =
-        typeof metadata.createdAt === "string" && metadata.createdAt
-          ? metadata.createdAt
-          : new Date().toISOString();
+      const fallbackIso = new Date().toISOString();
+      const createdAt = normalizeIsoTimestamp(metadata.createdAt, fallbackIso);
+      const updatedAt = normalizeIsoTimestamp(metadata.updatedAt, createdAt);
+      const createdAtMs = normalizeTimestampMs(metadata.createdAtMs, createdAt);
+      const updatedAtMs = normalizeTimestampMs(metadata.updatedAtMs, updatedAt);
 
       return {
         id: chunk.id,
@@ -475,6 +517,14 @@ function mapChunksToEntries(chunks) {
         topic:
           typeof metadata.topic === "string" ? metadata.topic : "",
         createdAt,
+        updatedAt,
+        createdAtMs,
+        updatedAtMs,
+        freshnessNote:
+          typeof metadata.freshnessNote === "string" && metadata.freshnessNote.trim()
+            ? metadata.freshnessNote.trim()
+            : null,
+        truncated: metadata.truncated === true,
         ...extractHygieneMetadata(metadata)
       };
     })
@@ -716,6 +766,9 @@ export function createLocalMemoryStore(options = {}) {
       : projectFilePath(baseDir, input.project);
     const entries = await readEntries(fp);
     const createdAt = new Date().toISOString();
+    const updatedAt = createdAt;
+    const createdAtMs = Date.now();
+    const updatedAtMs = createdAtMs;
     const id = `${createdAt.replace(/[-:.TZ]/gu, "")}-${slugify(input.title).slice(0, 20)}`;
 
     // Calculate expiresAt for temporary memories
@@ -744,6 +797,9 @@ export function createLocalMemoryStore(options = {}) {
       scope: input.scope ?? "project",
       topic: input.topic ?? "",
       createdAt,
+      updatedAt,
+      createdAtMs,
+      updatedAtMs,
       ...(isTemp ? { expiresAt, ttlMinutes, autoExpire: true } : {}),
       ...extractHygieneMetadata(asRecord(input))
     };

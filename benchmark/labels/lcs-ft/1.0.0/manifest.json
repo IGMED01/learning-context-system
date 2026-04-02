@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "dataset": "lcs-ft",
+  "version": "1.0.0",
+  "generatedAt": "2026-04-02T05:26:10.509Z",
+  "source": "benchmark/ft-readiness-dataset.json",
+  "sourceSha256": "1f8a4639c9dc7560eb718371cea2b697de035b2a01a2c4dc92c888733fc46043",
+  "sampleCount": 12,
+  "files": {
+    "labels": "labels.jsonl"
+  }
+}

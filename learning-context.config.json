@@ -38,6 +38,19 @@
   "scan": {
     "ignoreDirs": [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
   },
+  "sync": {
+    "knowledgeBackend": "local-only",
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "backoffMs": 1000,
+      "maxBackoffMs": 30000
+    },
+    "dlq": {
+      "enabled": true,
+      "path": ".lcs/dlq",
+      "ttlDays": 7
+    }
+  },
   "safety": {
     "requirePlanForWrite": false,
     "allowedScopePaths": [],

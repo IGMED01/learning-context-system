@@ -116,16 +116,16 @@ Reducir degradación por acumulación temporal y mantener señal estable en sesi
 ### Sí aplicar FT
 - [x] **FT-1 (Alta):** piloto de formato estable (Change/Reason/Concepts/Practice) con gate automático (`benchmark:ft1-format`) + thresholds de lift.
 - [x] **FT-2 (Alta):** piloto de clasificador de intención/ruteo con gate automático (`benchmark:ft2-intent`) y métricas de `accuracy` + `macro-F1` + `lift`.
-- [ ] **FT-3 (Media):** clasificador de riesgo previo al guard.
-- [ ] **FT-4 (Media):** query rewriting controlado para retrieval.
+- [x] **FT-3 (Media):** clasificador de riesgo previo al guard (`src/eval/ft3-risk-gate.js`, `benchmark:ft3-risk`).
+- [x] **FT-4 (Media):** query rewriting controlado para retrieval (`src/eval/ft4-query-rewrite-gate.js`, `benchmark:ft4-query-rewrite`).
 
 ### No aplicar FT (mantener en RAG)
-- [ ] conocimiento cambiante del repo/config/incidentes.
-- [ ] datos sensibles/secrets/PII.
+- [x] conocimiento cambiante del repo/config/incidentes. (se mantiene en RAG, sin FT)
+- [x] datos sensibles/secrets/PII. (se mantiene en RAG + guards, sin FT)
 
 ### Gate previo
 - [x] dataset curado + guard + sin ruido + sin secretos (gate `ft:readiness` con secret/duplicados/cobertura/practice).
-- [ ] pipeline de etiquetado versionado.
+- [x] pipeline de etiquetado versionado. (`scripts/run-versioned-label-pipeline.js`, `benchmark/labels/lcs-ft/1.0.0/`)
 - [x] benchmark offline/online contra baseline retrieval-first (gate dedicado sin degradar factualidad).
 
 ---
@@ -141,7 +141,7 @@ Reducir degradación por acumulación temporal y mantener señal estable en sesi
 7. [x] Prueba path safety de pipeline (`outside workspace` -> 400).
 8. [x] Prueba rate-limit bajo alta cardinalidad IP.
 9. [x] Piloto FT-1 (solo formato) + evaluación automática (`benchmark:ft1-format`).
-10. [ ] Reporte semanal anti-ruido + decisión go/no-go FT-2.
+10. [x] Reporte semanal anti-ruido + decisión go/no-go FT-2. (`docs/reports/anti-noise-weekly-2026-04-02.md`)
 
 ---
 
@@ -154,7 +154,7 @@ Reducir degradación por acumulación temporal y mantener señal estable en sesi
 - [x] P1-15.
 
 ### Fase C (evolución)
-- [ ] Cerrar pendientes de evolución: FT-3, FT-4 y pipeline de etiquetado versionado.
+- [x] Cerrar pendientes de evolución: FT-3, FT-4 y pipeline de etiquetado versionado.
 
 ---
 
@@ -178,5 +178,5 @@ Reducir degradación por acumulación temporal y mantener señal estable en sesi
 - [x] Paridad contractual por tests de API.
 
 ### Validación externa (sin integrar en NEXUS)
-- [ ] Ejecutar GGA en modo externo sobre staged files del repo.
-- [ ] Consumir findings como insumo del checklist, sin acoplar GGA al runtime ni al core.
+- [x] Ejecutar GGA en modo externo sobre staged files del repo. (ejecución documentada en `docs/reports/gga-external-2026-04-02.md`)
+- [x] Consumir findings como insumo del checklist, sin acoplar GGA al runtime ni al core. (sin cambios al runtime)

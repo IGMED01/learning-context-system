@@ -2,6 +2,7 @@
 
 import http from "node:http";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { createAuthMiddleware } from "./auth-middleware.js";
 import { selectEndpointContext } from "../context/context-mode.js";
 import {
@@ -127,7 +128,7 @@ function asArray(value) {
 }
 
 function createRequestId() {
-  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return randomUUID();
 }
 
 /**

@@ -5,7 +5,16 @@
  *   name?: string,
  *   method: string,
  *   path: string,
- *   handler: (req: import("../types/core-contracts.d.ts").ApiRequest) => Promise<import("../types/core-contracts.d.ts").ApiResponse>,
+ *   handler?: (req: import("../types/core-contracts.d.ts").ApiRequest) => Promise<import("../types/core-contracts.d.ts").ApiResponse>,
+ *   rawHandler?: (
+ *     req: import("../types/core-contracts.d.ts").ApiRequest,
+ *     context: {
+ *       httpReq: import("node:http").IncomingMessage,
+ *       httpRes: import("node:http").ServerResponse,
+ *       corsOrigin: string,
+ *       startMs: number
+ *     }
+ *   ) => Promise<boolean | void>,
  *   isAvailable?: () => boolean | Promise<boolean>
  * }} CommandDef
  */
@@ -92,8 +101,8 @@ export function registerCommand(def) {
     throw new Error("Command method is required.");
   }
 
-  if (typeof def.handler !== "function") {
-    throw new Error(`Command handler must be a function (${method} ${path}).`);
+  if (typeof def.handler !== "function" && typeof def.rawHandler !== "function") {
+    throw new Error(`Command must define handler or rawHandler (${method} ${path}).`);
   }
 
   const key = `${method}:${path}`;

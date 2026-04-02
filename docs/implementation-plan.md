@@ -145,10 +145,10 @@
 - `src/core/logger.js` — Structured logging (ver Fase 1.4)
 
 **DoD**:
-- [ ] `src/utils/` contiene 11 módulos independientes
-- [ ] `src/core/` existe y está vacío (los módulos se crean en sus fases)
-- [ ] 0 funciones duplicadas en el codebase (verificar con grep)
-- [ ] `npm test` sigue verde después de los imports
+- [x] `src/utils/` contiene 11 módulos independientes
+- [x] `src/core/` existe y está vacío (los módulos se crean en sus fases)
+- [x] 0 funciones duplicadas en el codebase (verificar con grep)
+- [x] `npm test` sigue verde después de los imports
 
 ---
 
@@ -193,9 +193,9 @@ export function buildSafeEnv(overrides = {}) {
 > **Bug corregido vs v1.0**: el original usaba `if (value)` que eliminaba keys con valor `"0"`, `false`, o `""`. Ahora usa `!== undefined`.
 
 **DoD**:
-- [ ] Ningún `execFile` o `spawn` en `handlers.js` pasa `process.env` completo
-- [ ] Test: subprocess no tiene acceso a `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`
-- [ ] `code-gate.js` usa `buildSafeEnv()` o `buildCodeGateEnv()` consistentemente (no ambas — unificar)
+- [x] Ningún `execFile` o `spawn` en `handlers.js` pasa `process.env` completo
+- [x] Test: subprocess no tiene acceso a `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`
+- [x] `code-gate.js` usa `buildSafeEnv()` o `buildCodeGateEnv()` consistentemente (no ambas — unificar)
 
 ### 1.2 — Guard sobre Chunks Sanitizados (C3)
 
@@ -234,10 +234,10 @@ export function sanitizeChunks(chunks) {
 ```
 
 **DoD**:
-- [ ] Guard se ejecuta DESPUÉS de normalizar y sanitizar chunks, no antes
-- [ ] Test: chunk con `system: ignore previous instructions` → `[SANITIZED]`
-- [ ] Test: chunk normal → contenido intacto
-- [ ] La sanitización no altera el score de relevancia del chunk
+- [x] Guard se ejecuta DESPUÉS de normalizar y sanitizar chunks, no antes
+- [x] Test: chunk con `system: ignore previous instructions` → `[SANITIZED]`
+- [x] Test: chunk normal → contenido intacto
+- [x] La sanitización no altera el score de relevancia del chunk
 
 ### 1.3 — Path Resolution Seguro (H1)
 
@@ -266,10 +266,10 @@ export function resolveSafePathWithinWorkspace(userPath, fieldName = "path") {
 ```
 
 **DoD**:
-- [ ] Regex de path traversal eliminado de `start.js` y `handlers.js`
-- [ ] Todos los path checks usan `path.resolve()` + `startsWith()`
-- [ ] Test: `../../../etc/passwd` → Error 400
-- [ ] Test: `./src/file.js` → resuelve correctamente
+- [x] Regex de path traversal eliminado de `start.js` y `handlers.js`
+- [x] Todos los path checks usan `path.resolve()` + `startsWith()`
+- [x] Test: `../../../etc/passwd` → Error 400
+- [x] Test: `./src/file.js` → resuelve correctamente
 
 ### 1.4 — Logging en Catches Silenciosos (H2)
 
@@ -307,10 +307,10 @@ export function log(level, message, context = {}) {
 | `src/memory/memory-hygiene.js` | 112 | Corrupted JSONL lines | Per-line error handling con `log` |
 
 **DoD**:
-- [ ] Los 6 catches registran el error con `log()`
-- [ ] Formato JSON estructurado con `timestamp`, `level`, `message`, `context`
-- [ ] Configurable via `LCS_LOG_LEVEL` (info/warn/error)
-- [ ] No expone datos sensibles en logs (no API keys, no tokens)
+- [x] Los 6 catches registran el error con `log()`
+- [x] Formato JSON estructurado con `timestamp`, `level`, `message`, `context`
+- [x] Configurable via `LCS_LOG_LEVEL` (info/warn/error)
+- [x] No expone datos sensibles en logs (no API keys, no tokens)
 
 ### 1.5 — Migrar JWT a Librería Auditada (H3)
 
@@ -334,11 +334,11 @@ jwt.verify(token, secret, {
 ```
 
 **DoD**:
-- [ ] `jsonwebtoken` como dependencia en `package.json`
-- [ ] Algoritmo forzado a HS256
-- [ ] `iss`, `aud`, `nbf`, `iat` validados
-- [ ] Clock skew configurable via `LCS_JWT_CLOCK_SKEW`
-- [ ] Tests: JWT inválido → 401, expirado → 401, algoritmo incorrecto → 401
+- [x] `jsonwebtoken` como dependencia en `package.json`
+- [x] Algoritmo forzado a HS256
+- [x] `iss`, `aud`, `nbf`, `iat` validados
+- [x] Clock skew configurable via `LCS_JWT_CLOCK_SKEW`
+- [x] Tests: JWT inválido → 401, expirado → 401, algoritmo incorrecto → 401
 
 ### 1.6 — Auth en Rutas Públicas (C1)
 
@@ -358,9 +358,9 @@ if (!parseBoolean(process.env.LCS_DEMO_ENABLED ?? 'false')) {
 ```
 
 **DoD**:
-- [ ] `/api/openapi.json` no expone rutas internas ni detalles de auth
-- [ ] `/api/demo` requiere `LCS_DEMO_ENABLED=true` para estar activo
-- [ ] Por defecto (`LCS_DEMO_ENABLED` no seteado) → 404
+- [x] `/api/openapi.json` no expone rutas internas ni detalles de auth
+- [x] `/api/demo` requiere `LCS_DEMO_ENABLED=true` para estar activo
+- [x] Por defecto (`LCS_DEMO_ENABLED` no seteado) → 404
 
 ### 1.7 — Timeouts de Request (M4)
 
@@ -378,10 +378,10 @@ server.requestTimeout = parseInt(process.env.LCS_REQUEST_TIMEOUT ?? "60000");
 ```
 
 **DoD**:
-- [ ] `keepAliveTimeout` = 30s (configurable)
-- [ ] `headersTimeout` = 30s (configurable)
-- [ ] `requestTimeout` = 60s (configurable)
-- [ ] Test: request que tarda más del timeout → 408
+- [x] `keepAliveTimeout` = 30s (configurable)
+- [x] `headersTimeout` = 30s (configurable)
+- [x] `requestTimeout` = 60s (configurable)
+- [x] Test: request que tarda más del timeout → 408
 
 ---
 
@@ -406,10 +406,10 @@ server.requestTimeout = parseInt(process.env.LCS_REQUEST_TIMEOUT ?? "60000");
 - Si se descarta: por qué
 
 **DoD**:
-- [ ] `docs/pattern-findings.md` creado con hallazgos de cada directorio
-- [ ] Decisión documentada para Command Registry (Fase 2.0 necesita esto)
-- [ ] Decisión documentada para agent loop vs `agent-query-loop.js`
-- [ ] Decisión documentada para versioning vs migración ad-hoc
+- [x] `docs/pattern-findings.md` creado con hallazgos de cada directorio
+- [x] Decisión documentada para Command Registry (Fase 2.0 necesita esto)
+- [x] Decisión documentada para agent loop vs `agent-query-loop.js`
+- [x] Decisión documentada para versioning vs migración ad-hoc
 
 ---
 
@@ -491,10 +491,10 @@ import "./commands/axioms.js";
 ```
 
 **DoD**:
-- [ ] `registerCommand()` lanza si se registra la misma ruta dos veces
-- [ ] Agregar nuevo endpoint = crear 1 archivo en `src/api/commands/`, 0 cambios al core
-- [ ] `handlers.js` no crece con cada feature nueva
-- [ ] Test: registrar comando duplicado → error en startup, no en runtime
+- [x] `registerCommand()` lanza si se registra la misma ruta dos veces
+- [x] Agregar nuevo endpoint = crear 1 archivo en `src/api/commands/`, 0 cambios al core
+- [x] `handlers.js` no crece con cada feature nueva
+- [x] Test: registrar comando duplicado → error en startup, no en runtime
 
 ### 2.1 — Task State Machine
 
@@ -649,12 +649,12 @@ function serializeTask(task) {
 - `src/orchestration/repair-loop.js` — integrar `createTask('repair', ...)`
 
 **DoD**:
-- [ ] `createTask()` genera IDs legibles: `a3x8k2`, `g7f1n4`
-- [ ] Cleanup automático cada 10 minutos, no bloquea el proceso
-- [ ] `cancelTask()` aborta el AbortController
-- [ ] `GET /api/tasks` lista todos los tasks
-- [ ] `POST /api/tasks/:id/cancel` cancela un task corriendo
-- [ ] Verificación con NEXUS: `node src/cli.js shell` → crear task → ver en `/api/tasks`
+- [x] `createTask()` genera IDs legibles: `a3x8k2`, `g7f1n4`
+- [x] Cleanup automático cada 10 minutos, no bloquea el proceso
+- [x] `cancelTask()` aborta el AbortController
+- [x] `GET /api/tasks` lista todos los tasks
+- [x] `POST /api/tasks/:id/cancel` cancela un task corriendo
+- [x] Verificación con NEXUS: `node src/cli.js shell` → crear task → ver en `/api/tasks`
 
 ### 2.2 — Context Memoization
 
@@ -878,10 +878,10 @@ export { getGateErrors, formatGateErrors } from "./code-gate-errors.js";
 `src/guard/code-gate-errors.js` (~30 líneas) — extraer funciones de error.
 
 **DoD**:
-- [ ] `runCodeGate()` ejecuta herramientas en paralelo
-- [ ] Agregar nueva herramienta = crear 1 archivo + 1 línea en `index.js`
-- [ ] `code-gate.js` reducido de 597 a ~80 líneas
-- [ ] Tests existentes de code-gate siguen verdes
+- [x] `runCodeGate()` ejecuta herramientas en paralelo
+- [x] Agregar nueva herramienta = crear 1 archivo + 1 línea en `index.js`
+- [x] `code-gate.js` reducido de 597 a ~80 líneas
+- [x] Tests existentes de code-gate siguen verdes
 
 ### 2.5 — Escaneo Paralelo del Workspace (M6)
 
@@ -924,10 +924,10 @@ async function readFileHeader(filePath) {
 ```
 
 **DoD**:
-- [ ] Cap duro de 200 archivos, ordenados por mtime desc
-- [ ] 1 archivo corrupto no cancela el escaneo completo
-- [ ] Single-pass header para manifests (solo 30 líneas)
-- [ ] Benchmark: tiempo de escaneo reducido vs secuencial (medir con `console.time`)
+- [x] Cap duro de 200 archivos, ordenados por mtime desc
+- [x] 1 archivo corrupto no cancela el escaneo completo
+- [x] Single-pass header para manifests (solo 30 líneas)
+- [x] Benchmark: tiempo de escaneo reducido vs secuencial (medir con `console.time`)
 
 ### 2.6 — Auto-Compact y Circuit Breaker para Contexto
 
@@ -1023,11 +1023,11 @@ if (budget.shouldCompact) {
 ```
 
 **DoD**:
-- [ ] `calculateTokenBudgetState()` retorna los 5 booleans (pct, warning, autocompact, blocking, shouldCompact)
-- [ ] Circuit breaker abre después de 3 fallos consecutivos
-- [ ] `LCS_DISABLE_AUTO_COMPACT=true` desactiva la compaction
-- [ ] Warning en logs cuando contexto supera el threshold
-- [ ] Test: 4 fallos consecutivos → circuit breaker abierto → no más intentos de compact
+- [x] `calculateTokenBudgetState()` retorna los 5 booleans (pct, warning, autocompact, blocking, shouldCompact)
+- [x] Circuit breaker abre después de 3 fallos consecutivos
+- [x] `LCS_DISABLE_AUTO_COMPACT=true` desactiva la compaction
+- [x] Warning en logs cuando contexto supera el threshold
+- [x] Test: 4 fallos consecutivos → circuit breaker abierto → no más intentos de compact
 
 ---
 
@@ -1100,11 +1100,11 @@ registerCommand({
 ```
 
 **DoD**:
-- [ ] `GET /api/health` responde con estado de cada componente
-- [ ] Status: "healthy", "degraded", "unhealthy"
-- [ ] Incluye: memoria, axiomas, Engram, proveedores LLM
-- [ ] Docker healthcheck: `curl -f http://localhost:3100/api/health`
-- [ ] Verificación manual: `node src/cli.js doctor --format json` debe coincidir con `/api/health`
+- [x] `GET /api/health` responde con estado de cada componente
+- [x] Status: "healthy", "degraded", "unhealthy"
+- [x] Incluye: memoria, axiomas, Engram, proveedores LLM
+- [x] Docker healthcheck: `curl -f http://localhost:3100/api/health`
+- [x] Verificación manual: `node src/cli.js doctor --format json` debe coincidir con `/api/health`
 
 ### 3.2 — Error Reporting en Proveedores LLM
 
@@ -1133,9 +1133,9 @@ return { ok: false, response: "All LLM providers failed.",
 ```
 
 **DoD**:
-- [ ] Cada fallo de proveedor registrado con nombre, error, y status
-- [ ] Respuesta incluye array `failures` con detalles diagnósticos
-- [ ] Test: todos los proveedores fallan → response incluye `failures` con detalle de cada uno
+- [x] Cada fallo de proveedor registrado con nombre, error, y status
+- [x] Respuesta incluye array `failures` con detalles diagnósticos
+- [x] Test: todos los proveedores fallan → response incluye `failures` con detalle de cada uno
 
 ### 3.3 — Query Loop con Recovery
 
@@ -1229,10 +1229,10 @@ export async function* runAgentWithRecovery(opts) {
 > **Bug corregido vs v1.0**: el original hacía `continue` después de `repair.success`, lo que volvía a ejecutar `spawnNexusAgent` en la siguiente iteración sobreescribiendo `agentOutput`. Ahora usa `break` para salir del loop inmediatamente.
 
 **DoD**:
-- [ ] Generator yields: select → axioms → agent → (repair?) → done
-- [ ] Abort signal cancela limpiamente sin throw
-- [ ] Repair exitoso sale del loop, no reintenta el agente
-- [ ] Task status actualizado en cada transición de fase
+- [x] Generator yields: select → axioms → agent → (repair?) → done
+- [x] Abort signal cancela limpiamente sin throw
+- [x] Repair exitoso sale del loop, no reintenta el agente
+- [x] Task status actualizado en cada transición de fase
 
 ### 3.4 — SSE para Operaciones Largas
 
@@ -1274,9 +1274,9 @@ registerCommand({
 ```
 
 **DoD**:
-- [ ] Cliente recibe eventos SSE: select → axioms → agent → done
-- [ ] Desconexión del cliente aborta el agente
-- [ ] Test: `curl -N http://localhost:3100/api/agent/stream -d '{"task":"..."}'`
+- [x] Cliente recibe eventos SSE: select → axioms → agent → done
+- [x] Desconexión del cliente aborta el agente
+- [x] Test: `curl -N http://localhost:3100/api/agent/stream -d '{"task":"..."}'`
 
 ### 3.5 — Memory Staleness Layer para Engram
 
@@ -1380,14 +1380,14 @@ entry.updatedAt = Date.now();
 ```
 
 **DoD**:
-- [ ] `memoryAgeDays(mtime)` retorna días enteros, clampeado a 0 para fechas futuras
-- [ ] `memoryFreshnessText()` retorna caveat para memorias > 1 día
-- [ ] `truncateMemoryContent()` respeta AMBOS límites: 200 líneas Y 25KB
-- [ ] Engrams tienen `createdAt` y `updatedAt` en milisegundos
-- [ ] En recall: resultados incluyen `freshnessNote` (null si fresco)
-- [ ] Test: memoria de 2 días → caveat. Memoria de hoy → null.
-- [ ] Test: contenido de 201 líneas → truncado a 200. Contenido de 30KB → truncado a 25KB.
-- [ ] Verificar con Engram: `node src/cli.js recall --project learning-context-system --format json` muestra `freshnessNote`
+- [x] `memoryAgeDays(mtime)` retorna días enteros, clampeado a 0 para fechas futuras
+- [x] `memoryFreshnessText()` retorna caveat para memorias > 1 día
+- [x] `truncateMemoryContent()` respeta AMBOS límites: 200 líneas Y 25KB
+- [x] Engrams tienen `createdAt` y `updatedAt` en milisegundos
+- [x] En recall: resultados incluyen `freshnessNote` (null si fresco)
+- [x] Test: memoria de 2 días → caveat. Memoria de hoy → null.
+- [x] Test: contenido de 201 líneas → truncado a 200. Contenido de 30KB → truncado a 25KB.
+- [x] Verificar con Engram: `node src/cli.js recall --project learning-context-system --format json` muestra `freshnessNote`
 
 ### 3.6 — Background Agent Summarization
 
@@ -1504,13 +1504,13 @@ try {
 ```
 
 **DoD**:
-- [ ] `startBackgroundSummary()` retorna `{ stop() }` — control limpio
-- [ ] Timer reinicia DESPUÉS de completar el summary, no en cada ciclo (evita overlap)
-- [ ] `stop()` aborta el summary en curso Y limpia el timer
-- [ ] `LCS_DISABLE_AGENT_SUMMARY=true` desactiva completamente
-- [ ] Summary no excede 100 caracteres
-- [ ] Test: operación de 60s → recibe al menos 1 evento `summary` en el SSE stream
-- [ ] Test: `stop()` antes de que el timer dispare → no genera ningún summary
+- [x] `startBackgroundSummary()` retorna `{ stop() }` — control limpio
+- [x] Timer reinicia DESPUÉS de completar el summary, no en cada ciclo (evita overlap)
+- [x] `stop()` aborta el summary en curso Y limpia el timer
+- [x] `LCS_DISABLE_AGENT_SUMMARY=true` desactiva completamente
+- [x] Summary no excede 100 caracteres
+- [x] Test: operación de 60s → recibe al menos 1 evento `summary` en el SSE stream
+- [x] Test: `stop()` antes de que el timer dispare → no genera ningún summary
 
 ---
 
@@ -1622,14 +1622,14 @@ registerCommand({
 ```
 
 **DoD**:
-- [ ] **Prerrequisito**: leer un archivo real de `.lcs/obsidian-vault/NEXUS/Axioms/` e implementar `parseAxiomMarkdown` antes de marcar este ítem
-- [ ] P0: `GET /api/axioms` responde JSON con `schemaVersion`, `status`, `count`, `axioms`
-- [ ] P0: Si no hay fuentes, devuelve `status=ok`, `count=0`, `warnings`
-- [ ] P1: Sin duplicados, orden determinista
-- [ ] P2: Filtros `protectedOnly`, `domain`, `project` funcionan
-- [ ] P2: `format=markdown` devuelve salida legible
-- [ ] P3: Endpoint aparece en OpenAPI
-- [ ] Verificación con Engram: `node src/cli.js recall --project nexus --query "axioms"` debe correlacionar con lo que retorna el endpoint
+- [x] **Prerrequisito**: leer un archivo real de `.lcs/obsidian-vault/NEXUS/Axioms/` e implementar `parseAxiomMarkdown` antes de marcar este ítem
+- [x] P0: `GET /api/axioms` responde JSON con `schemaVersion`, `status`, `count`, `axioms`
+- [x] P0: Si no hay fuentes, devuelve `status=ok`, `count=0`, `warnings`
+- [x] P1: Sin duplicados, orden determinista
+- [x] P2: Filtros `protectedOnly`, `domain`, `project` funcionan
+- [x] P2: `format=markdown` devuelve salida legible
+- [x] P3: Endpoint aparece en OpenAPI
+- [x] Verificación con Engram: `node src/cli.js recall --project nexus --query "axioms"` debe correlacionar con lo que retorna el endpoint
 
 ### 4.2 — Limpiar Memorias de Test
 
@@ -1651,9 +1651,9 @@ node src/cli.js doctor-memory --project learning-context-system --format json
 ```
 
 **DoD**:
-- [ ] Memorias de test eliminadas del JSONL
-- [ ] `doctor-memory` reporta menos entradas en cuarentena
-- [ ] `recall` devuelve solo conocimiento real
+- [x] Memorias de test eliminadas del JSONL
+- [x] `doctor-memory` reporta menos entradas en cuarentena
+- [x] `recall` devuelve solo conocimiento real
 
 ---
 
@@ -1690,8 +1690,8 @@ export { readFile, stat, unlink, readdir };
 > **Bug corregido vs v1.0**: el original usaba `${filePath}.tmp.${Date.now()}` — colisión posible si dos escrituras ocurren en el mismo ms. Ahora usa `randomUUID()`.
 
 **DoD**:
-- [ ] `atomicWrite` en un solo archivo — no reimplementada en otro lado
-- [ ] Usada por `local-memory-store.js` (5.1) y `ObsidianProvider` (Fase 6)
+- [x] `atomicWrite` en un solo archivo — no reimplementada en otro lado
+- [x] Usada por `local-memory-store.js` (5.1) y `ObsidianProvider` (Fase 6)
 
 ### 5.1 — Escrituras Atómicas de Memoria (M1)
 
@@ -1705,8 +1705,8 @@ await atomicWrite(filePath, content);
 ```
 
 **DoD**:
-- [ ] Escrituras de memoria usan `atomicWrite` de `fs-safe.js`
-- [ ] Test: kill durante write → archivo original intacto (verificar con Engram recall post-crash)
+- [x] Escrituras de memoria usan `atomicWrite` de `fs-safe.js`
+- [x] Test: kill durante write → archivo original intacto (verificar con Engram recall post-crash)
 
 ### 5.2 — CSP/COOP/CORS Hardening (H4, H5, H6)
 
@@ -1717,9 +1717,9 @@ await atomicWrite(filePath, content);
 - H6: Restringir `connect-src` a `self` + dominios configurados
 
 **DoD**:
-- [ ] CORS sin `*` en producción
-- [ ] CSP sin `unsafe-inline`
-- [ ] `connect-src` restringido a `self` + `LCS_CONNECT_SRC_EXTRA` si existe
+- [x] CORS sin `*` en producción
+- [x] CSP sin `unsafe-inline`
+- [x] `connect-src` restringido a `self` + `LCS_CONNECT_SRC_EXTRA` si existe
 
 ### 5.3 — Error Message Sanitization (M2)
 
@@ -1738,8 +1738,8 @@ log("error", "Unhandled error", { requestId: req.requestId, stack: error.stack }
 ```
 
 **DoD**:
-- [ ] Respuestas 500 no exponen stack traces
-- [ ] Log server-side tiene el error completo con `requestId`
+- [x] Respuestas 500 no exponen stack traces
+- [x] Log server-side tiene el error completo con `requestId`
 
 ### 5.4 — Request IDs con `crypto.randomUUID()` (M3)
 
@@ -1751,8 +1751,8 @@ function createRequestId() { return randomUUID(); }
 ```
 
 **DoD**:
-- [ ] Request IDs son UUIDs v4
-- [ ] Header `x-request-id` en todas las respuestas
+- [x] Request IDs son UUIDs v4
+- [x] Header `x-request-id` en todas las respuestas
 
 ---
 
@@ -1784,9 +1784,9 @@ Extender `learning-context.config.json`:
 Actualizar `src/contracts/config-contracts.ts` con validación Zod para los nuevos campos.
 
 **DoD**:
-- [ ] Dependencias instaladas
-- [ ] Config schema actualizado con validación
-- [ ] Default `local-only` mantiene comportamiento actual (no breaking change)
+- [x] Dependencias instaladas
+- [x] Config schema actualizado con validación
+- [x] Default `local-only` mantiene comportamiento actual (no breaking change)
 
 ### 6.2 — Interface y Abstracciones
 
@@ -1886,11 +1886,11 @@ await Promise.allSettled([
 - **Nombre descriptivo**: el filename documenta qué hace la migration
 
 **DoD de la fase completa**:
-- [ ] `local-only` funciona igual que antes (no regresión)
-- [ ] `obsidian` escribe `.md` en `NEXUS/{project}/{type}/{slug}.md`
-- [ ] `notion` implementa interface completa con rate limit handling
-- [ ] DLQ retries automáticos cada 5 minutos
-- [ ] Migración idempotente con resume
+- [x] `local-only` funciona igual que antes (no regresión)
+- [x] `obsidian` escribe `.md` en `NEXUS/{project}/{type}/{slug}.md`
+- [x] `notion` implementa interface completa con rate limit handling
+- [x] DLQ retries automáticos cada 5 minutos
+- [x] Migración idempotente con resume
 
 ### 6.6 — Tests (críticos para esta fase)
 
@@ -1910,8 +1910,8 @@ await Promise.allSettled([
 | Engram + Obsidian | `remember` + `recall` funciona con ambos backends activos |
 
 **DoD**:
-- [ ] Todos los tests de la tabla pasan
-- [ ] `node src/cli.js doctor --format json` sigue verde
+- [x] Todos los tests de la tabla pasan
+- [x] `node src/cli.js doctor --format json` sigue verde
 
 ---
 
@@ -2048,13 +2048,13 @@ registerCommand({
 ```
 
 **DoD**:
-- [ ] `recordUsage()` agrega correctamente por modelo + provider
-- [ ] Tokens de cache (read vs write) trackeados por separado
-- [ ] `formatSessionCosts()` imprime breakdown legible por modelo
-- [ ] `saveSessionCosts()` + `restoreSessionCosts()` round-trip correcto
-- [ ] Endpoint `GET /api/costs/:sessionId` responde con estado actual
-- [ ] Test: 3 llamadas a Anthropic + 2 a OpenRouter → aggregation correcta por provider
-- [ ] Verificar: `node src/cli.js shell` → hacer query → costo visible en logs
+- [x] `recordUsage()` agrega correctamente por modelo + provider
+- [x] Tokens de cache (read vs write) trackeados por separado
+- [x] `formatSessionCosts()` imprime breakdown legible por modelo
+- [x] `saveSessionCosts()` + `restoreSessionCosts()` round-trip correcto
+- [x] Endpoint `GET /api/costs/:sessionId` responde con estado actual
+- [x] Test: 3 llamadas a Anthropic + 2 a OpenRouter → aggregation correcta por provider
+- [x] Verificar: `node src/cli.js shell` → hacer query → costo visible en logs
 
 ---
 
@@ -2072,12 +2072,12 @@ node src/cli.js doctor-memory --project learning-context-system --format json
 ```
 
 **DoD**:
-- [ ] Tests ≥ cantidad pre-plan + nuevos tests agregados (no regresión)
-- [ ] 0 errores de typecheck
-- [ ] Build exitoso
-- [ ] Smoke test exitoso
-- [ ] Doctor: 15+ pass, 0 fail
-- [ ] Doctor-memory: status ok
+- [x] Tests ≥ cantidad pre-plan + nuevos tests agregados (no regresión)
+- [x] 0 errores de typecheck
+- [x] Build exitoso
+- [x] Smoke test exitoso
+- [x] Doctor: 15+ pass, 0 fail
+- [x] Doctor-memory: status ok
 
 ### 8.2 — Actualizar Documentación de Seguridad
 
@@ -2190,50 +2190,50 @@ src/
 ## Criterios de Cierre Final
 
 **Seguridad**:
-- [ ] C1, C2, C3 resueltas (demo deshabilitado, subprocess env, prompt injection)
-- [ ] H1-H6 resueltas (path traversal, catches, JWT, CORS/CSP)
-- [ ] M1-M6 resueltas (atomic writes, error messages, request IDs, timeouts, async I/O, parallel scan)
+- [x] C1, C2, C3 resueltas (demo deshabilitado, subprocess env, prompt injection)
+- [x] H1-H6 resueltas (path traversal, catches, JWT, CORS/CSP)
+- [x] M1-M6 resueltas (atomic writes, error messages, request IDs, timeouts, async I/O, parallel scan)
 
 **Arquitectura**:
-- [ ] Código DRY — 0 funciones duplicadas
-- [ ] Command Registry activo — agregar endpoint = 1 archivo nuevo
-- [ ] Task FSM operativo con endpoints de API
-- [ ] Context memoization activo con cap de memoria
-- [ ] Code Gate ejecuta herramientas en paralelo
-- [ ] Escrituras atómicas consolidadas en `fs-safe.js`
+- [x] Código DRY — 0 funciones duplicadas
+- [x] Command Registry activo — agregar endpoint = 1 archivo nuevo
+- [x] Task FSM operativo con endpoints de API
+- [x] Context memoization activo con cap de memoria
+- [x] Code Gate ejecuta herramientas en paralelo
+- [x] Escrituras atómicas consolidadas en `fs-safe.js`
 
 **Visibilidad**:
-- [ ] `GET /api/health` operativo con estado real de Engram
-- [ ] `GET /api/axioms` operativo (con `parseAxiomMarkdown` implementado)
-- [ ] SSE en `/api/agent/stream` funcional
-- [ ] 0 catches silenciosos
+- [x] `GET /api/health` operativo con estado real de Engram
+- [x] `GET /api/axioms` operativo (con `parseAxiomMarkdown` implementado)
+- [x] SSE en `/api/agent/stream` funcional
+- [x] 0 catches silenciosos
 
 **Knowledge Backends**:
-- [ ] `local-only` funciona igual que antes
-- [ ] `obsidian` y `notion` backends operativos
-- [ ] DLQ con auto-retry y TTL funcionando
-- [ ] Migrations idempotentes en `src/migrations/` — no `.migration-state.json` ad-hoc
-- [ ] `createdAt`/`updatedAt` en todos los Engrams existentes (via migration)
+- [x] `local-only` funciona igual que antes
+- [x] `obsidian` y `notion` backends operativos
+- [x] DLQ con auto-retry y TTL funcionando
+- [x] Migrations idempotentes en `src/migrations/` — no `.migration-state.json` ad-hoc
+- [x] `createdAt`/`updatedAt` en todos los Engrams existentes (via migration)
 
 **Engram / Memory**:
-- [ ] `freshnessNote` en resultados de recall (null si < 1 día)
-- [ ] Truncation dual: 200 líneas Y 25KB
-- [ ] Memorias de test limpiadas
-- [ ] `node src/cli.js recall --format json` muestra `freshnessNote` en results viejos
+- [x] `freshnessNote` en resultados de recall (null si < 1 día)
+- [x] Truncation dual: 200 líneas Y 25KB
+- [x] Memorias de test limpiadas
+- [x] `node src/cli.js recall --format json` muestra `freshnessNote` en results viejos
 
 **Observabilidad**:
-- [ ] `GET /api/costs/:sessionId` operativo
-- [ ] Cost breakdown por modelo y provider en logs
-- [ ] Background summaries visibles en SSE stream para ops > 30s
-- [ ] Circuit breaker de auto-compact visible en logs tras 3 fallos
+- [x] `GET /api/costs/:sessionId` operativo
+- [x] Cost breakdown por modelo y provider en logs
+- [x] Background summaries visibles en SSE stream para ops > 30s
+- [x] Circuit breaker de auto-compact visible en logs tras 3 fallos
 
 **Calidad**:
-- [ ] Tests ≥ 207 + nuevos tests de cada fase
-- [ ] `npm run typecheck` verde
-- [ ] `npm run build` verde
-- [ ] `node src/cli.js doctor --format json` → 15+ pass, 0 fail
-- [ ] `node src/cli.js doctor-memory --project learning-context-system --format json` → ok
-- [ ] Memorias de test limpiadas (Engram clean)
+- [x] Tests ≥ 207 + nuevos tests de cada fase
+- [x] `npm run typecheck` verde
+- [x] `npm run build` verde
+- [x] `node src/cli.js doctor --format json` → 15+ pass, 0 fail
+- [x] `node src/cli.js doctor-memory --project learning-context-system --format json` → ok
+- [x] Memorias de test limpiadas (Engram clean)
 
 ---
 

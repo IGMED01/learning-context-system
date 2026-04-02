@@ -5,18 +5,21 @@
  */
 
 import { log } from "../core/logger.js";
+import { formatSessionCosts, recordUsage } from "../observability/cost-tracker.js";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
 
 /**
- * @param {{ query: string, context?: string, model?: string }} opts
- * @returns {Promise<{ ok: boolean, response: string, model: string, tokens: number, provider: string }>}
+ * @param {{ query: string, context?: string, model?: string, sessionId?: string }} opts
+ * @returns {Promise<{ ok: boolean, response: string, model: string, tokens: number, provider: string, failures: Array<{ provider: string, error: string, status: number | string }> }>}
  */
-export async function chatCompletion({ query, context, model }) {
+export async function chatCompletion({ query, context, model, sessionId }) {
   // Try providers in order: OpenRouter → Groq → Cerebras
   const providers = [];
+  /** @type {Array<{ provider: string, error: string, status: number | string }>} */
+  const failures = [];
 
   if (process.env.OPENROUTER_API_KEY) {
     providers.push({
@@ -49,7 +52,14 @@ export async function chatCompletion({ query, context, model }) {
   }
 
   if (providers.length === 0) {
-    return { ok: false, response: "No LLM API key configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or CEREBRAS_API_KEY.", model: "none", tokens: 0, provider: "none" };
+    return {
+      ok: false,
+      response: "No LLM API key configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or CEREBRAS_API_KEY.",
+      model: "none",
+      tokens: 0,
+      provider: "none",
+      failures
+    };
   }
 
   const systemPrompt = context
@@ -57,6 +67,7 @@ export async function chatCompletion({ query, context, model }) {
     : `Eres un asistente general sin acceso a documentos específicos. Responde con conocimiento general. Aclara que no tienes acceso a documentación específica del usuario.`;
 
   for (const p of providers) {
+    const startedAt = Date.now();
     try {
       const res = await fetch(p.url, {
         method: "POST",
@@ -76,28 +87,101 @@ export async function chatCompletion({ query, context, model }) {
         })
       });
 
-      if (!res.ok) continue;
+      if (!res.ok) {
+        const body = await res.text();
+        const error = body.trim() || `HTTP ${res.status}`;
+        failures.push({
+          provider: p.name,
+          error,
+          status: res.status
+        });
+        log("warn", "llm provider failed", {
+          provider: p.name,
+          model: p.model,
+          status: res.status,
+          error
+        });
+        continue;
+      }
 
       const data = await res.json();
       const choice = data.choices?.[0];
-      if (!choice) continue;
+      if (!choice) {
+        failures.push({
+          provider: p.name,
+          error: "Missing choices[0] in provider response.",
+          status: "invalid_response"
+        });
+        log("warn", "llm provider returned malformed response", {
+          provider: p.name,
+          model: p.model
+        });
+        continue;
+      }
+
+      const usage = data?.usage && typeof data.usage === "object" ? data.usage : {};
+      const promptTokens = Number(usage.prompt_tokens ?? usage.input_tokens ?? usage.inputTokens ?? 0);
+      const completionTokens = Number(
+        usage.completion_tokens ?? usage.output_tokens ?? usage.outputTokens ?? 0
+      );
+      const totalTokens = Number(usage.total_tokens ?? promptTokens + completionTokens);
+      const costUSD = Number(usage.total_cost ?? usage.cost ?? usage.usd ?? data?.cost ?? 0);
+
+      if (sessionId && sessionId.trim()) {
+        recordUsage(sessionId, {
+          modelId: data.model ?? p.model,
+          provider: p.name,
+          inputTokens: Number.isFinite(promptTokens) ? promptTokens : 0,
+          outputTokens: Number.isFinite(completionTokens) ? completionTokens : 0,
+          costUSD: Number.isFinite(costUSD) ? costUSD : 0,
+          durationMs: Date.now() - startedAt
+        });
+        log("info", "session cost updated", {
+          sessionId,
+          provider: p.name,
+          model: data.model ?? p.model,
+          summary: formatSessionCosts(sessionId)
+        });
+      }
 
       return {
         ok: true,
         response: choice.message?.content ?? "",
         model: data.model ?? p.model,
-        tokens: data.usage?.total_tokens ?? 0,
-        provider: p.name
+        tokens: Number.isFinite(totalTokens) ? totalTokens : 0,
+        provider: p.name,
+        failures
       };
     } catch (error) {
-      log("warn", "openrouter provider call failed", {
+      const message = error instanceof Error ? error.message : String(error);
+      const status =
+        typeof error === "object" &&
+        error &&
+        "status" in error &&
+        typeof error.status === "number"
+          ? error.status
+          : "unknown";
+      failures.push({
+        provider: p.name,
+        error: message,
+        status
+      });
+      log("warn", "llm provider failed", {
         provider: p.name,
         model: p.model,
-        error: error instanceof Error ? error.message : String(error)
+        error: message,
+        status
       });
       continue;
     }
   }
 
-  return { ok: false, response: "All LLM providers failed.", model: "none", tokens: 0, provider: "none" };
+  return {
+    ok: false,
+    response: "All LLM providers failed.",
+    model: "none",
+    tokens: 0,
+    provider: "none",
+    failures
+  };
 }

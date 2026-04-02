@@ -50,6 +50,9 @@
     "ft:readiness": "node scripts/check-ft-readiness.js",
     "benchmark:ft1-format": "node benchmark/run-ft1-format-gate.js",
     "benchmark:ft2-intent": "node benchmark/run-ft2-intent-gate.js",
+    "benchmark:ft3-risk": "node benchmark/run-ft3-risk-gate.js",
+    "benchmark:ft4-query-rewrite": "node benchmark/run-ft4-query-rewrite-gate.js",
+    "ft:labels:versioned": "node scripts/run-versioned-label-pipeline.js --input benchmark/ft-readiness-dataset.json --name lcs-ft --output-dir benchmark/labels",
     "openapi:export": "node scripts/export-openapi.js",
     "e2e:nexus": "node scripts/run-nexus-e2e.js",
     "doctor": "node src/cli.js doctor --format text",
@@ -86,7 +89,12 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "async-mutex": "^0.5.0",
+    "graceful-fs": "^4.2.11",
+    "gray-matter": "^4.0.3",
     "jsonwebtoken": "^9.0.3",
-    "pdf-parse": "^2.4.5"
+    "p-queue": "^9.1.1",
+    "pdf-parse": "^2.4.5",
+    "proper-lockfile": "^4.1.2"
   }
 }
