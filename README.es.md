@@ -1,11 +1,25 @@
 # NEXUS
 
-[![CI](https://img.shields.io/github/actions/workflow/status/IGMED01/NEXUS/ci.yml?branch=main&label=CI)](https://github.com/IGMED01/NEXUS/actions/workflows/ci.yml)
-[![CodeQL](https://img.shields.io/github/actions/workflow/status/IGMED01/NEXUS/codeql.yml?branch=main&label=CodeQL)](https://github.com/IGMED01/NEXUS/actions/workflows/codeql.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems/ci.yml?branch=main&label=CI)](https://github.com/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems/codeql.yml?branch=main&label=CodeQL)](https://github.com/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems/actions/workflows/codeql.yml)
 ![Node 20+](https://img.shields.io/badge/node-20%2B-339933?logo=nodedotjs&logoColor=white)
 ![NEXUS](https://img.shields.io/badge/platform-NEXUS-2563eb)
 
 NEXUS es una plataforma CLI-first para **seleccionar contexto, enseñar desde cambios de código y persistir memoria durable** en un solo flujo.
+
+## Qué es NEXUS (hoy)
+
+NEXUS es una plataforma de ingeniería asistida por IA con enfoque pedagógico:
+
+- selecciona contexto de alta señal y reduce ruido;
+- entrega salida didáctica (`Change / Reason / Concepts / Practice`);
+- guarda memoria durable con Engram como batería externa y fallback local resiliente;
+- expone endpoints operativos (`/api/health`, `/api/axioms`, `/api/costs/:sessionId`, `/api/agent/stream`).
+
+**Estado actual (2 de abril de 2026):**
+- plan de implementación/hardening completado;
+- checklists críticos cerrados;
+- gates de CI activos (retrieval-first, anti-ruido y readiness de FT).
 
 ## Qué hace NEXUS hoy
 
@@ -26,8 +40,8 @@ NEXUS es una plataforma CLI-first para **seleccionar contexto, enseñar desde ca
 ## Instalación
 
 ```bash
-git clone https://github.com/IGMED01/NEXUS.git
-cd NEXUS
+git clone https://github.com/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems.git
+cd Nexus-Context-Orchestration-Engine-for-LLM-Systems
 npm ci --ignore-scripts
 npm run doctor:json
 ```
@@ -129,6 +143,9 @@ Estrategia actual: modularizar primero dentro de un repo; extraer a multi-repo s
 ## Documentación
 
 - Índice de docs: [`docs/README.md`](docs/README.md)
+- Plan de implementación (v3): [`docs/implementation-plan.md`](docs/implementation-plan.md)
+- Checklist de hardening: [`docs/nexus-hardening-checklist.md`](docs/nexus-hardening-checklist.md)
+- Guía de knowledge backends: [`docs/knowledge-backends.md`](docs/knowledge-backends.md)
 - Plan NEXUS: [`docs/planning/nexus-plan.md`](docs/planning/nexus-plan.md)
 - Guía API NEXUS: [`docs/nexus-api.md`](docs/nexus-api.md)
 - Guía de integración: [`docs/integration.md`](docs/integration.md)
