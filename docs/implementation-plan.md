@@ -723,11 +723,11 @@ export function addTurn(sessionId, role, content, metadata) {
 > **Bug corregido vs v1.0**: se agrega `MAX_CONTEXT_CACHE_SIZE = 200` con eviction del entry más antiguo. El original no tenía cap → memory leak con sesiones largas.
 
 **DoD**:
-- [ ] `resolveConversationPolicy()` no lee `process.env` si las vars no cambiaron
-- [ ] `buildConversationContext()` retorna cache si los turns no cambiaron
-- [ ] Cache se invalida al agregar un turn
-- [ ] Cache no supera 200 entradas
-- [ ] Test: 100 llamadas sin cambios → 1 computación real
+- [x] `resolveConversationPolicy()` no lee `process.env` si las vars no cambiaron
+- [x] `buildConversationContext()` retorna cache si los turns no cambiaron
+- [x] Cache se invalida al agregar un turn
+- [x] Cache no supera 200 entradas
+- [x] Test: 100 llamadas sin cambios → 1 computación real
 
 ### 2.3 — Operaciones Síncronas → Asíncronas (M5)
 
@@ -783,8 +783,8 @@ export function recordCommandMetric(metric) {
 > **Mejora vs v1.0**: se agrega `process.once('SIGTERM', ...)` para flush del buffer antes de terminar. El original podía perder métricas en shutdown limpio.
 
 **DoD**:
-- [ ] `output-auditor.log()` no bloquea el event loop
-- [ ] `tryServeStatic()` no usa `readFileSync`
+- [x] `output-auditor.log()` no bloquea el event loop
+- [x] `tryServeStatic()` no usa `readFileSync`
 - [ ] `recordCommandMetric()` hace batch writes cada 1 segundo
 - [ ] Métricas no se pierden en `SIGTERM`
 

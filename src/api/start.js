@@ -6,7 +6,7 @@
  */
 
 import http from "node:http";
-import fs from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAuthMiddleware } from "./auth-middleware.js";
@@ -26,6 +26,9 @@ import { handleRequest } from "./router.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIST = path.resolve(__dirname, "../../ui/dist");
+const MAX_STATIC_CACHE_ITEMS = 120;
+/** @type {Map<string, { content: Buffer, mime: string, cacheControl: string }>} */
+const staticFileCache = new Map();
 
 /**
  * @param {string | undefined} raw
@@ -58,6 +61,21 @@ function parseTimeoutMs(value, fallback, min = 1_000, max = 600_000) {
   return Math.trunc(numeric);
 }
 
+/**
+ * @param {string} key
+ * @param {{ content: Buffer, mime: string, cacheControl: string }} value
+ */
+function setStaticCache(key, value) {
+  if (staticFileCache.size >= MAX_STATIC_CACHE_ITEMS) {
+    const oldest = staticFileCache.keys().next().value;
+    if (oldest) {
+      staticFileCache.delete(oldest);
+    }
+  }
+
+  staticFileCache.set(key, value);
+}
+
 const MIME_TYPES = {
   ".html": "text/html",
   ".css":  "text/css",
@@ -80,7 +98,7 @@ const MIME_TYPES = {
  * @param {http.ServerResponse} res
  * @returns {boolean}
  */
-function tryServeStatic(urlPath, res) {
+async function tryServeStatic(urlPath, res) {
   const rawPath = String(urlPath ?? "");
   const normalizedPath = rawPath.replace(/^[/\\]+/u, "");
   if (!normalizedPath) {
@@ -99,17 +117,35 @@ function tryServeStatic(urlPath, res) {
   }
 
   try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) return false;
+    const fileStat = await stat(filePath);
+    if (!fileStat.isFile()) return false;
 
     const ext = path.extname(filePath).toLowerCase();
     const mime = MIME_TYPES[ext] || "application/octet-stream";
-    const content = fs.readFileSync(filePath);
+    const cacheControl = ext === ".html"
+      ? "no-cache"
+      : "public, max-age=31536000, immutable";
+    const cached = staticFileCache.get(filePath);
+    if (cached) {
+      res.writeHead(200, {
+        "Content-Type": cached.mime,
+        "Content-Length": cached.content.length,
+        "Cache-Control": cached.cacheControl
+      });
+      res.end(cached.content);
+      return true;
+    }
+
+    const content = await readFile(filePath);
+
+    if (ext !== ".html" && fileStat.size <= 512 * 1024) {
+      setStaticCache(filePath, { content, mime, cacheControl });
+    }
 
     res.writeHead(200, {
       "Content-Type": mime,
       "Content-Length": content.length,
-      "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=31536000, immutable",
+      "Cache-Control": cacheControl,
     });
     res.end(content);
     return true;
@@ -127,10 +163,26 @@ function tryServeStatic(urlPath, res) {
  * Serve index.html for SPA routing.
  * @param {http.ServerResponse} res
  */
-function serveSpaFallback(res) {
+async function serveSpaFallback(res) {
   const indexPath = path.join(UI_DIST, "index.html");
   try {
-    const content = fs.readFileSync(indexPath, "utf8");
+    const cached = staticFileCache.get(indexPath);
+    if (cached) {
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Length": cached.content.length,
+        "Cache-Control": "no-cache"
+      });
+      res.end(cached.content);
+      return;
+    }
+
+    const content = await readFile(indexPath);
+    setStaticCache(indexPath, {
+      content,
+      mime: "text/html; charset=utf-8",
+      cacheControl: "no-cache"
+    });
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
     res.end(content);
   } catch (error) {
@@ -240,10 +292,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Static files from ui/dist
-  if (tryServeStatic(pathname, res)) return;
+  if (await tryServeStatic(pathname, res)) return;
 
   // SPA fallback — serve index.html for client-side routing
-  serveSpaFallback(res);
+  await serveSpaFallback(res);
 });
 
 server.keepAliveTimeout = parseTimeoutMs(

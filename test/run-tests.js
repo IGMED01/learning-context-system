@@ -71,9 +71,11 @@ import {
   buildConversationRecallQuery,
   cleanupExpiredSessions,
   createSession as createConversationSession,
+  getConversationMemoizationStats,
   getConversationNoiseTelemetry,
   getSession as getConversationSession,
-  resetAllSessions
+  resetAllSessions,
+  updateContext as updateConversationContext
 } from "../src/orchestration/conversation-manager.js";
 import { createAuthMiddleware } from "../src/api/auth-middleware.js";
 import { createNexusApiServer } from "../src/api/server.js";
@@ -1255,6 +1257,72 @@ run("conversation recall query includes accumulated context and respects budget"
       process.env.LCS_CONVERSATION_RECALL_QUERY_MAX_CHARS = previousBudget;
     }
   }
+});
+
+run("conversation manager memoizes context and policy across repeated reads", () => {
+  const previousMaxTurns = process.env.LCS_CONVERSATION_MAX_TURNS;
+
+  try {
+    process.env.LCS_CONVERSATION_MAX_TURNS = "120";
+    resetAllSessions();
+
+    const session = createConversationSession("nexus");
+    addConversationTurn(session.sessionId, "user", "JWT issuer must be validated before route execution.");
+
+    const baseline = getConversationMemoizationStats();
+    for (let index = 0; index < 100; index += 1) {
+      buildConversationContext(session.sessionId, 8);
+    }
+
+    const after = getConversationMemoizationStats();
+    assert.equal(after.context.computations - baseline.context.computations, 1);
+    assert.equal(after.context.cacheHits - baseline.context.cacheHits >= 99, true);
+    assert.equal(after.policy.recomputations - baseline.policy.recomputations <= 1, true);
+
+    process.env.LCS_CONVERSATION_MAX_TURNS = "121";
+    buildConversationContext(session.sessionId, 8);
+    const afterEnvChange = getConversationMemoizationStats();
+    assert.equal(afterEnvChange.policy.recomputations - after.policy.recomputations >= 1, true);
+  } finally {
+    resetAllSessions();
+    if (previousMaxTurns === undefined) {
+      delete process.env.LCS_CONVERSATION_MAX_TURNS;
+    } else {
+      process.env.LCS_CONVERSATION_MAX_TURNS = previousMaxTurns;
+    }
+  }
+});
+
+run("conversation manager invalidates memoized context on addTurn and context updates", () => {
+  resetAllSessions();
+
+  const session = createConversationSession("nexus");
+  addConversationTurn(session.sessionId, "user", "Primera instrucción sobre auth.");
+  buildConversationContext(session.sessionId, 4);
+  const afterFirstContext = getConversationMemoizationStats();
+
+  addConversationTurn(session.sessionId, "system", "Respuesta inicial.");
+  buildConversationContext(session.sessionId, 4);
+  const afterSecondContext = getConversationMemoizationStats();
+  assert.equal(afterSecondContext.context.computations - afterFirstContext.context.computations, 1);
+
+  updateConversationContext(session.sessionId, "customHint", "usar guard estricto");
+  buildConversationContext(session.sessionId, 4);
+  const afterContextUpdate = getConversationMemoizationStats();
+  assert.equal(afterContextUpdate.context.computations - afterSecondContext.context.computations, 1);
+});
+
+run("conversation manager bounds memoized context cache size", () => {
+  resetAllSessions();
+
+  for (let index = 0; index < 230; index += 1) {
+    const session = createConversationSession(`nexus-${index}`);
+    addConversationTurn(session.sessionId, "user", `turn ${index}`);
+    buildConversationContext(session.sessionId, 3);
+  }
+
+  const stats = getConversationMemoizationStats();
+  assert.equal(stats.context.cacheSize <= stats.context.maxCacheSize, true);
 });
 
 run("builds a learning packet with teaching scaffolding", () => {

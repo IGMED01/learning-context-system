@@ -9,6 +9,9 @@ import { randomUUID } from "node:crypto";
 
 /** @type {Map<string, ConversationSession>} */
 const sessions = new Map();
+const MAX_CONTEXT_CACHE_SIZE = 200;
+/** @type {Map<string, string>} */
+const contextCache = new Map();
 const DEFAULT_SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 const DEFAULT_MAX_TURNS = 120;
 const DEFAULT_SUMMARY_EVERY = 12;
@@ -22,6 +25,23 @@ const TOTAL_TURNS_KEY = "__totalTurnsSeen";
 const LAST_SUMMARY_AT_TURN_KEY = "__lastSummaryAtTurn";
 const NOISE_TELEMETRY_KEY = "__noiseTelemetry";
 const CONTRADICTION_STATE_KEY = "__contextContradictions";
+const POLICY_ENV_KEYS = Object.freeze([
+  "LCS_CONVERSATION_SESSION_TTL_MS",
+  "LCS_CONVERSATION_MAX_TURNS",
+  "LCS_CONVERSATION_SUMMARY_EVERY",
+  "LCS_CONVERSATION_SUMMARY_KEEP_TURNS",
+  "LCS_CONVERSATION_CONTEXT_MAX_CHARS",
+  "LCS_CONVERSATION_RECALL_QUERY_MAX_CHARS",
+  "LCS_CONVERSATION_CONTRADICTION_LOOKBACK_TURNS",
+  "LCS_CONVERSATION_CONTRADICTION_MAX_ITEMS",
+  "LCS_CONVERSATION_INCLUDE_CONTRADICTIONS"
+]);
+let cachedPolicy = null;
+let cachedPolicyEnv = "";
+let policyCacheHits = 0;
+let policyRecomputations = 0;
+let contextCacheHits = 0;
+let contextComputations = 0;
 const CONTRADICTION_NEGATIVE_TOKENS = new Set([
   "no",
   "not",
@@ -129,8 +149,48 @@ function parseBooleanEnv(raw, fallback) {
   return fallback;
 }
 
+function buildPolicySnapshot() {
+  return POLICY_ENV_KEYS
+    .map((key) => `${key}=${process.env[key] ?? ""}`)
+    .join("|");
+}
+
+/**
+ * @param {string} sessionId
+ */
+function invalidateSessionContextCache(sessionId) {
+  for (const key of contextCache.keys()) {
+    if (key.startsWith(`${sessionId}:`)) {
+      contextCache.delete(key);
+    }
+  }
+}
+
+/**
+ * @param {string} key
+ * @param {string} value
+ */
+function setContextCache(key, value) {
+  if (contextCache.size >= MAX_CONTEXT_CACHE_SIZE) {
+    const oldestKey = contextCache.keys().next().value;
+    if (oldestKey) {
+      contextCache.delete(oldestKey);
+    }
+  }
+
+  contextCache.set(key, value);
+}
+
 function resolveConversationPolicy() {
-  return {
+  const envSnapshot = buildPolicySnapshot();
+  if (cachedPolicy && envSnapshot === cachedPolicyEnv) {
+    policyCacheHits += 1;
+    return cachedPolicy;
+  }
+
+  policyRecomputations += 1;
+  cachedPolicyEnv = envSnapshot;
+  cachedPolicy = {
     sessionTtlMs: parseIntEnv(
       process.env.LCS_CONVERSATION_SESSION_TTL_MS,
       DEFAULT_SESSION_TTL_MS,
@@ -175,6 +235,8 @@ function resolveConversationPolicy() {
       true
     )
   };
+
+  return cachedPolicy;
 }
 
 /**
@@ -708,6 +770,7 @@ export function cleanupExpiredSessions(nowMs = Date.now()) {
 
     if (nowMs - updatedAtMs > sessionTtlMs) {
       sessions.delete(sessionId);
+      invalidateSessionContextCache(sessionId);
       removed += 1;
     }
   }
@@ -770,6 +833,7 @@ export function addTurn(sessionId, role, content, metadata) {
   applyRetentionPolicy(session);
   updateContradictionState(session);
   session.updatedAt = turn.timestamp;
+  invalidateSessionContextCache(sessionId);
 
   return turn;
 }
@@ -787,6 +851,7 @@ export function updateContext(sessionId, key, value) {
 
   session.context[key] = value;
   session.updatedAt = new Date().toISOString();
+  invalidateSessionContextCache(sessionId);
   return true;
 }
 
@@ -800,8 +865,16 @@ export function buildConversationContext(sessionId, maxTurns = 10) {
   const session = sessions.get(sessionId);
   if (!session) return "";
 
-  const policy = resolveConversationPolicy();
   const safeMaxTurns = Math.max(1, Math.trunc(maxTurns));
+  const policySnapshot = buildPolicySnapshot();
+  const cacheKey = `${sessionId}:${session.updatedAt}:${safeMaxTurns}:${policySnapshot}`;
+  if (contextCache.has(cacheKey)) {
+    contextCacheHits += 1;
+    return contextCache.get(cacheKey) ?? "";
+  }
+
+  contextComputations += 1;
+  const policy = resolveConversationPolicy();
   const recentTurns = session.turns.slice(-safeMaxTurns);
   const summary = getSummary(session);
   const contradictionState = getContradictionState(session);
@@ -840,9 +913,11 @@ export function buildConversationContext(sessionId, maxTurns = 10) {
   }
 
   const context = sections.join("\n\n");
-  return context.length > policy.contextMaxChars
+  const trimmed = context.length > policy.contextMaxChars
     ? context.slice(-policy.contextMaxChars)
     : context;
+  setContextCache(cacheKey, trimmed);
+  return trimmed;
 }
 
 /**
@@ -957,9 +1032,39 @@ export function listSessions(project) {
  * @returns {boolean}
  */
 export function deleteSession(sessionId) {
-  return sessions.delete(sessionId);
+  const deleted = sessions.delete(sessionId);
+  if (deleted) {
+    invalidateSessionContextCache(sessionId);
+  }
+  return deleted;
 }
 
 export function resetAllSessions() {
   sessions.clear();
+  contextCache.clear();
+  cachedPolicy = null;
+  cachedPolicyEnv = "";
+  policyCacheHits = 0;
+  policyRecomputations = 0;
+  contextCacheHits = 0;
+  contextComputations = 0;
+}
+
+/**
+ * Test/diagnostic helper for context memoization.
+ */
+export function getConversationMemoizationStats() {
+  return {
+    policy: {
+      cacheHits: policyCacheHits,
+      recomputations: policyRecomputations,
+      hasCachedPolicy: Boolean(cachedPolicy)
+    },
+    context: {
+      cacheHits: contextCacheHits,
+      computations: contextComputations,
+      cacheSize: contextCache.size,
+      maxCacheSize: MAX_CONTEXT_CACHE_SIZE
+    }
+  };
 }
