@@ -15,7 +15,7 @@ NEXUS is a **learning-first AI engineering platform** where implementation and t
 
 - selects high-signal context and suppresses noise;
 - generates `Change / Reason / Concepts / Practice` teaching output;
-- persists durable memory (Engram battery + local resilient fallback);
+- persists durable memory with local-first resilience and optional external backends;
 - exposes operational API endpoints (`/api/health`, `/api/axioms`, `/api/costs/:sessionId`, `/api/agent/stream`).
 
 **Current status (April 2, 2026):**
@@ -87,7 +87,7 @@ npm run e2e:nexus
 
 - Context selection with noise suppression.
 - Teaching packet generation tied to changed files and tests.
-- Durable memory via Engram with resilient fallback.
+- Durable memory via local-first storage with optional external batteries/backends.
 - Optional Go FastScan sidecar for faster workspace file discovery (safe fallback to native scan).
 - Internal SYNC runtime (detect → chunk → dedup → version → persist) via `src/sync`.
 - HTTP API + SDK + OpenAPI + demo UI.

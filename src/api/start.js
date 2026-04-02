@@ -18,6 +18,11 @@ import {
   sendRateLimitExceeded
 } from "./security-runtime.js";
 import { log } from "../core/logger.js";
+import {
+  createStartupProfiler,
+  extractStaticAssetPathsFromHtml,
+  parseBooleanEnv
+} from "../core/startup-runtime.js";
 import { resolveSafePathWithinWorkspace } from "../utils/path-utils.js";
 import { migrate as migrateLocalOnlyToKnowledgeBackend } from "../migrations/migrateLocalOnlyToKnowledgeBackend.js";
 import { migrate as migrateMemoryJSONLAddTimestamps } from "../migrations/migrateMemoryJSONLAddTimestamps.js";
@@ -32,6 +37,29 @@ const UI_DIST = path.resolve(__dirname, "../../ui/dist");
 const MAX_STATIC_CACHE_ITEMS = 120;
 /** @type {Map<string, { content: Buffer, mime: string, cacheControl: string }>} */
 const staticFileCache = new Map();
+const STARTUP_PROFILE_ENABLED = parseBooleanEnv(process.env.LCS_STARTUP_PROFILE_ENABLED, true);
+const STARTUP_PREFETCH_ENABLED = parseBooleanEnv(process.env.LCS_STARTUP_PREFETCH_ENABLED, true);
+const STARTUP_DEFERRED_WARMUP_ENABLED = parseBooleanEnv(
+  process.env.LCS_STARTUP_DEFERRED_WARMUP_ENABLED,
+  true
+);
+const STARTUP_WARMUP_DELAY_MS = parseTimeoutMs(
+  process.env.LCS_STARTUP_WARMUP_DELAY_MS,
+  250,
+  0,
+  30_000
+);
+const STARTUP_WARMUP_ASSET_CAP = parseIntegerInRange(
+  process.env.LCS_STARTUP_WARMUP_ASSET_CAP,
+  12,
+  1,
+  64
+);
+const startupProfiler = createStartupProfiler({
+  enabled: STARTUP_PROFILE_ENABLED
+});
+/** @type {string[]} */
+let prefetchedStartupAssets = [];
 
 /**
  * @param {string | undefined} raw
@@ -62,6 +90,27 @@ function parseTimeoutMs(value, fallback, min = 1_000, max = 600_000) {
   }
 
   return Math.trunc(numeric);
+}
+
+/**
+ * @param {unknown} value
+ * @param {number} fallback
+ * @param {number} min
+ * @param {number} max
+ * @returns {number}
+ */
+function parseIntegerInRange(value, fallback, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  const normalized = Math.trunc(numeric);
+  if (normalized < min || normalized > max) {
+    return fallback;
+  }
+
+  return normalized;
 }
 
 /**
@@ -102,16 +151,232 @@ async function runStartupMigrations() {
     migrateNotionSyncToNotionProvider(process.cwd())
   ]);
 
+  let failed = 0;
   for (const result of results) {
     if (result.status === "rejected") {
+      failed += 1;
       log("warn", "startup migration failed", {
         error: result.reason instanceof Error ? result.reason.message : String(result.reason)
       });
     }
   }
+
+  return {
+    attempted: results.length,
+    failed
+  };
 }
 
-await runStartupMigrations();
+async function prefetchStartupSpaIndex() {
+  const indexPath = path.join(UI_DIST, "index.html");
+
+  try {
+    const cached = staticFileCache.get(indexPath);
+    if (cached) {
+      return {
+        cached: true,
+        assets: extractStaticAssetPathsFromHtml(cached.content.toString("utf8"), {
+          maxAssets: STARTUP_WARMUP_ASSET_CAP
+        })
+      };
+    }
+
+    const content = await readFile(indexPath);
+    setStaticCache(indexPath, {
+      content,
+      mime: "text/html; charset=utf-8",
+      cacheControl: "no-cache"
+    });
+
+    return {
+      cached: false,
+      assets: extractStaticAssetPathsFromHtml(content.toString("utf8"), {
+        maxAssets: STARTUP_WARMUP_ASSET_CAP
+      })
+    };
+  } catch (error) {
+    log("warn", "startup prefetch skipped", {
+      path: indexPath,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return {
+      cached: false,
+      assets: []
+    };
+  }
+}
+
+async function warmupStaticAssets(assetPaths) {
+  const uniqueAssets = [...new Set(assetPaths)].slice(0, STARTUP_WARMUP_ASSET_CAP);
+  const results = await Promise.allSettled(
+    uniqueAssets.map(async (assetPath) => {
+      const filePath = resolveSafePathWithinWorkspace(assetPath, UI_DIST, "startupWarmupPath");
+      const ext = path.extname(filePath).toLowerCase();
+
+      if (ext === ".html") {
+        return {
+          warmed: false
+        };
+      }
+
+      const metadata = await stat(filePath);
+      if (!metadata.isFile() || metadata.size > 512 * 1024) {
+        return {
+          warmed: false
+        };
+      }
+
+      const content = await readFile(filePath);
+      const mime = MIME_TYPES[ext] || "application/octet-stream";
+      setStaticCache(filePath, {
+        content,
+        mime,
+        cacheControl: "public, max-age=31536000, immutable"
+      });
+
+      return {
+        warmed: true
+      };
+    })
+  );
+
+  let warmed = 0;
+  let failed = 0;
+
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value.warmed) {
+      warmed += 1;
+      continue;
+    }
+
+    if (result.status === "rejected") {
+      failed += 1;
+    }
+  }
+
+  return {
+    candidates: uniqueAssets.length,
+    warmed,
+    failed
+  };
+}
+
+async function runStartupPrefetch() {
+  startupProfiler.checkpoint("startup-bootstrap-begin", {
+    prefetchEnabled: STARTUP_PREFETCH_ENABLED
+  });
+
+  const tasks = [runStartupMigrations()];
+  if (STARTUP_PREFETCH_ENABLED) {
+    tasks.push(prefetchStartupSpaIndex());
+  }
+
+  const results = await Promise.allSettled(tasks);
+  const migrationsResult = results[0];
+  const prefetchResult = results[1];
+  const migrationSummary =
+    migrationsResult?.status === "fulfilled"
+      ? migrationsResult.value
+      : {
+          attempted: 3,
+          failed: 3
+        };
+
+  if (migrationsResult?.status === "rejected") {
+    log("warn", "startup migration bootstrap failed", {
+      error:
+        migrationsResult.reason instanceof Error
+          ? migrationsResult.reason.message
+          : String(migrationsResult.reason)
+    });
+  }
+
+  if (prefetchResult?.status === "fulfilled") {
+    prefetchedStartupAssets = prefetchResult.value.assets;
+  } else if (prefetchResult?.status === "rejected") {
+    log("warn", "startup prefetch bootstrap failed", {
+      error:
+        prefetchResult.reason instanceof Error
+          ? prefetchResult.reason.message
+          : String(prefetchResult.reason)
+    });
+  }
+
+  startupProfiler.checkpoint("startup-bootstrap-ready", {
+    migrationFailures: migrationSummary.failed,
+    prefetchedAssets: prefetchedStartupAssets.length
+  });
+}
+
+async function runDeferredWarmup() {
+  startupProfiler.checkpoint("startup-warmup-begin", {
+    warmupEnabled: STARTUP_DEFERRED_WARMUP_ENABLED,
+    prefetchedAssets: prefetchedStartupAssets.length
+  });
+
+  const [warmupResult, prefetchResult] = await Promise.allSettled([
+    warmupStaticAssets(prefetchedStartupAssets),
+    prefetchStartupSpaIndex()
+  ]);
+
+  const warmupSummary =
+    warmupResult.status === "fulfilled"
+      ? warmupResult.value
+      : {
+          candidates: prefetchedStartupAssets.length,
+          warmed: 0,
+          failed: 1
+        };
+  const prefetchedAssets =
+    prefetchResult.status === "fulfilled" ? prefetchResult.value.assets.length : 0;
+
+  if (warmupResult.status === "rejected") {
+    log("warn", "startup deferred warmup failed", {
+      error: warmupResult.reason instanceof Error ? warmupResult.reason.message : String(warmupResult.reason)
+    });
+  }
+
+  if (prefetchResult.status === "rejected") {
+    log("warn", "startup deferred prefetch refresh failed", {
+      error:
+        prefetchResult.reason instanceof Error ? prefetchResult.reason.message : String(prefetchResult.reason)
+    });
+  }
+
+  startupProfiler.checkpoint("startup-warmup-ready", {
+    warmedAssets: warmupSummary.warmed,
+    warmupFailures: warmupSummary.failed,
+    prefetchedAssets
+  });
+
+  const summary = startupProfiler.summary({
+    cacheItems: staticFileCache.size
+  });
+
+  if (summary) {
+    log("info", "startup profile summary", summary);
+  }
+}
+
+async function scheduleDeferredWarmup() {
+  if (!STARTUP_DEFERRED_WARMUP_ENABLED) {
+    const summary = startupProfiler.summary({
+      cacheItems: staticFileCache.size,
+      warmup: "disabled"
+    });
+    if (summary) {
+      log("info", "startup profile summary", summary);
+    }
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    void runDeferredWarmup();
+  }, STARTUP_WARMUP_DELAY_MS);
+  timer.unref?.();
+}
+
+await runStartupPrefetch();
 
 /**
  * Try to serve a static file from ui/dist.
@@ -334,12 +599,24 @@ server.requestTimeout = parseTimeoutMs(
 );
 
 server.listen(port, host, () => {
+  startupProfiler.checkpoint("startup-listen-ready", {
+    host,
+    port
+  });
   console.log(`NEXUS production server listening on http://${host}:${port}`);
   console.log(`  API:  http://${host}:${port}/api/health`);
   console.log(`  UI:   http://${host}:${port}/`);
+  void scheduleDeferredWarmup();
 });
 
 const shutdown = () => {
+  const summary = startupProfiler.summary({
+    cacheItems: staticFileCache.size,
+    reason: "shutdown"
+  });
+  if (summary) {
+    log("info", "startup profile summary", summary);
+  }
   console.log("Shutting down...");
   server.close(() => process.exit(0));
 };

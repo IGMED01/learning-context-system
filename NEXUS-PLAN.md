@@ -50,11 +50,11 @@
 
 Con el plan principal cerrado, los próximos bloques recomendados son:
 
-1. Startup pattern CLI/API con prefetch y warmup diferido.
-2. Memory relevance side-query para evitar re-surfaceo redundante.
-3. Permission context system con resolución atómica de permisos.
-4. Session history dual-store (memoria + JSONL) para sesiones largas.
-5. Hardening Docker/TLS/secrets sobre `/api/health`.
+- [x] Startup pattern CLI/API con prefetch paralelo, checkpoints de arranque y warmup diferido (`src/api/start.js`, `src/core/startup-runtime.js`).
+- [ ] Memory relevance side-query para evitar re-surfaceo redundante.
+- [ ] Permission context system con resolución atómica de permisos.
+- [ ] Session history dual-store (memoria + JSONL) para sesiones largas.
+- [ ] Hardening Docker/TLS/secrets sobre `/api/health`.
 
 ---
 

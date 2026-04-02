@@ -13,7 +13,7 @@ NEXUS es una plataforma de ingeniería asistida por IA con enfoque pedagógico:
 
 - selecciona contexto de alta señal y reduce ruido;
 - entrega salida didáctica (`Change / Reason / Concepts / Practice`);
-- guarda memoria durable con Engram como batería externa y fallback local resiliente;
+- guarda memoria durable con enfoque local-first y backends externos opcionales;
 - expone endpoints operativos (`/api/health`, `/api/axioms`, `/api/costs/:sessionId`, `/api/agent/stream`).
 
 **Estado actual (2 de abril de 2026):**
@@ -25,7 +25,7 @@ NEXUS es una plataforma de ingeniería asistida por IA con enfoque pedagógico:
 
 - Selecciona contexto de alta señal y suprime ruido (`select`).
 - Genera paquetes de enseñanza ligados a código y tests reales (`teach`).
-- Recupera/guarda memoria durable con Engram + fallback resiliente (`recall`, `remember`, `close`).
+- Recupera/guarda memoria durable con almacenamiento local-first y backend externo opcional (`recall`, `remember`, `close`).
 - Expone API HTTP + SDK + OpenAPI + demo visual para uso operativo.
 - Aplica seguridad, observabilidad, versionado y quality gates en CI.
 
@@ -50,7 +50,7 @@ Requisitos mínimos:
 
 - Node.js 20+
 - Git
-- Binario de Engram solo si quieres memoria durable sin modo fallback local
+- Backend externo opcional (el modo local-first funciona sin binarios adicionales)
 
 ---
 

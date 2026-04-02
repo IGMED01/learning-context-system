@@ -262,7 +262,7 @@ NEXUS/
 │   ├── cli/          # CLI commands (select, teach)
 │   ├── guard/        # Guard Engine (seguridad)
 │   ├── llm/          # Proveedores LLM (OpenRouter, Groq, Cerebras)
-│   ├── memory/       # Almacenamiento de memoria (Engram)
+│   ├── memory/       # Almacenamiento de memoria (local-first + backends opcionales)
 │   ├── processing/   # Chunking + tagging de documentos
 │   ├── eval/         # Suite de evaluación
 │   ├── observability/# Métricas en vivo

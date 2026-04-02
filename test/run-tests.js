@@ -107,6 +107,11 @@ import {
   getTask,
   updateTaskStatus
 } from "../src/core/task.js";
+import {
+  createStartupProfiler,
+  extractStaticAssetPathsFromHtml,
+  parseBooleanEnv
+} from "../src/core/startup-runtime.js";
 import { loadApiAxioms } from "../src/api/axioms-loader.js";
 import { createChangeDetector } from "../src/sync/change-detector.js";
 import { createVersionTracker } from "../src/sync/version-tracker.js";
@@ -13344,6 +13349,65 @@ run("NEXUS:8 mitosis pipeline runs dry-run without writing files", async () => {
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+run("NEXUS startup runtime parses boolean env-like values", async () => {
+  assert.equal(parseBooleanEnv(true, false), true);
+  assert.equal(parseBooleanEnv(false, true), false);
+  assert.equal(parseBooleanEnv("true", false), true);
+  assert.equal(parseBooleanEnv("YES", false), true);
+  assert.equal(parseBooleanEnv("0", true), false);
+  assert.equal(parseBooleanEnv("off", true), false);
+  assert.equal(parseBooleanEnv("unexpected", true), true);
+  assert.equal(parseBooleanEnv(undefined, false), false);
+});
+
+run("NEXUS startup runtime extracts static asset paths safely", async () => {
+  const html = `
+    <html>
+      <head>
+        <link rel="stylesheet" href="/assets/index-aaa.css?v=1" />
+        <link rel="modulepreload" href="/assets/chunk-bbb.js" />
+        <script src="/assets/index-ccc.js#hash"></script>
+        <script src="https://cdn.example.com/remote.js"></script>
+        <a href="#section">skip</a>
+        <img src="data:image/png;base64,ABC" />
+      </head>
+      <body></body>
+    </html>
+  `;
+  const assets = extractStaticAssetPathsFromHtml(html, { maxAssets: 8 });
+
+  assert.deepEqual(assets, [
+    "assets/index-aaa.css",
+    "assets/chunk-bbb.js",
+    "assets/index-ccc.js"
+  ]);
+});
+
+run("NEXUS startup profiler tracks checkpoints and summary timing", async () => {
+  let tick = 10;
+  const profiler = createStartupProfiler({
+    enabled: true,
+    now: () => tick
+  });
+
+  tick += 25;
+  const first = profiler.checkpoint("bootstrap");
+  assert.equal(first?.phase, "bootstrap");
+  assert.equal(first?.elapsedMs, 25);
+
+  tick += 15;
+  const second = profiler.checkpoint("ready", { routeCount: 10 });
+  assert.equal(second?.phase, "ready");
+  assert.equal(second?.elapsedMs, 40);
+  assert.equal(second?.context.routeCount, 10);
+
+  tick += 5;
+  const summary = profiler.summary({ status: "ok" });
+  assert.equal(summary?.totalMs, 45);
+  assert.equal(summary?.checkpoints.length, 2);
+  assert.equal(summary?.context.status, "ok");
 });
 
 async function main() {
