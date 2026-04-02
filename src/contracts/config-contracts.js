@@ -51,11 +51,23 @@
 
 /**
  * @typedef {{
+ *   enabled: boolean,
+ *   sources: string[],
+ *   enforcement: "warn-block-critical" | "warn-only" | "off",
+ *   minConfidence: number,
+ *   strictIsolation: boolean,
+ *   defaultFocus: "auto" | "on" | "off"
+ * }} ProjectSecurityLearningConfig
+ */
+
+/**
+ * @typedef {{
  *   ignoreSensitiveFiles: boolean,
  *   redactSensitiveContent: boolean,
  *   ignoreGeneratedFiles: boolean,
  *   allowSensitivePaths: string[],
- *   extraSensitivePathFragments: string[]
+ *   extraSensitivePathFragments: string[],
+ *   learning: ProjectSecurityLearningConfig
  * }} ProjectSecurityConfig
  */
 
@@ -102,6 +114,8 @@
 /**
  * @typedef {{
  *   requirePlanForWrite: boolean,
+ *   requireExecuteApprovalForWrite: boolean,
+ *   requireStructuredPostTaskForWrite: boolean,
  *   allowedScopePaths: string[],
  *   maxTokenBudget: number,
  *   requireExplicitFocusForWorkspaceScan: boolean,
@@ -288,7 +302,15 @@ export function defaultProjectConfig() {
       redactSensitiveContent: true,
       ignoreGeneratedFiles: true,
       allowSensitivePaths: [],
-      extraSensitivePathFragments: []
+      extraSensitivePathFragments: [],
+      learning: {
+        enabled: true,
+        sources: ["local", "ci"],
+        enforcement: "warn-block-critical",
+        minConfidence: 0.72,
+        strictIsolation: true,
+        defaultFocus: "auto"
+      }
     },
     scan: {
       ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs", ".claude", ".atl", ".engram"],
@@ -314,6 +336,8 @@ export function defaultProjectConfig() {
     },
     safety: {
       requirePlanForWrite: false,
+      requireExecuteApprovalForWrite: false,
+      requireStructuredPostTaskForWrite: false,
       allowedScopePaths: [],
       maxTokenBudget: 700,
       requireExplicitFocusForWorkspaceScan: true,
@@ -363,6 +387,15 @@ export function validateProjectConfig(value) {
     assertObject(config.security, "Project config.security");
   }
 
+  if (
+    config.security &&
+    typeof config.security === "object" &&
+    !Array.isArray(config.security) &&
+    config.security.learning !== undefined
+  ) {
+    assertObject(config.security.learning, "Project config.security.learning");
+  }
+
   if (config.scan !== undefined) {
     assertObject(config.scan, "Project config.scan");
   }
@@ -384,6 +417,10 @@ export function validateProjectConfig(value) {
   const memory = /** @type {Record<string, unknown> | undefined} */ (config.memory);
   const engram = /** @type {Record<string, unknown> | undefined} */ (config.engram);
   const security = /** @type {Record<string, unknown> | undefined} */ (config.security);
+  const securityLearning =
+    security && typeof security.learning === "object" && security.learning && !Array.isArray(security.learning)
+      ? /** @type {Record<string, unknown>} */ (security.learning)
+      : undefined;
   const scan = /** @type {Record<string, unknown> | undefined} */ (config.scan);
   const sync = /** @type {Record<string, unknown> | undefined} */ (config.sync);
   const safety = /** @type {Record<string, unknown> | undefined} */ (config.safety);
@@ -427,6 +464,34 @@ export function validateProjectConfig(value) {
     sync?.knowledgeBackend,
     "Project config.sync.knowledgeBackend"
   );
+
+  const securityEnforcement = optionalString(
+    securityLearning?.enforcement,
+    "Project config.security.learning.enforcement"
+  );
+  if (
+    securityEnforcement !== undefined &&
+    securityEnforcement !== "warn-block-critical" &&
+    securityEnforcement !== "warn-only" &&
+    securityEnforcement !== "off"
+  ) {
+    fail(
+      "Project config.security.learning.enforcement must be 'warn-block-critical', 'warn-only', or 'off'."
+    );
+  }
+
+  const securityDefaultFocus = optionalString(
+    securityLearning?.defaultFocus,
+    "Project config.security.learning.defaultFocus"
+  );
+  if (
+    securityDefaultFocus !== undefined &&
+    securityDefaultFocus !== "auto" &&
+    securityDefaultFocus !== "on" &&
+    securityDefaultFocus !== "off"
+  ) {
+    fail("Project config.security.learning.defaultFocus must be 'auto', 'on', or 'off'.");
+  }
 
   if (
     knowledgeBackend !== undefined &&
@@ -563,7 +628,32 @@ export function validateProjectConfig(value) {
         optionalStringArray(
           security?.extraSensitivePathFragments,
           "Project config.security.extraSensitivePathFragments"
-        ) ?? defaults.security.extraSensitivePathFragments
+        ) ?? defaults.security.extraSensitivePathFragments,
+      learning: {
+        enabled:
+          optionalBoolean(
+            securityLearning?.enabled,
+            "Project config.security.learning.enabled"
+          ) ?? defaults.security.learning.enabled,
+        sources:
+          optionalStringArray(
+            securityLearning?.sources,
+            "Project config.security.learning.sources"
+          ) ?? defaults.security.learning.sources,
+        enforcement: securityEnforcement ?? defaults.security.learning.enforcement,
+        minConfidence:
+          optionalNumber(
+            securityLearning?.minConfidence,
+            "Project config.security.learning.minConfidence",
+            { min: 0, max: 1 }
+          ) ?? defaults.security.learning.minConfidence,
+        strictIsolation:
+          optionalBoolean(
+            securityLearning?.strictIsolation,
+            "Project config.security.learning.strictIsolation"
+          ) ?? defaults.security.learning.strictIsolation,
+        defaultFocus: securityDefaultFocus ?? defaults.security.learning.defaultFocus
+      }
     },
     scan: {
       ignoreDirs:
@@ -651,6 +741,16 @@ export function validateProjectConfig(value) {
           safety?.requirePlanForWrite,
           "Project config.safety.requirePlanForWrite"
         ) ?? defaults.safety.requirePlanForWrite,
+      requireExecuteApprovalForWrite:
+        optionalBoolean(
+          safety?.requireExecuteApprovalForWrite,
+          "Project config.safety.requireExecuteApprovalForWrite"
+        ) ?? defaults.safety.requireExecuteApprovalForWrite,
+      requireStructuredPostTaskForWrite:
+        optionalBoolean(
+          safety?.requireStructuredPostTaskForWrite,
+          "Project config.safety.requireStructuredPostTaskForWrite"
+        ) ?? defaults.safety.requireStructuredPostTaskForWrite,
       allowedScopePaths:
         optionalStringArray(
           safety?.allowedScopePaths,

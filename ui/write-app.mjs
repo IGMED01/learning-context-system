@@ -23,7 +23,7 @@ function Topbar({ online, endpoints }) {
         <div style={{ width:'26px', height:'26px', display:'flex', alignItems:'center', justifyContent:'center', background:'linear-gradient(135deg,#7c3aed,#a855f7)', fontSize:'10px', fontWeight:900, color:'#fff' }}>Nx</div>
         <span style={{ fontSize:'13px', fontWeight:700, color:'var(--text-1)', letterSpacing:'-0.3px' }}>NEXUS</span>
         <div style={{ width:'1px', height:'14px', background:'var(--border-2)' }} />
-        <span style={{ fontSize:'11px', color:'var(--text-3)' }}>Context Intelligence Platform</span>
+        <span style={{ fontSize:'11px', color:'var(--text-3)' }}>Learning Context · Safety · Durable Memory</span>
       </div>
       <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
         {endpoints > 0 && <span style={{ fontSize:'10px', fontFamily:'JetBrains Mono,monospace', color:'var(--text-3)' }}>{endpoints} ep</span>}

@@ -2590,6 +2590,8 @@ run("project config parses security policy overrides", () => {
       },
       safety: {
         requirePlanForWrite: true,
+        requireExecuteApprovalForWrite: true,
+        requireStructuredPostTaskForWrite: true,
         allowedScopePaths: ["src/auth", "docs"],
         maxTokenBudget: 420,
         requireExplicitFocusForWorkspaceScan: false,
@@ -2615,6 +2617,8 @@ run("project config parses security policy overrides", () => {
   assert.deepEqual(parsed.scan.fastScanner.arguments, ["--request-stdin"]);
   assert.equal(parsed.scan.fastScanner.timeoutMs, 1200);
   assert.equal(parsed.safety.requirePlanForWrite, true);
+  assert.equal(parsed.safety.requireExecuteApprovalForWrite, true);
+  assert.equal(parsed.safety.requireStructuredPostTaskForWrite, true);
   assert.deepEqual(parsed.safety.allowedScopePaths, ["src/auth", "docs"]);
   assert.equal(parsed.safety.maxTokenBudget, 420);
   assert.equal(parsed.safety.requireExplicitFocusForWorkspaceScan, false);
@@ -3305,6 +3309,8 @@ run("init creates config with a stable project id from package name", async () =
     assert.equal(parsed.safety.requireExplicitFocusForWorkspaceScan, true);
     assert.equal(parsed.safety.minWorkspaceFocusLength, 24);
     assert.equal(parsed.safety.blockDebugWithoutStrongFocus, true);
+    assert.equal(parsed.safety.requireExecuteApprovalForWrite, false);
+    assert.equal(parsed.safety.requireStructuredPostTaskForWrite, false);
     assert.equal(parsed.security.ignoreSensitiveFiles, true);
     assert.equal(parsed.security.redactSensitiveContent, true);
   } finally {
@@ -6679,6 +6685,137 @@ run("cli remember can be blocked by safety gate when write plan is not approved"
   }
 });
 
+run("cli remember can be blocked by safety gate when execute approval is required", async () => {
+  const configPath = path.join(process.cwd(), "test-safety-execute-config.json");
+  let called = false;
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async search() {
+      throw new Error("not used");
+    },
+    async save() {
+      called = true;
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  try {
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        project: "learning-context-system",
+        safety: {
+          requirePlanForWrite: true,
+          requireExecuteApprovalForWrite: true
+        }
+      }),
+      "utf8"
+    );
+
+    const result = await runCli(
+      [
+        "remember",
+        "--config",
+        configPath,
+        "--title",
+        "JWT order",
+        "--content",
+        "Validation first.",
+        "--plan-approved",
+        "true",
+        "--format",
+        "json"
+      ],
+      {
+        engramClient: fakeClient
+      }
+    );
+
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, 1);
+    assert.equal(called, false);
+    assert.equal(parsed.status, "error");
+    assert.equal(parsed.action, "blocked");
+    assert.equal(parsed.reason, "safety-gate");
+    assert.equal(parsed.details.some((detail) => /execute-approved/i.test(detail)), true);
+    assert.equal(parsed.observability.safety.blocked, true);
+  } finally {
+    await rm(configPath, { force: true });
+  }
+});
+
+run("cli remember can be blocked by safety gate when structured post-task is required", async () => {
+  const configPath = path.join(process.cwd(), "test-safety-post-task-config.json");
+  let called = false;
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async search() {
+      throw new Error("not used");
+    },
+    async save() {
+      called = true;
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  try {
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        project: "learning-context-system",
+        safety: {
+          requirePlanForWrite: true,
+          requireExecuteApprovalForWrite: true,
+          requireStructuredPostTaskForWrite: true
+        }
+      }),
+      "utf8"
+    );
+
+    const result = await runCli(
+      [
+        "remember",
+        "--config",
+        configPath,
+        "--title",
+        "JWT order",
+        "--content",
+        "Validation first.",
+        "--plan-approved",
+        "true",
+        "--execute-approved",
+        "true",
+        "--format",
+        "json"
+      ],
+      {
+        engramClient: fakeClient
+      }
+    );
+
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, 1);
+    assert.equal(called, false);
+    assert.equal(parsed.status, "error");
+    assert.equal(parsed.action, "blocked");
+    assert.equal(parsed.reason, "safety-gate");
+    assert.equal(parsed.details.some((detail) => /post-task-summary/i.test(detail)), true);
+    assert.equal(parsed.observability.safety.blocked, true);
+  } finally {
+    await rm(configPath, { force: true });
+  }
+});
+
 run("cli remember writes to local-first store when Engram battery is missing", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-remember-fallback-"));
   const fallbackFile = path.join(tempRoot, "fallback-memory.jsonl");
@@ -8245,6 +8382,76 @@ run("cli teach reports degraded output when auto remember write fails", async ()
   assert.equal(parsed.autoMemory.rememberStatus, "unavailable");
   assert.match(parsed.autoMemory.rememberError, /sqlite is locked/);
   assert.equal(parsed.warnings.some((entry) => /Auto remember failed/i.test(entry)), true);
+});
+
+run("cli teach auto remember can be blocked by safety gate when write plan is not approved", async () => {
+  const configPath = path.join(process.cwd(), "test-teach-safety-gate-config.json");
+  let called = false;
+  const fakeClient = {
+    async recallContext() {
+      throw new Error("not used");
+    },
+    async search() {
+      called = true;
+      throw new Error("not used");
+    },
+    async save() {
+      called = true;
+      throw new Error("not used");
+    },
+    async closeSession() {
+      throw new Error("not used");
+    }
+  };
+
+  try {
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        project: "learning-context-system",
+        memory: {
+          autoRecall: false,
+          autoRemember: true
+        },
+        safety: {
+          requirePlanForWrite: true
+        }
+      }),
+      "utf8"
+    );
+
+    const result = await runCli(
+      [
+        "teach",
+        "--config",
+        configPath,
+        "--input",
+        "examples/auth-context.json",
+        "--task",
+        "Improve auth middleware",
+        "--objective",
+        "Teach validation order",
+        "--auto-remember",
+        "true",
+        "--format",
+        "json"
+      ],
+      {
+        engramClient: fakeClient
+      }
+    );
+
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, 1);
+    assert.equal(called, false);
+    assert.equal(parsed.status, "error");
+    assert.equal(parsed.action, "blocked");
+    assert.equal(parsed.reason, "safety-gate");
+    assert.equal(parsed.details.some((detail) => /plan-approved/i.test(detail)), true);
+    assert.equal(parsed.observability.safety.blocked, true);
+  } finally {
+    await rm(configPath, { force: true });
+  }
 });
 
 run("cli teach respects config memory.autoRecall=false without requiring --no-recall", async () => {

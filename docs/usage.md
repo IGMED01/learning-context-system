@@ -319,6 +319,8 @@ Example:
 `learning-context.config.json` also supports:
 
 - `safety.requirePlanForWrite`
+- `safety.requireExecuteApprovalForWrite`
+- `safety.requireStructuredPostTaskForWrite`
 - `safety.allowedScopePaths`
 - `safety.maxTokenBudget`
 - `safety.requireExplicitFocusForWorkspaceScan`
@@ -328,10 +330,12 @@ Example:
 When enabled, the CLI blocks risky runs before execution:
 
 1. write commands without explicit plan approval (`--plan-approved true`)
-2. changed/output paths outside allowed scope
-3. token budgets above `safety.maxTokenBudget`
-4. workspace scans without explicit signal (`--focus` or `--task/--objective`)
-5. debug traces on weak focus (to avoid noisy high-cost runs)
+2. write commands without explicit execution approval (`--execute-approved true`) when enabled
+3. write commands without structured post-task fields (`--post-task-summary`, `--post-task-learned`, `--post-task-next`) when enabled
+4. changed/output paths outside allowed scope
+5. token budgets above `safety.maxTokenBudget`
+6. workspace scans without explicit signal (`--focus` or `--task/--objective`)
+7. debug traces on weak focus (to avoid noisy high-cost runs)
 
 Example:
 
@@ -339,6 +343,8 @@ Example:
 {
   "safety": {
     "requirePlanForWrite": true,
+    "requireExecuteApprovalForWrite": true,
+    "requireStructuredPostTaskForWrite": true,
     "allowedScopePaths": ["src", "docs"],
     "maxTokenBudget": 500,
     "requireExplicitFocusForWorkspaceScan": true,

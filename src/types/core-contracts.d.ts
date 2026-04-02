@@ -260,6 +260,25 @@ export interface TeachingSections {
   }>;
 }
 
+export interface SecurityTeachingBlock {
+  enabled: boolean;
+  focusMode: "auto" | "on" | "off";
+  blocked: boolean;
+  critical: boolean;
+  enforcement?: string;
+  risk?: {
+    id: string;
+    label: string;
+    severity: string;
+  };
+  rule?: string;
+  why?: string;
+  fix?: string;
+  practice?: string;
+  reasons?: string[];
+  rulesApplied?: string[];
+}
+
 export interface LearningPacketDiagnostics {
   focus: string;
   tokenBudget: number;
@@ -299,6 +318,7 @@ export interface LearningPacket {
   changedFiles: string[];
   teachingChecklist: string[];
   teachingSections: TeachingSections;
+  securityTeaching?: SecurityTeachingBlock;
   selectedContext: PacketChunk[];
   suppressedContext: PacketSuppressedChunk[];
   diagnostics: LearningPacketDiagnostics;
@@ -347,6 +367,7 @@ export interface MemorySearchOptions {
   scope?: string;
   type?: string;
   language?: string;
+  securityOnly?: boolean;
   isolationMode?: "strict" | "relaxed";
   changedFiles?: string[];
   limit?: number;
@@ -374,6 +395,15 @@ export interface MemorySaveInput {
   temporary?: boolean;
   ttlMinutes?: number;
   maxTempEntries?: number;
+  // Security learning metadata
+  severity?: string;
+  confidence?: number;
+  riskTaxonomy?: string;
+  rule?: string;
+  antiPattern?: string;
+  fixPattern?: string;
+  practicePrompt?: string;
+  securityCritical?: boolean;
 }
 
 export interface MemoryCloseInput {
@@ -425,6 +455,15 @@ export interface MemoryEntry {
   // Temporary memory fields
   ttlMinutes?: number;
   autoExpire?: boolean;
+  // Security learning metadata
+  severity?: string;
+  confidence?: number;
+  riskTaxonomy?: string;
+  rule?: string;
+  antiPattern?: string;
+  fixPattern?: string;
+  practicePrompt?: string;
+  securityCritical?: boolean;
 }
 
 export interface MemorySearchResult {
@@ -438,6 +477,11 @@ export interface MemorySearchResult {
   error?: string;
   failureKind?: string;
   fixHint?: string;
+  security?: {
+    riskIds?: string[];
+    confidence?: number;
+    isolationApplied?: boolean;
+  };
 }
 
 export interface MemorySaveResult {

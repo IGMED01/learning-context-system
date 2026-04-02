@@ -49,6 +49,14 @@ let metricShutdownHooksRegistered = false;
  *     blocked?: boolean,
  *     reason?: string,
  *     preventedError?: boolean
+ *   },
+ *   security?: {
+ *     recallAttempted?: boolean,
+ *     recallHit?: boolean,
+ *     criticalBlocked?: boolean,
+ *     falsePositiveBlock?: boolean,
+ *     memorySaved?: number,
+ *     quarantined?: number
  *   }
  * }} CommandMetric
  */
@@ -113,6 +121,14 @@ function defaultStore() {
       blockedRuns: 0,
       preventedErrors: 0,
       byReason: {}
+    },
+    security: {
+      recallAttempts: 0,
+      recallHits: 0,
+      criticalBlockCount: 0,
+      falsePositiveBlocks: 0,
+      memoryGrowth: 0,
+      quarantined: 0
     }
   };
 }
@@ -137,6 +153,7 @@ function normalizedStore(record) {
   const sdd = asRecord(record.sdd);
   const teaching = asRecord(record.teaching);
   const safety = asRecord(record.safety);
+  const security = asRecord(record.security);
   const commands = asRecord(record.commands);
 
   return {
@@ -184,6 +201,14 @@ function normalizedStore(record) {
       blockedRuns: toFiniteNumber(safety.blockedRuns),
       preventedErrors: toFiniteNumber(safety.preventedErrors),
       byReason: asRecord(safety.byReason)
+    },
+    security: {
+      recallAttempts: toFiniteNumber(security.recallAttempts),
+      recallHits: toFiniteNumber(security.recallHits),
+      criticalBlockCount: toFiniteNumber(security.criticalBlockCount),
+      falsePositiveBlocks: toFiniteNumber(security.falsePositiveBlocks),
+      memoryGrowth: toFiniteNumber(security.memoryGrowth),
+      quarantined: toFiniteNumber(security.quarantined)
     }
   };
 }
@@ -350,6 +375,27 @@ function applyMetric(store, metric) {
     if (hit) {
       store.recall.hits += 1;
     }
+  }
+
+  if (metric.security) {
+    if (metric.security.recallAttempted) {
+      store.security.recallAttempts += 1;
+    }
+
+    if (metric.security.recallHit) {
+      store.security.recallHits += 1;
+    }
+
+    if (metric.security.criticalBlocked) {
+      store.security.criticalBlockCount += 1;
+    }
+
+    if (metric.security.falsePositiveBlock) {
+      store.security.falsePositiveBlocks += 1;
+    }
+
+    store.security.memoryGrowth += Math.max(0, Math.round(toFiniteNumber(metric.security.memorySaved)));
+    store.security.quarantined += Math.max(0, Math.round(toFiniteNumber(metric.security.quarantined)));
   }
 }
 
@@ -572,6 +618,7 @@ export async function getObservabilityReport(options = {}) {
   const sdd = loaded.store.sdd;
   const teaching = loaded.store.teaching;
   const safety = loaded.store.safety;
+  const security = loaded.store.security;
   const sddCoverageRate = sdd.requiredKindsTotal
     ? round(sdd.coveredKindsTotal / sdd.requiredKindsTotal)
     : 0;
@@ -645,6 +692,24 @@ export async function getObservabilityReport(options = {}) {
       blockedRuns: safety.blockedRuns,
       preventedErrors: safety.preventedErrors,
       byReason: safety.byReason
+    },
+    security: {
+      recallAttempts: security.recallAttempts,
+      recallHits: security.recallHits,
+      securityRecallHitRateAt5: security.recallAttempts
+        ? round(security.recallHits / security.recallAttempts)
+        : 0,
+      criticalBlockCount: security.criticalBlockCount,
+      falsePositiveBlocks: security.falsePositiveBlocks,
+      falsePositiveBlockRate: security.criticalBlockCount
+        ? round(security.falsePositiveBlocks / security.criticalBlockCount)
+        : 0,
+      securityMemoryGrowth: security.memoryGrowth,
+      quarantined: security.quarantined,
+      quarantineRate:
+        security.memoryGrowth + security.quarantined > 0
+          ? round(security.quarantined / (security.memoryGrowth + security.quarantined))
+          : 0
     }
   };
 }

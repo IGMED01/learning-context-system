@@ -4,11 +4,12 @@ const SECTIONS = [
   {
     id: 'what',
     icon: '🧠',
-    title: 'What is NEXUS?',
+    title: 'What NEXUS does today',
     content: [
-      { type: 'text', value: 'NEXUS is a Context Intelligence Platform that enhances LLM responses by injecting relevant context from your own knowledge base.' },
-      { type: 'text', value: 'Instead of relying on generic answers, NEXUS retrieves specific fragments from your documents, filters noise, and delivers only the information that matters to the LLM.' },
-      { type: 'flow', steps: ['User asks a question', 'NEXUS searches relevant chunks', 'Filters noise & ranks by relevance', 'Injects context into LLM', 'Precise, grounded response'] },
+      { type: 'text', value: 'NEXUS is a learning-first engineering workspace where implementation and teaching happen together.' },
+      { type: 'text', value: 'It selects high-signal context, enforces safety gates before write-mode execution, and keeps durable memory with local-first + optional parallel providers.' },
+      { type: 'text', value: 'Security learnings are distilled into reusable rules (not raw code), then reused in teach/recall with strict project-language isolation.' },
+      { type: 'flow', steps: ['You work on a task', 'NEXUS selects context + blocks unsafe runs', 'Teach output explains Change/Reason/Concepts/Practice', 'Durable memory is updated', 'Future tasks recover only scoped, relevant knowledge'] },
     ]
   },
   {
