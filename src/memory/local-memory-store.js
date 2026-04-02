@@ -115,6 +115,20 @@ function normalizeLanguageToken(value) {
 }
 
 /**
+ * @param {MemoryEntry | Record<string, unknown>} entry
+ */
+function isSecurityEntry(entry) {
+  const type = normalizeLanguageToken(String(entry.type ?? ""));
+  const riskTaxonomy = normalizeLanguageToken(String(entry.riskTaxonomy ?? ""));
+  const severity = normalizeLanguageToken(String(entry.severity ?? ""));
+  return (
+    type.includes("security") ||
+    Boolean(riskTaxonomy) ||
+    ["critical", "high", "medium", "low"].includes(severity)
+  );
+}
+
+/**
  * Compute term frequency: count of each term / total terms.
  * @param {string[]} tokens
  * @returns {Map<string, number>}
@@ -209,6 +223,7 @@ function entryToSearchText(entry) {
  *   scope?: string,
  *   type?: string,
  *   language?: string,
+ *   securityOnly?: boolean,
  *   isolationMode?: "strict" | "relaxed",
  *   limit?: number
  * }} options
@@ -229,6 +244,10 @@ function searchWithTFIDF(entries, query, options) {
     }
 
     if (options.type && entry.type !== options.type) {
+      return false;
+    }
+
+    if (options.securityOnly === true && !isSecurityEntry(entry)) {
       return false;
     }
 
@@ -294,6 +313,37 @@ function searchWithTFIDF(entries, query, options) {
   });
 
   return scored.slice(0, limit);
+}
+
+/**
+ * @param {MemoryEntry[]} entries
+ * @param {MemorySearchOptions} options
+ */
+function buildSecuritySearchSummary(entries, options) {
+  const riskIds = [
+    ...new Set(
+      entries
+        .map((entry) => {
+          const candidate = entry.riskTaxonomy;
+          return typeof candidate === "string" ? candidate.trim() : "";
+        })
+        .filter(Boolean)
+    )
+  ];
+  const confidenceValues = /** @type {number[]} */ (
+    entries
+      .map((entry) => entry.confidence)
+      .filter((value) => typeof value === "number" && Number.isFinite(value))
+  );
+  const confidence = confidenceValues.length
+    ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+    : 0;
+
+  return {
+    riskIds,
+    confidence: Number(confidence.toFixed(3)),
+    isolationApplied: options.isolationMode !== "relaxed"
+  };
 }
 
 // ── Persistence Layer ────────────────────────────────────────────────
@@ -503,6 +553,38 @@ function extractHygieneMetadata(record) {
     record.reviewReasons.every((item) => typeof item === "string")
   ) {
     metadata.reviewReasons = [...record.reviewReasons];
+  }
+
+  if (typeof record.severity === "string" && record.severity.trim()) {
+    metadata.severity = record.severity.trim().toLowerCase();
+  }
+
+  if (typeof record.confidence === "number" && Number.isFinite(record.confidence)) {
+    metadata.confidence = Math.max(0, Math.min(1, record.confidence));
+  }
+
+  if (typeof record.riskTaxonomy === "string" && record.riskTaxonomy.trim()) {
+    metadata.riskTaxonomy = record.riskTaxonomy.trim();
+  }
+
+  if (typeof record.rule === "string" && record.rule.trim()) {
+    metadata.rule = record.rule.trim();
+  }
+
+  if (typeof record.antiPattern === "string" && record.antiPattern.trim()) {
+    metadata.antiPattern = record.antiPattern.trim();
+  }
+
+  if (typeof record.fixPattern === "string" && record.fixPattern.trim()) {
+    metadata.fixPattern = record.fixPattern.trim();
+  }
+
+  if (typeof record.practicePrompt === "string" && record.practicePrompt.trim()) {
+    metadata.practicePrompt = record.practicePrompt.trim();
+  }
+
+  if (typeof record.securityCritical === "boolean") {
+    metadata.securityCritical = record.securityCritical;
   }
 
   return metadata;
@@ -804,7 +886,8 @@ export function createLocalMemoryStore(options = {}) {
     return {
       entries: reranked,
       stdout: toSearchStdout(reranked),
-      provider: "local"
+      provider: "local",
+      security: buildSecuritySearchSummary(reranked, searchOptions)
     };
   }
 

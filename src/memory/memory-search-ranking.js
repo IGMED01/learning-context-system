@@ -43,6 +43,44 @@ function buildEntryText(entry) {
 }
 
 /**
+ * @param {MemoryEntry} entry
+ */
+function isSecurityEntry(entry) {
+  const type = normalizeText(entry.type ?? "");
+  const riskTaxonomy = normalizeText(entry.riskTaxonomy ?? "");
+  const severity = normalizeText(entry.severity ?? "");
+
+  return (
+    type.includes("security") ||
+    Boolean(riskTaxonomy) ||
+    ["critical", "high", "medium", "low"].includes(severity)
+  );
+}
+
+/**
+ * @param {MemoryEntry} entry
+ */
+function securitySeverityScore(entry) {
+  const severity = normalizeText(entry.severity ?? "");
+  if (severity.includes("critical")) return 1;
+  if (severity.includes("high")) return 0.9;
+  if (severity.includes("medium")) return 0.7;
+  if (severity.includes("low")) return 0.55;
+  return isSecurityEntry(entry) ? 0.6 : 0;
+}
+
+/**
+ * @param {MemoryEntry} entry
+ */
+function securityConfidenceScore(entry) {
+  const raw = entry.confidence;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(0, Math.min(1, raw));
+  }
+  return 0.5;
+}
+
+/**
  * @param {unknown} value
  */
 function safeDateMs(value) {
@@ -170,6 +208,10 @@ function matchesMetadata(entry, options) {
     return false;
   }
 
+  if (options.securityOnly === true && !isSecurityEntry(entry)) {
+    return false;
+  }
+
   const targetLanguage = normalizeText(options.language ?? "");
   if (!targetLanguage) {
     return true;
@@ -213,6 +255,7 @@ export function rankHybridMemoryEntries(entries, input) {
   const queryTerms = new Set(tokenize(query));
   const changedPathTerms = new Set(changedFiles.flatMap((file) => tokenize(file)));
   const targetLanguage = normalizeText(options.language ?? "");
+  const securityOnly = options.securityOnly === true;
 
   const ranked = dedupeMemoryEntries(entries)
     .map((entry, index) => {
@@ -220,10 +263,23 @@ export function rankHybridMemoryEntries(entries, input) {
       const lexical = queryTerms.size ? overlapRatio(tokens, queryTerms) : 0;
       const pathAffinity = changedPathTerms.size ? overlapRatio(tokens, changedPathTerms) : 0;
       const recency = recencyScore(entry, nowMs);
+      const securityEntry = isSecurityEntry(entry);
+      const securitySeverity = securitySeverityScore(entry);
+      const securityConfidence = securityConfidenceScore(entry);
+      const securityWeight = securityEntry
+        ? securitySeverity * 0.6 + securityConfidence * 0.4
+        : 0;
       const entryLanguage = normalizeText(entry.language ?? "");
       const languagePenalty =
-        targetLanguage && entryLanguage && entryLanguage !== targetLanguage ? 0.28 : 0;
-      const score = lexical * 0.58 + pathAffinity * 0.16 + recency * 0.26 - languagePenalty;
+        targetLanguage && entryLanguage && entryLanguage !== targetLanguage ? 0.48 : 0;
+      const nonSecurityPenalty = securityOnly && !securityEntry ? 0.65 : 0;
+      const score =
+        lexical * 0.5 +
+        pathAffinity * 0.16 +
+        recency * 0.2 +
+        securityWeight * (securityOnly ? 0.28 : 0.14) -
+        languagePenalty -
+        nonSecurityPenalty;
 
       return {
         entry,

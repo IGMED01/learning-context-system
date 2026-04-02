@@ -86,6 +86,37 @@ function mergeAndRankEntries(entries, query, options) {
 }
 
 /**
+ * @param {MemoryEntry[]} entries
+ * @param {MemorySearchOptions} options
+ */
+function buildSecuritySearchSummary(entries, options) {
+  const riskIds = [
+    ...new Set(
+      entries
+        .map((entry) => {
+          const candidate = entry.riskTaxonomy;
+          return typeof candidate === "string" ? candidate.trim() : "";
+        })
+        .filter(Boolean)
+    )
+  ];
+  const confidenceValues = /** @type {number[]} */ (
+    entries
+      .map((entry) => entry.confidence)
+      .filter((value) => typeof value === "number" && Number.isFinite(value))
+  );
+  const confidence = confidenceValues.length
+    ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+    : 0;
+
+  return {
+    riskIds,
+    confidence: Number(confidence.toFixed(3)),
+    isolationApplied: options.isolationMode !== "relaxed"
+  };
+}
+
+/**
  * @param {{
  *   primary: MemoryProvider,
  *   secondary: MemoryProvider,
@@ -143,7 +174,8 @@ export function createParallelMemoryClient(input) {
       providerChain: providerChain.length ? providerChain : [primaryName, secondaryName],
       degraded: failures.length > 0,
       warning,
-      error: failures.length > 0 ? failures.join(" | ") : undefined
+      error: failures.length > 0 ? failures.join(" | ") : undefined,
+      security: buildSecuritySearchSummary(ranked, options)
     };
   }
 

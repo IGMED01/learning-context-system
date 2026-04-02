@@ -20,6 +20,8 @@ const TAG_SCOPE_PREFIX = "memory-scope:";
 const TAG_TOPIC_PREFIX = "memory-topic:";
 const TAG_LANGUAGE_PREFIX = "memory-language:";
 const TAG_TYPE_PREFIX = "memory-type:";
+const TAG_RISK_PREFIX = "memory-risk:";
+const TAG_SEVERITY_PREFIX = "memory-severity:";
 
 /**
  * @param {unknown} value
@@ -80,6 +82,8 @@ function toMemoryEntry(entry, fallbackProject = "") {
   const topic = asText(entry.topic) || readTagValue(tags, TAG_TOPIC_PREFIX);
   const language =
     asText(entry.language) || readTagValue(tags, TAG_LANGUAGE_PREFIX);
+  const riskTaxonomy = asText(entry.riskTaxonomy) || readTagValue(tags, TAG_RISK_PREFIX);
+  const severity = asText(entry.severity) || readTagValue(tags, TAG_SEVERITY_PREFIX);
   const createdAtMs = Date.parse(createdAt);
   const updatedAtMs = Date.parse(updatedAt);
 
@@ -95,7 +99,19 @@ function toMemoryEntry(entry, fallbackProject = "") {
     createdAt,
     updatedAt,
     createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : Date.now(),
-    updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now()
+    updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now(),
+    ...(severity ? { severity } : {}),
+    ...(riskTaxonomy ? { riskTaxonomy } : {}),
+    ...(typeof entry.confidence === "number" && Number.isFinite(entry.confidence)
+      ? { confidence: Math.max(0, Math.min(1, entry.confidence)) }
+      : {}),
+    ...(asText(entry.rule) ? { rule: asText(entry.rule) } : {}),
+    ...(asText(entry.antiPattern) ? { antiPattern: asText(entry.antiPattern) } : {}),
+    ...(asText(entry.fixPattern) ? { fixPattern: asText(entry.fixPattern) } : {}),
+    ...(asText(entry.practicePrompt) ? { practicePrompt: asText(entry.practicePrompt) } : {}),
+    ...(typeof entry.securityCritical === "boolean"
+      ? { securityCritical: entry.securityCritical }
+      : {})
   };
 }
 
@@ -121,7 +137,48 @@ function buildKnowledgeTags(input) {
     tags.push(`${TAG_LANGUAGE_PREFIX}${language}`);
   }
 
+  const riskTaxonomy = asText(input.riskTaxonomy);
+  if (riskTaxonomy) {
+    tags.push(`${TAG_RISK_PREFIX}${riskTaxonomy}`);
+  }
+
+  const severity = asText(input.severity);
+  if (severity) {
+    tags.push(`${TAG_SEVERITY_PREFIX}${severity}`);
+  }
+
   return tags;
+}
+
+/**
+ * @param {MemoryEntry[]} entries
+ * @param {MemorySearchOptions} options
+ */
+function buildSecuritySearchSummary(entries, options) {
+  const riskIds = [
+    ...new Set(
+      entries
+        .map((entry) => {
+          const candidate = entry.riskTaxonomy;
+          return typeof candidate === "string" ? candidate.trim() : "";
+        })
+        .filter(Boolean)
+    )
+  ];
+  const confidenceValues = /** @type {number[]} */ (
+    entries
+      .map((entry) => entry.confidence)
+      .filter((value) => typeof value === "number" && Number.isFinite(value))
+  );
+  const confidence = confidenceValues.length
+    ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+    : 0;
+
+  return {
+    riskIds,
+    confidence: Number(confidence.toFixed(3)),
+    isolationApplied: options.isolationMode !== "relaxed"
+  };
 }
 
 /**
@@ -178,7 +235,8 @@ export function createObsidianMemoryProvider(options = {}) {
       return {
         entries,
         stdout: toMemorySearchStdout(entries),
-        provider: "obsidian"
+        provider: "obsidian",
+        security: buildSecuritySearchSummary(entries, searchOptions)
       };
     },
 
@@ -198,7 +256,18 @@ export function createObsidianMemoryProvider(options = {}) {
         source: asText(input.sourceKind) || "memory-obsidian",
         tags: buildKnowledgeTags(input),
         createdAt,
-        updatedAt: createdAt
+        updatedAt: createdAt,
+        severity: asText(input.severity),
+        confidence:
+          typeof input.confidence === "number" && Number.isFinite(input.confidence)
+            ? input.confidence
+            : undefined,
+        riskTaxonomy: asText(input.riskTaxonomy),
+        rule: asText(input.rule),
+        antiPattern: asText(input.antiPattern),
+        fixPattern: asText(input.fixPattern),
+        practicePrompt: asText(input.practicePrompt),
+        securityCritical: input.securityCritical === true
       });
 
       return {

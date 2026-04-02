@@ -90,7 +90,7 @@ function Topbar({ online, endpoints, onTheme, onIngest, onWiki, ingestBadge, com
         <span style={{ fontSize:'13px', fontWeight:700, color:'var(--text-1)', letterSpacing:'-0.3px', flexShrink:0 }}>NEXUS</span>
         <div style={{ width:'1px', height:'14px', background:'var(--border-2)', flexShrink:0 }} />
         <span className="hide-sm" style={{ fontSize:'11px', color:'var(--text-3)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-          Context Intelligence Platform
+          Learning Context · Safety · Durable Memory
         </span>
       </div>
       <div className="topbar-actions" style={{ display:'flex', alignItems:'center', gap:'8px', flexShrink:0 }}>

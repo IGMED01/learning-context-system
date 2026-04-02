@@ -46,6 +46,10 @@ import {
   ingestProwlerFile,
   normalizeProwlerStatusFilter
 } from "../security/prowler-ingest.js";
+import {
+  DEFAULT_SECURITY_MIN_CONFIDENCE,
+  runSecurityLearningLoop
+} from "../security/security-learning-loop.js";
 import { initProjectConfig, runProjectDoctor } from "../system/project-ops.js";
 import { purgeExpiredTempMemories } from "../memory/memory-hygiene.js";
 import {
@@ -129,6 +133,7 @@ import {
  *       scope?: string,
  *       type?: string,
  *       language?: string,
+ *       securityOnly?: boolean,
  *       isolationMode?: "strict" | "relaxed",
  *       changedFiles?: string[],
  *       limit?: number
@@ -141,6 +146,7 @@ import {
  *       scope?: string,
  *       type?: string,
  *       language?: string,
+ *       securityOnly?: boolean,
  *       isolationMode?: "strict" | "relaxed",
  *       changedFiles?: string[],
  *       limit?: number
@@ -196,7 +202,7 @@ import {
  */
 
 /**
- * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "doctor-memory" | "memory-stats" | "prune-memory" | "compact-memory" | "purge-temp-memory" | "init" | "sync-knowledge" | "ingest-security" | "ingest" | "version" | "shell"} CliCommand
+ * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "doctor-memory" | "memory-stats" | "prune-memory" | "compact-memory" | "purge-temp-memory" | "init" | "sync-knowledge" | "ingest-security" | "learn-security" | "ingest" | "version" | "shell"} CliCommand
  */
 
 /**
@@ -248,6 +254,7 @@ import {
  *   scope?: string,
  *   language?: string,
  *   isolationMode?: "strict" | "relaxed",
+ *   securityOnly?: boolean,
  *   limit?: number | null,
  *   entries?: import("../types/core-contracts.d.ts").MemoryEntry[],
  *   stdout?: string,
@@ -261,7 +268,12 @@ import {
  *   warning?: string,
  *   error?: string,
  *   failureKind?: string,
- *   fixHint?: string
+ *   fixHint?: string,
+ *   security?: {
+ *     riskIds?: string[],
+ *     confidence?: number,
+ *     isolationApplied?: boolean
+ *   }
  * }} RecallCommandResult
  */
 
@@ -371,6 +383,14 @@ function buildRuntimeMeta(startedAt, options = {}) {
  *     provider?: string,
  *     providerChain?: string[],
  *     fallbackProvider?: string
+ *   },
+ *   security?: {
+ *     recallAttempted?: boolean,
+ *     recallHit?: boolean,
+ *     criticalBlocked?: boolean,
+ *     falsePositiveBlock?: boolean,
+ *     memorySaved?: number,
+ *     quarantined?: number
  *   }
  * }} [extras]
  */
@@ -383,7 +403,8 @@ function buildCommandMetric(command, startedAt, extras = {}) {
     recall: extras.recall ?? undefined,
     sdd: extras.sdd ?? undefined,
     safety: extras.safety ?? undefined,
-    memory: extras.memory ?? undefined
+    memory: extras.memory ?? undefined,
+    security: extras.security ?? undefined
   };
 }
 
@@ -431,6 +452,14 @@ function buildObservabilityEvent(metric) {
         ? metric.memory.providerChain
         : [],
       fallbackProvider: metric.memory?.fallbackProvider ?? ""
+    },
+    security: {
+      recallAttempted: metric.security?.recallAttempted === true,
+      recallHit: metric.security?.recallHit === true,
+      criticalBlocked: metric.security?.criticalBlocked === true,
+      falsePositiveBlock: metric.security?.falsePositiveBlock === true,
+      memorySaved: metric.security?.memorySaved ?? 0,
+      quarantined: metric.security?.quarantined ?? 0
     }
   };
 }
@@ -717,6 +746,7 @@ function getMemoryClient(options, dependencies) {
  *   scope?: string,
  *   type?: string,
  *   language?: string,
+ *   securityOnly?: boolean,
  *   isolationMode?: "strict" | "relaxed",
  *   changedFiles?: string[],
  *   limit?: number
@@ -733,6 +763,7 @@ async function searchMemoryClient(memoryClient, query, options = {}) {
       scope: options.scope ?? "",
       type: options.type ?? "",
       language: options.language ?? "",
+      securityOnly: options.securityOnly === true,
       isolationMode: options.isolationMode,
       limit: options.limit ?? 5,
       entries: Array.isArray(result.entries) ? result.entries : [],
@@ -757,7 +788,11 @@ async function searchMemoryClient(memoryClient, query, options = {}) {
       warning: typeof result.warning === "string" ? result.warning : undefined,
       error: typeof result.error === "string" ? result.error : undefined,
       failureKind: typeof result.failureKind === "string" ? result.failureKind : undefined,
-      fixHint: typeof result.fixHint === "string" ? result.fixHint : undefined
+      fixHint: typeof result.fixHint === "string" ? result.fixHint : undefined,
+      security:
+        result && typeof result === "object" && result.security && typeof result.security === "object"
+          ? /** @type {{ riskIds?: string[], confidence?: number, isolationApplied?: boolean }} */ (result.security)
+          : undefined
     };
   }
 
@@ -778,6 +813,7 @@ async function searchMemoryClient(memoryClient, query, options = {}) {
     scope: options.scope ?? "",
     type: options.type ?? "",
     language: options.language ?? "",
+    securityOnly: options.securityOnly === true,
     limit: options.limit ?? 5,
     entries:
       Array.isArray(legacyResult.entries) && legacyResult.entries.length
@@ -1189,6 +1225,14 @@ function isWriteModeCommand(command, options) {
     return true;
   }
 
+  if (command === "teach") {
+    return booleanOption(options, "auto-remember", false);
+  }
+
+  if (command === "ingest") {
+    return booleanOption(options, "dry-run", false) !== true;
+  }
+
   if (command === "prune-memory") {
     return booleanOption(options, "apply", false);
   }
@@ -1201,7 +1245,49 @@ function isWriteModeCommand(command, options) {
     return Boolean(options.output);
   }
 
+  if (command === "learn-security") {
+    return booleanOption(options, "dry-run", false) !== true;
+  }
+
   return false;
+}
+
+/**
+ * @param {string | undefined} value
+ */
+function hasMeaningfulText(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return normalized !== "true" && normalized !== "false";
+}
+
+/**
+ * @param {CliCommand} command
+ * @param {CliOptions} options
+ */
+function missingStructuredPostTaskFields(command, options) {
+  /** @type {Array<{ value: string | undefined, label: string }>} */
+  const required =
+    command === "close"
+      ? [
+          { value: options.summary, label: "--summary" },
+          { value: options.learned, label: "--learned" },
+          { value: options.next, label: "--next" }
+        ]
+      : [
+          { value: options["post-task-summary"], label: "--post-task-summary" },
+          { value: options["post-task-learned"], label: "--post-task-learned" },
+          { value: options["post-task-next"], label: "--post-task-next" }
+        ];
+
+  return required.filter((entry) => !hasMeaningfulText(entry.value)).map((entry) => entry.label);
 }
 
 /**
@@ -1228,6 +1314,25 @@ function evaluateSafetyGate(command, options, numeric, loadedConfig) {
     details.push(
       "write-mode is blocked: add --plan-approved true or disable safety.requirePlanForWrite."
     );
+  }
+
+  if (
+    writeMode &&
+    safety.requireExecuteApprovalForWrite === true &&
+    options["execute-approved"] !== "true"
+  ) {
+    details.push(
+      "write-mode is blocked: add --execute-approved true or disable safety.requireExecuteApprovalForWrite."
+    );
+  }
+
+  if (writeMode && safety.requireStructuredPostTaskForWrite === true) {
+    const missingFields = missingStructuredPostTaskFields(command, options);
+    if (missingFields.length > 0) {
+      details.push(
+        `write-mode is blocked: structured post-task is required. Missing: ${missingFields.join(", ")}.`
+      );
+    }
   }
 
   const allowedScopePaths = Array.isArray(safety.allowedScopePaths)
@@ -1318,6 +1423,7 @@ function isSupportedCommand(command) {
     command === "init" ||
     command === "sync-knowledge" ||
     command === "ingest-security" ||
+    command === "learn-security" ||
     command === "ingest" ||
     command === "version" ||
     command === "shell"
@@ -1477,6 +1583,7 @@ function applyConfigDefaults(command, rawOptions, loadedConfig) {
  *   type?: string,
  *   scope?: string,
  *   language?: string,
+ *   securityOnly?: boolean,
  *   isolationMode?: "strict" | "relaxed",
  *   limit?: number,
  *   provider?: "memory" | "local"
@@ -1498,6 +1605,7 @@ function buildDegradedRecallResult(memoryClient, input, error) {
     type: input.type ?? "",
     scope: input.scope ?? "",
     language: input.language ?? "",
+    securityOnly: input.securityOnly === true,
     isolationMode: input.isolationMode,
     limit: input.limit ?? null,
     stdout: "",
@@ -1509,7 +1617,12 @@ function buildDegradedRecallResult(memoryClient, input, error) {
     warning,
     error: message,
     failureKind,
-    fixHint
+    fixHint,
+    security: {
+      riskIds: [],
+      confidence: 0,
+      isolationApplied: input.isolationMode !== "relaxed"
+    }
   };
 }
 
@@ -1665,6 +1778,7 @@ export async function runCli(argv, dependencies = {}) {
     command === "prune-memory" ||
     command === "sync-knowledge" ||
     command === "ingest-security" ||
+    command === "learn-security" ||
     command === "ingest" ||
     command === "shell"
       ? "text"
@@ -2141,6 +2255,166 @@ export async function runCli(argv, dependencies = {}) {
     };
   }
 
+  if (command === "learn-security") {
+    const memoryClient = /** @type {MemoryClientLike} */ (getMemoryClient(options, dependencies));
+    const statusFilter = normalizeProwlerStatusFilter(
+      options["status-filter"] ?? DEFAULT_PROWLER_STATUS_FILTER
+    );
+    const maxFindings = assertNumberRules(
+      numberOption(options, "max-findings", DEFAULT_PROWLER_MAX_FINDINGS),
+      "max-findings",
+      {
+        min: 1,
+        integer: true
+      }
+    );
+    const minConfidence = assertNumberRules(
+      numberOption(
+        options,
+        "min-confidence",
+        loadedConfig.config.security?.learning?.minConfidence ?? DEFAULT_SECURITY_MIN_CONFIDENCE
+      ),
+      "min-confidence",
+      { min: 0, max: 1 }
+    );
+    const dryRun = booleanOption(options, "dry-run", false);
+    const source = options.source === "ci" ? "ci" : options.source === "local" ? "local" : "local";
+    const strictIsolation =
+      loadedConfig.config.security?.learning?.strictIsolation !== false &&
+      booleanOption(options, "strict-isolation", true);
+    const changedFiles = listOption(options, "changed-files");
+    const language = options["memory-language"] ?? "";
+    const quarantineBaseDir =
+      options["memory-quarantine-dir"] ||
+      process.env.LCS_MEMORY_QUARANTINE_DIR ||
+      ".lcs/memory-quarantine";
+    /** @type {string[]} */
+    const quarantinePaths = [];
+    const ingest = await ingestProwlerFile(requireOption(options, "input"), {
+      statusFilter,
+      maxFindings
+    });
+
+    const learning = await runSecurityLearningLoop({
+      chunks: /** @type {import("../types/core-contracts.d.ts").Chunk[]} */ (ingest.chunks),
+      memoryClient: /** @type {import("../types/core-contracts.d.ts").MemoryProvider} */ (
+        /** @type {unknown} */ (memoryClient)
+      ),
+      project: options.project,
+      source,
+      language,
+      changedFiles,
+      minConfidence,
+      dryRun,
+      strictIsolation,
+      quarantine: async ({ unit, reasons }) => {
+        const quarantineResult = await quarantineMemoryWrite({
+          cwd: process.cwd(),
+          quarantineDir: quarantineBaseDir,
+          title: `Security quarantine: ${String(unit.riskTaxonomy ?? unit.title ?? "finding")}`,
+          content: [
+            `Rule: ${String(unit.rule ?? "")}`,
+            `Why: ${String(unit.antiPattern ?? "")}`,
+            `Fix: ${String(unit.fixPattern ?? "")}`,
+            `Practice: ${String(unit.practicePrompt ?? "")}`,
+            `Risk: ${String(unit.riskTaxonomyId ?? "security-misconfiguration")}`,
+            `Confidence: ${Number(unit.confidence ?? 0).toFixed(3)}`
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          type: "security-rule",
+          project: String(unit.project ?? options.project ?? ""),
+          scope: "project",
+          topic: `security/${String(unit.riskTaxonomyId ?? "security-misconfiguration")}`,
+          sourceKind: "learn-security",
+          reasons
+        });
+        if (typeof quarantineResult.filePath === "string" && quarantineResult.filePath.trim()) {
+          quarantinePaths.push(quarantineResult.filePath);
+        }
+      }
+    });
+    const metric = buildCommandMetric("learn-security", startedAt, {
+      degraded: learning.errors.length > 0,
+      selection: {
+        selectedCount: learning.saved,
+        suppressedCount: learning.quarantinedUnits
+      },
+      security: {
+        recallAttempted: false,
+        recallHit: false,
+        criticalBlocked: false,
+        falsePositiveBlock: false,
+        memorySaved: learning.saved,
+        quarantined: learning.quarantinedUnits
+      }
+    });
+    await safeRecordCommandMetric(metric);
+
+    const payload = {
+      input: ingest.inputPath,
+      detectedFormat: ingest.detectedFormat,
+      statusFilter: ingest.statusFilter,
+      maxFindings: ingest.maxFindings,
+      totalFindings: ingest.totalFindings,
+      includedFindings: ingest.includedFindings,
+      skippedFindings: ingest.skippedFindings,
+      redactedFindings: ingest.redactedFindings,
+      redactionCountTotal: ingest.redactionCountTotal,
+      learning: {
+        source: learning.source,
+        project: learning.project,
+        dryRun: learning.dryRun,
+        minConfidence: learning.minConfidence,
+        distilledUnits: learning.distilledUnits,
+        acceptedUnits: learning.acceptedUnits,
+        quarantinedUnits: learning.quarantinedUnits,
+        saved: learning.saved,
+        securityMemoryGrowth: learning.securityMemoryGrowth,
+        quarantineRate: learning.quarantineRate,
+        falsePositiveBlockRate: learning.falsePositiveBlockRate,
+        criticalAccepted: learning.criticalAccepted,
+        criticalQuarantined: learning.criticalQuarantined,
+        errors: learning.errors,
+        quarantinePaths
+      },
+      observability: buildObservabilityEvent(metric)
+    };
+
+    return {
+      exitCode: learning.errors.length > 0 ? 1 : 0,
+      stdout:
+        format === "text"
+          ? [
+              "Security learning summary:",
+              `- input: ${payload.input}`,
+              `- source: ${learning.source}`,
+              `- findings included: ${payload.includedFindings}`,
+              `- distilled units: ${learning.distilledUnits}`,
+              `- accepted units: ${learning.acceptedUnits}`,
+              `- quarantined units: ${learning.quarantinedUnits}`,
+              `- saved: ${learning.saved}`,
+              `- memory growth: ${learning.securityMemoryGrowth}`,
+              `- quarantine rate: ${learning.quarantineRate}`,
+              `- false positive block rate: ${learning.falsePositiveBlockRate}`,
+              learning.errors.length ? `- errors: ${learning.errors.join(" | ")}` : ""
+            ]
+              .filter(Boolean)
+              .join("\n")
+          : serializeCommandResult(
+              "learn-security",
+              payload,
+              format,
+              loadedConfig,
+              {
+                degraded: learning.errors.length > 0,
+                warnings: learning.errors,
+                ...buildRuntimeMeta(startedAt)
+              }
+            )
+    };
+  }
+
   if (command === "recall") {
     const memoryBackend = parseMemoryBackendMode(options["memory-backend"]);
     const memoryIsolation = parseMemoryIsolationMode(options["memory-isolation"]);
@@ -2150,6 +2424,7 @@ export async function runCli(argv, dependencies = {}) {
     const type = options.type;
     const scope = options.scope;
     const language = options["memory-language"];
+    const securityOnly = booleanOption(options, "security-only", false);
     const limit =
       query !== undefined
         ? assertNumberRules(numberOption(options, "limit", 5), "limit", {
@@ -2162,6 +2437,7 @@ export async function runCli(argv, dependencies = {}) {
       "degraded-recall",
       loadedConfig.config.memory.degradedRecall
     );
+    const recallUsesSearch = query !== undefined || securityOnly;
     let result;
     let degraded = false;
     /** @type {string[]} */
@@ -2169,12 +2445,13 @@ export async function runCli(argv, dependencies = {}) {
 
     try {
       result = /** @type {RecallCommandResult} */ (
-        query
-          ? await searchMemoryClient(memoryClient, query, {
+        recallUsesSearch
+          ? await searchMemoryClient(memoryClient, query ?? "", {
               project,
               type,
               scope,
               language,
+              securityOnly,
               isolationMode: memoryIsolation,
               limit
             })
@@ -2199,6 +2476,7 @@ export async function runCli(argv, dependencies = {}) {
           type,
           scope,
           language,
+          securityOnly,
           isolationMode: memoryIsolation,
           limit,
           provider: memoryBackend === "local-only" ? "local" : "memory"
@@ -2211,20 +2489,20 @@ export async function runCli(argv, dependencies = {}) {
     }
 
     const recoveredChunks =
-      query && result.entries
+      recallUsesSearch && result.entries
         ? result.entries.length
-        : query && result.stdout?.trim()
+        : recallUsesSearch && result.stdout?.trim()
           ? 1
           : 0;
     const recallStatus = degraded
       ? result?.provider === "local"
-        ? query
+        ? recallUsesSearch
           ? recoveredChunks > 0
             ? "recalled-fallback"
             : "empty-fallback"
           : "context-fallback"
         : "failed-degraded"
-      : query
+      : recallUsesSearch
         ? recoveredChunks > 0
           ? "recalled"
           : "empty"
@@ -2237,7 +2515,7 @@ export async function runCli(argv, dependencies = {}) {
         recoveredChunks,
         selectedChunks: 0,
         suppressedChunks: 0,
-        hit: query ? recoveredChunks > 0 : Boolean(result.stdout?.trim())
+        hit: recallUsesSearch ? recoveredChunks > 0 : Boolean(result.stdout?.trim())
       },
       memory: {
         backend: memoryBackend,
@@ -2253,6 +2531,14 @@ export async function runCli(argv, dependencies = {}) {
             )
           : [],
         fallbackProvider: result?.fallbackProvider ?? ""
+      },
+      security: {
+        recallAttempted: recallUsesSearch,
+        recallHit: recallUsesSearch ? recoveredChunks > 0 : Boolean(result.stdout?.trim()),
+        criticalBlocked: false,
+        falsePositiveBlock: false,
+        memorySaved: 0,
+        quarantined: 0
       }
     });
     await safeRecordCommandMetric(metric);

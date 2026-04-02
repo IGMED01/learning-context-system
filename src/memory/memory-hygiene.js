@@ -262,7 +262,7 @@ async function readScopedMemoryFiles(baseDir, project) {
  * @param {MemoryEntry | MemorySaveInput | Record<string, unknown>} entry
  */
 function inferSourceKind(entry) {
-  const record = /** @type {Record<string, unknown>} */ (entry);
+  const record = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (entry));
   const sourceKind =
     typeof record.sourceKind === "string" && record.sourceKind.trim() ? record.sourceKind.trim() : "";
 
@@ -407,7 +407,7 @@ function buildTopicKey(entry) {
  * @param {MemoryEntry | MemorySaveInput | Record<string, unknown>} entry
  */
 function scoreHealth(signalScore, durabilityScore, duplicateScore, testNoise, genericContent, entry) {
-  const record = /** @type {Record<string, unknown>} */ (entry);
+  const record = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (entry));
   const createdAt = typeof record.createdAt === "string" ? new Date(record.createdAt) : null;
   const recencyScore =
     createdAt && !Number.isNaN(createdAt.getTime())
@@ -434,7 +434,7 @@ function scoreHealth(signalScore, durabilityScore, duplicateScore, testNoise, ge
  * @param {{ fingerprintCounts: Map<string, number>, topicCounts: Map<string, number> }} indexes
  */
 function evaluateEntry(entry, indexes) {
-  const record = /** @type {Record<string, unknown>} */ (entry);
+  const record = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (entry));
   const signalScore = scoreSignal(entry);
   const durabilityScore = scoreDurability(entry);
   const testNoise = hasTestNoise(entry);
@@ -877,6 +877,36 @@ export async function runMemoryDoctor(options = {}) {
     lowSignal: entries.filter((entry) => entry.reasons.includes("low-signal")).length,
     quarantineCandidates: entries.filter((entry) => entry.quarantineCandidate).length
   };
+  const securitySourceEntries = flatEntries.filter((entry) => {
+    const type = String(entry.type ?? "").toLowerCase();
+    const topic = String(entry.topic ?? "").toLowerCase();
+    const sourceKind = String(entry.sourceKind ?? "").toLowerCase();
+    const riskTaxonomy = String(entry.riskTaxonomy ?? "").toLowerCase();
+    return (
+      type.includes("security") ||
+      topic.startsWith("security/") ||
+      sourceKind === "learn-security" ||
+      Boolean(riskTaxonomy)
+    );
+  });
+  const securityConfidenceValues = /** @type {number[]} */ (
+    securitySourceEntries
+      .map((entry) => entry.confidence)
+      .filter((value) => typeof value === "number" && Number.isFinite(value))
+  );
+  const securityCriticalCount = securitySourceEntries.filter((entry) => {
+    const severity = String(entry.severity ?? "").toLowerCase();
+    const criticalFlag = entry.securityCritical;
+    return criticalFlag === true || severity === "critical";
+  }).length;
+  const securityQuarantineCandidates = entries.filter((entry) => {
+    const type = String(entry.type ?? "").toLowerCase();
+    const topic = String(entry.topic ?? "").toLowerCase();
+    return entry.quarantineCandidate && (type.includes("security") || topic.startsWith("security/"));
+  }).length;
+  const securityAverageConfidence = securityConfidenceValues.length
+    ? securityConfidenceValues.reduce((sum, value) => sum + value, 0) / securityConfidenceValues.length
+    : 0;
 
   return {
     action: "audit",
@@ -889,6 +919,12 @@ export async function runMemoryDoctor(options = {}) {
       entries: scope.entries.length
     })),
     summary,
+    security: {
+      totalRules: securitySourceEntries.length,
+      criticalRules: securityCriticalCount,
+      quarantineCandidates: securityQuarantineCandidates,
+      averageConfidence: Number(securityAverageConfidence.toFixed(3))
+    },
     entries
   };
 }
