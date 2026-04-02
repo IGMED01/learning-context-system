@@ -14,7 +14,7 @@ import { memoryEntriesToChunks } from "./memory-utils.js";
 const DEFAULT_RECALL_RETRY_ATTEMPTS = 2;
 const DEFAULT_RECALL_RETRY_BACKOFF_MS = 40;
 const DEFAULT_SIDE_QUERY_CANDIDATE_MULTIPLIER = 3;
-const DEFAULT_SIDE_QUERY_MAX_QUERIES = 5;
+const DEFAULT_SIDE_QUERY_MAX_QUERIES = 3;
 
 /**
  * @param {unknown} error
