@@ -437,6 +437,8 @@ export async function runTeachCommand(input) {
     min: 1,
     integer: true
   });
+  const alreadySurfacedMemoryIds = listOption(options, "already-surfaced-memory-ids");
+  const usedTools = listOption(options, "used-tools");
   const teachChunks = await resolveAutoTeachRecall({
     task,
     objective,
@@ -450,6 +452,8 @@ export async function runTeachCommand(input) {
     scope: memoryScope,
     type: memoryType,
     strictRecall,
+    alreadySurfacedMemoryIds,
+    usedTools,
     baseChunks: payload.chunks,
     search: (query, searchOptions) => searchMemoryClient(memoryClient, query, searchOptions)
   });
@@ -668,6 +672,15 @@ export async function runTeachCommand(input) {
   ) {
     warnings.push(
       "Auto recall skipped: low-signal task. Add --changed-files or --recall-query to force memory recall."
+    );
+  }
+
+  if (
+    packetWithMemory.memoryRecall.status === "empty" &&
+    packetWithMemory.memoryRecall.reason === "already-surfaced"
+  ) {
+    warnings.push(
+      "Auto recall skipped repeated memories: all candidate memories were already surfaced in this flow."
     );
   }
 

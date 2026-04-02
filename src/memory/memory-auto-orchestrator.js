@@ -117,6 +117,10 @@ function sanitizePathList(values, securityPolicy) {
  *   scope?: string,
  *   type?: string,
  *   strictRecall?: boolean,
+ *   alreadySurfacedMemoryIds?: string[],
+ *   usedTools?: string[],
+ *   sideQueryCandidateMultiplier?: number,
+ *   sideQueryMaxQueries?: number,
  *   baseChunks?: Chunk[],
  *   search: (query: string, options?: MemorySearchOptions) => Promise<MemorySearchResult>
  * }} input
@@ -141,6 +145,10 @@ export async function resolveAutoTeachRecall(input) {
     scope: input.scope,
     type: input.type,
     strictRecall: input.strictRecall,
+    alreadySurfacedMemoryIds: input.alreadySurfacedMemoryIds,
+    usedTools: input.usedTools,
+    sideQueryCandidateMultiplier: input.sideQueryCandidateMultiplier,
+    sideQueryMaxQueries: input.sideQueryMaxQueries,
     baseChunks: input.baseChunks,
     search: input.search
   });

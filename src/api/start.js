@@ -6,6 +6,7 @@
  */
 
 import http from "node:http";
+import https from "node:https";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,6 +75,154 @@ function parseCsvEnv(raw) {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+/**
+ * @param {string | undefined} raw
+ * @returns {string[]}
+ */
+function parseSecretList(raw) {
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(/[\r\n,]+/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+/**
+ * @param {string | undefined} filePath
+ * @param {{ label: string, required?: boolean }} options
+ */
+async function readSecretFile(filePath, options) {
+  const resolved = String(filePath ?? "").trim();
+  if (!resolved) {
+    if (options.required) {
+      throw new Error(`${options.label} secret file path is required.`);
+    }
+
+    return "";
+  }
+
+  try {
+    const content = await readFile(resolved, "utf8");
+    const normalized = content.replace(/\u0000/gu, "").trim();
+    if (!normalized && options.required) {
+      throw new Error(`${options.label} secret file is empty.`);
+    }
+    return normalized;
+  } catch (error) {
+    throw new Error(
+      `${options.label} secret file could not be read (${resolved}): ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+/**
+ * @param {{
+ *   envKey: string,
+ *   fileKey: string,
+ *   label: string,
+ *   required?: boolean
+ * }} options
+ */
+async function resolveSecretValue(options) {
+  const direct = String(process.env[options.envKey] ?? "").trim();
+  if (direct) {
+    return {
+      value: direct,
+      source: "env"
+    };
+  }
+
+  const fromFile = await readSecretFile(process.env[options.fileKey], {
+    label: options.label,
+    required: options.required
+  });
+
+  if (fromFile) {
+    return {
+      value: fromFile,
+      source: "file"
+    };
+  }
+
+  return {
+    value: "",
+    source: "none"
+  };
+}
+
+async function resolveApiKeys() {
+  const fromEnv = [
+    ...parseSecretList(process.env.LCS_API_KEY),
+    ...parseSecretList(process.env.LCS_API_KEYS)
+  ];
+  const fromFile = [
+    ...parseSecretList(await readSecretFile(process.env.LCS_API_KEY_FILE, { label: "api-key" })),
+    ...parseSecretList(await readSecretFile(process.env.LCS_API_KEYS_FILE, { label: "api-keys" }))
+  ];
+  const values = [...new Set([...fromEnv, ...fromFile])];
+
+  return {
+    values,
+    sources: {
+      env: fromEnv.length > 0,
+      file: fromFile.length > 0
+    }
+  };
+}
+
+async function resolveTlsRuntime() {
+  const tlsEnabledByFlag = parseBooleanEnv(process.env.LCS_API_TLS_ENABLED, false);
+  const keyFromEnv = String(process.env.LCS_API_TLS_KEY ?? "").trim();
+  const certFromEnv = String(process.env.LCS_API_TLS_CERT ?? "").trim();
+  const hasInlineMaterial = Boolean(keyFromEnv || certFromEnv);
+  const hasFileMaterial = Boolean(
+    String(process.env.LCS_API_TLS_KEY_FILE ?? "").trim() ||
+      String(process.env.LCS_API_TLS_CERT_FILE ?? "").trim()
+  );
+  const enabled = tlsEnabledByFlag || hasInlineMaterial || hasFileMaterial;
+
+  if (!enabled) {
+    return {
+      enabled: false,
+      protocol: "http"
+    };
+  }
+
+  const key = keyFromEnv || (await readSecretFile(process.env.LCS_API_TLS_KEY_FILE, {
+    label: "tls-key",
+    required: true
+  }));
+  const cert = certFromEnv || (await readSecretFile(process.env.LCS_API_TLS_CERT_FILE, {
+    label: "tls-cert",
+    required: true
+  }));
+  const ca =
+    String(process.env.LCS_API_TLS_CA ?? "").trim() ||
+    (await readSecretFile(process.env.LCS_API_TLS_CA_FILE, {
+      label: "tls-ca"
+    }));
+
+  return {
+    enabled: true,
+    protocol: "https",
+    key,
+    cert,
+    ...(ca ? { ca } : {}),
+    sources: {
+      key: keyFromEnv ? "env" : "file",
+      cert: certFromEnv ? "env" : "file",
+      ca: ca
+        ? String(process.env.LCS_API_TLS_CA ?? "").trim()
+          ? "env"
+          : "file"
+        : "none"
+    }
+  };
 }
 
 /**
@@ -483,17 +632,23 @@ async function serveSpaFallback(res) {
 
 const host = process.env.LCS_API_HOST || "127.0.0.1";
 const port = Number(process.env.LCS_API_PORT || 3100);
+const tlsRuntime = await resolveTlsRuntime();
+const protocol = tlsRuntime.protocol;
 const corsOrigin = resolveCorsOrigin(
   process.env.LCS_API_CORS_ORIGIN || process.env.LCS_API_CORS,
   host,
-  port
+  port,
+  protocol
 );
 const requireAuth = process.env.LCS_API_REQUIRE_AUTH !== "false";
-const apiKeys = [
-  ...(process.env.LCS_API_KEY ? [process.env.LCS_API_KEY] : []),
-  ...parseCsvEnv(process.env.LCS_API_KEYS)
-];
-const jwtSecret = process.env.LCS_API_JWT_SECRET || "";
+const apiKeyResolution = await resolveApiKeys();
+const apiKeys = apiKeyResolution.values;
+const jwtSecretResolution = await resolveSecretValue({
+  envKey: "LCS_API_JWT_SECRET",
+  fileKey: "LCS_API_JWT_SECRET_FILE",
+  label: "jwt-secret"
+});
+const jwtSecret = jwtSecretResolution.value;
 const jwtIssuer = process.env.LCS_API_JWT_ISSUER || "";
 const jwtAudience = parseCsvEnv(process.env.LCS_API_JWT_AUDIENCE);
 const jwtClockSkewSeconds = parseTimeoutMs(
@@ -502,6 +657,16 @@ const jwtClockSkewSeconds = parseTimeoutMs(
   0,
   600
 );
+
+if (requireAuth && apiKeys.length === 0 && !jwtSecret) {
+  log("warn", "api auth enabled without configured credentials", {
+    requireAuth,
+    apiKeysFromEnv: apiKeyResolution.sources.env,
+    apiKeysFromFile: apiKeyResolution.sources.file,
+    jwtSecretSource: jwtSecretResolution.source
+  });
+}
+
 const auth = createAuthMiddleware({
   requireAuth,
   apiKeys,
@@ -542,10 +707,17 @@ function sendAuthError(res, input) {
   );
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+/**
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ */
+const requestHandler = async (req, res) => {
+  const url = new URL(req.url || "/", `${protocol}://${req.headers.host || "localhost"}`);
   const pathname = url.pathname;
   applyBaseSecurityHeaders(res);
+  if (protocol === "https") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
 
   // API routes → router.js (handlers.js registered routes)
   if (pathname.startsWith("/api/")) {
@@ -583,7 +755,18 @@ const server = http.createServer(async (req, res) => {
 
   // SPA fallback — serve index.html for client-side routing
   await serveSpaFallback(res);
-});
+};
+
+const server = tlsRuntime.enabled
+  ? https.createServer(
+      {
+        key: tlsRuntime.key,
+        cert: tlsRuntime.cert,
+        ...(tlsRuntime.ca ? { ca: tlsRuntime.ca } : {})
+      },
+      requestHandler
+    )
+  : http.createServer(requestHandler);
 
 server.keepAliveTimeout = parseTimeoutMs(
   process.env.LCS_KEEP_ALIVE_TIMEOUT ?? process.env.LCS_API_KEEP_ALIVE_TIMEOUT,
@@ -601,11 +784,12 @@ server.requestTimeout = parseTimeoutMs(
 server.listen(port, host, () => {
   startupProfiler.checkpoint("startup-listen-ready", {
     host,
-    port
+    port,
+    protocol
   });
-  console.log(`NEXUS production server listening on http://${host}:${port}`);
-  console.log(`  API:  http://${host}:${port}/api/health`);
-  console.log(`  UI:   http://${host}:${port}/`);
+  console.log(`NEXUS production server listening on ${protocol}://${host}:${port}`);
+  console.log(`  API:  ${protocol}://${host}:${port}/api/health`);
+  console.log(`  UI:   ${protocol}://${host}:${port}/`);
   void scheduleDeferredWarmup();
 });
 

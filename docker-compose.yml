@@ -7,7 +7,30 @@ services:
     environment:
       - LCS_API_HOST=0.0.0.0
       - LCS_API_PORT=3100
+      - LCS_API_TLS_ENABLED=${LCS_API_TLS_ENABLED:-false}
+      - LCS_API_TLS_CERT_FILE=${LCS_API_TLS_CERT_FILE:-}
+      - LCS_API_TLS_KEY_FILE=${LCS_API_TLS_KEY_FILE:-}
+      - LCS_API_JWT_SECRET_FILE=${LCS_API_JWT_SECRET_FILE:-}
+      - LCS_API_KEYS_FILE=${LCS_API_KEYS_FILE:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "const p=process.env.LCS_API_PORT||3100;fetch(`http://127.0.0.1:${p}/api/health`).then((r)=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1));"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    volumes:
+      - nexus_data:/app/.lcs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
+
+volumes:
+  nexus_data:
