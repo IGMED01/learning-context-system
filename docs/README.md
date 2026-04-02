@@ -5,13 +5,13 @@ Central index for all repository documentation.
 ## Start here
 
 1. [README](../README.md) — product overview, architecture map, quick start
-2. [Implementation plan (v3)](./implementation-plan.md) — hardening and architecture execution plan
-3. [Hardening checklist](./nexus-hardening-checklist.md) — closure status for security and quality gates
+2. [Current status](./status-actual.md) — current release posture and maturity snapshot
+3. [Planning index](./planning/roadmap.md) — current public priorities by section
 4. [Knowledge backends guide](./knowledge-backends.md) — local-only, Obsidian, Notion, and DLQ flows
-5. [NEXUS Plan](./planning/nexus-plan.md) — phase/layer checklist and execution status
-6. [Planning index](./planning/roadmap.md) — current priorities by section
-7. [NEXUS API guide](./nexus-api.md) — API, OpenAPI, SDK, and demo UI
-8. [Usage guide](./usage.md) — CLI contracts and command workflows
+5. [NEXUS API guide](./nexus-api.md) — API, OpenAPI, SDK, and demo UI
+6. [Usage guide](./usage.md) — CLI contracts and command workflows
+
+> Implementation checklists and execution plans are maintained as local-only artifacts and are not published in this repository.
 
 ## Architecture and operations
 
@@ -44,7 +44,6 @@ Central index for all repository documentation.
 ### FASE 4 — Polish
 
 - [Zero-to-demo guide](./zero-to-demo.md)
-- [Release hardening checklist](./release-checklist.md)
 - API smoke e2e (remember→recall→chat→ask→guard): `npm run e2e:nexus`
 
 ## Guides and governance

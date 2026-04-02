@@ -234,8 +234,8 @@ Migrar de un enfoque de parcheo manual a un pipeline DevSecOps donde las validac
 
 | Documento | Ubicación | Propósito |
 |---|---|---|
-| `CheklistObsidian.md` | Raíz del repo | Plan de implementación Knowledge Backend v4.0 |
-| `docs/nexus-hardening-checklist.md` | `docs/` | Checklist de hardening previo (v5) |
+| `CheklistObsidian.md` | Local-only (no versionado en GitHub) | Plan de implementación Knowledge Backend v4.0 |
+| `NEXUS-PLAN.md` + `docs/implementation-plan.md` | Local-only (no versionado en GitHub) | Planes/checklists privados de ejecución |
 | `SECURITY.md` | Raíz del repo | Política de seguridad y reporte de vulnerabilidades |
 | `learning-context.config.production.json` | Raíz del repo | Config de producción con guard habilitado |
 

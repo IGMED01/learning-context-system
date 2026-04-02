@@ -1,6 +1,6 @@
 # Estado actual del proyecto
 
-_Ultima actualizacion: 25 de marzo de 2026_
+_Última actualización: 2 de abril de 2026_
 
 ## Resumen ejecutivo
 
@@ -12,7 +12,7 @@ El repo esta en estado **operativo serio** para uso open source:
 - CodeQL activo
 - Dependabot habilitado
 - secret scanning habilitado
-- release publica actual: [`v0.2.1`](https://github.com/IGMED01/learning-context-system/releases/tag/v0.2.1)
+- versión de trabajo actual: `v0.3.0` (actualización de metadata; tag público pendiente)
 
 ## Que es realmente este ecosistema
 

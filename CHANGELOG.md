@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-02
+
 ### Added
 - Added `docs/planning/nexus-plan.md` to track the full 11-layer execution checklist by phase (`FASE 1..4`) with dependencies, priorities, and completion status.
 - Added NEXUS runtime layers and modules:
@@ -27,6 +29,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added `docs/repo-split-5-repos.md` to explain the real split strategy: modularize first, extract later.
 - Updated `README.md`, `README.es.md`, `docs/planning/roadmap.md`, and `docs/status-actual.md` so GitHub explains exactly what the ecosystem is and how mature each area is.
 - Updated `docs/usage.md` with the active NEXUS API surface and auth model.
+- Moved implementation plans/checklists to **local-only** artifacts (removed from GitHub tracking and public docs links).
 
 ### Performance
 - Cached `focusTokens` once per `selectContextWindow` call instead of re-tokenizing per chunk, eliminating O(n) redundant tokenizations.
@@ -63,6 +66,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Domain eval suite now supports coverage policy (`qualityPolicy.requiredDomains`, `qualityPolicy.minCasesPerDomain`) and can run through API/SDK with `POST /api/evals/domain-suite`.
 - API errors now use a consistent contract (`errorCode`, `requestId`, `details`) and `x-request-id` response header; pipeline execution now exposes extended traceability (`runId`, timing summary, and per-step `attemptTrace`).
 - Installation policy is now standardized on `npm ci --ignore-scripts` (README/docs/CI), and `doctor` now reports an explicit `npm install scripts policy` check so environments can verify `ignore-scripts` safety.
+- Bumped package release metadata to `v0.3.0`.
 
 ### Contracts
 - Added v1 compatibility fixtures/tests for all JSON CLI commands (`version`, `doctor`, `init`, `sync-knowledge`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`).

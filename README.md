@@ -96,14 +96,14 @@ npm run e2e:nexus
 ## Docs
 
 - [Docs index](docs/README.md)
-- [Implementation plan (v3)](docs/implementation-plan.md)
-- [Hardening checklist](docs/nexus-hardening-checklist.md)
+- [Current project status](docs/status-actual.md)
+- [Public roadmap](docs/planning/roadmap.md)
 - [Knowledge backends](docs/knowledge-backends.md)
-- [NEXUS plan](docs/planning/nexus-plan.md)
 - [NEXUS API guide](docs/nexus-api.md)
 - [Integration guide](docs/integration.md)
 - [Skill auto-generator (MVP)](docs/skills-auto-generator.md)
-- [Release checklist](docs/release-checklist.md)
+
+Implementation checklists and execution plans are now **local-only** artifacts and are not published to GitHub.
 
 ## OSS
 
