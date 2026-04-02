@@ -362,6 +362,10 @@ export interface MemorySaveInput {
   reviewReasons?: string[];
   expiresAt?: string;
   supersedes?: string[];
+  // Temporary memory fields
+  temporary?: boolean;
+  ttlMinutes?: number;
+  maxTempEntries?: number;
 }
 
 export interface MemoryCloseInput {
@@ -403,6 +407,9 @@ export interface MemoryEntry {
   reviewReasons?: string[];
   expiresAt?: string;
   supersedes?: string[];
+  // Temporary memory fields
+  ttlMinutes?: number;
+  autoExpire?: boolean;
 }
 
 export interface MemorySearchResult {
@@ -446,6 +453,7 @@ export interface MemoryProvider {
   delete(id: string, project?: string): Promise<{ deleted: boolean; id: string }>;
   list(options?: { project?: string; limit?: number }): Promise<MemoryEntry[]>;
   health(): Promise<MemoryHealthResult>;
+  purgeExpiredTempMemories?(project?: string): Promise<{ purged: number; remaining: number }>;
 
   /** Legacy compatibility — delegates to search/list internally */
   recallContext(project?: string): Promise<Record<string, unknown> & { stdout: string; provider: string }>;

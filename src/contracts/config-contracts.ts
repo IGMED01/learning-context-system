@@ -27,6 +27,8 @@ export interface ProjectMemoryConfig {
   degradedRecall: boolean;
   autoRecall: boolean;
   autoRemember: boolean;
+  tempTtlMinutes: number;
+  tempMaxEntries: number;
 }
 
 export interface ProjectEngramConfig {
@@ -190,7 +192,9 @@ export function defaultProjectConfig(): ProjectConfig {
       strictRecall: false,
       degradedRecall: true,
       autoRecall: true,
-      autoRemember: false
+      autoRemember: false,
+      tempTtlMinutes: 120,
+      tempMaxEntries: 50
     },
     engram: {
       binaryPath: "tools/engram/engram.exe",
@@ -357,7 +361,19 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
         defaults.memory.autoRecall,
       autoRemember:
         optionalBoolean(memory?.autoRemember, "Project config.memory.autoRemember") ??
-        defaults.memory.autoRemember
+        defaults.memory.autoRemember,
+      tempTtlMinutes:
+        optionalNumber(memory?.tempTtlMinutes, "Project config.memory.tempTtlMinutes", {
+          min: 1,
+          max: 10080,
+          integer: true
+        }) ?? defaults.memory.tempTtlMinutes,
+      tempMaxEntries:
+        optionalNumber(memory?.tempMaxEntries, "Project config.memory.tempMaxEntries", {
+          min: 10,
+          max: 500,
+          integer: true
+        }) ?? defaults.memory.tempMaxEntries
     },
     engram: {
       binaryPath:

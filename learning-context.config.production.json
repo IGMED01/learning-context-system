@@ -20,7 +20,9 @@
     "autoRecall": true,
     "autoRemember": false,
     "strictRecall": false,
-    "degradedRecall": true
+    "degradedRecall": true,
+    "tempTtlMinutes": 60,
+    "tempMaxEntries": 30
   },
   "engram": {
     "binaryPath": "tools/engram/engram.exe",
@@ -45,7 +47,7 @@
     "blockDebugWithoutStrongFocus": true
   },
   "guard": {
-    "enabled": false,
+    "enabled": true,
     "rules": [
       {
         "type": "input-validation",
@@ -66,10 +68,10 @@
       },
       {
         "type": "keyword-block",
-        "enabled": false,
+        "enabled": true,
         "params": {
-          "keywords": [],
-          "message": ""
+          "keywords": ["delete all", "drop table", "rm -rf", "format disk"],
+          "message": "Destructive keyword detected. Confirm before proceeding."
         }
       }
     ],

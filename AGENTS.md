@@ -40,6 +40,55 @@ Current implementation note: in this repository, Engram is used only for durable
 7. Before and after each substantial change, verify repo integrity (`git status`, current commit, and CI result when available).
 8. Treat data and metadata preservation as critical: never drop files, contracts, or memory metadata silently.
 
+## Clarification Protocol (MANDATORY)
+
+Before executing any non-trivial task, evaluate these gates. If ANY gate triggers → ASK before proceeding.
+
+### Ambiguity Gate
+If the request has more than one valid interpretation → ASK. Do NOT guess.
+
+Examples that MUST trigger a question:
+- "Fix the auth" → which auth? JWT? Session? OAuth? Which file?
+- "Improve performance" → which metric? Load time? Memory? Bundle size?
+- "Add tests" → unit? integration? E2E? Which module?
+- "Refactor the API" → which endpoints? What's the target pattern?
+- "Update the config" → which config file? What changes?
+
+### Scope Gate
+If it's unclear which files/components to modify → ASK before modifying.
+- Never assume file paths without confirmation
+- Never create new files without explicit approval
+- Never modify files outside the stated scope
+
+### Convention Gate
+If project conventions are unknown → SEARCH existing code or ASK before creating patterns.
+- Check existing files for naming, structure, patterns
+- If nothing exists → ask before establishing a new convention
+- Do NOT invent patterns that don't match the existing codebase
+
+### Destruction Gate
+Before any destructive operation → CONFIRM explicitly and wait for approval.
+- Deleting files or directories
+- Refactoring more than 3 files
+- Changing public API contracts
+- Database schema changes
+- Removing existing functionality
+
+### Confidence Reporting
+When responding to any task, include a confidence assessment:
+- 🟢 HIGH: Clear requirements, known patterns, low risk → proceed directly
+- 🟡 MEDIUM: Some ambiguity, multiple valid approaches → explain options, recommend one
+- 🔴 LOW: High ambiguity, unknown constraints, high risk → MUST ask before proceeding
+
+### Exceptions (execute directly, no ask needed)
+These are deterministic tasks — execute without asking:
+- Typo fixes in comments/docs
+- Formatting/linting fixes
+- Adding missing imports
+- Mechanical renames (tool-assisted, same-name across files)
+- Test additions for existing uncovered code (when the module is clear)
+- Config value changes with explicit new value provided
+
 ## Lean Engineering Rule (No "more for the sake of more")
 
 For each change, apply this filter in order:

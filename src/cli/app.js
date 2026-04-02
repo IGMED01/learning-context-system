@@ -42,6 +42,7 @@ import {
   normalizeProwlerStatusFilter
 } from "../security/prowler-ingest.js";
 import { initProjectConfig, runProjectDoctor } from "../system/project-ops.js";
+import { purgeExpiredTempMemories } from "../memory/memory-hygiene.js";
 import {
   formatDoctorResultAsText,
   formatInitResultAsText,
@@ -161,7 +162,7 @@ import {
  */
 
 /**
- * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "doctor-memory" | "memory-stats" | "prune-memory" | "compact-memory" | "init" | "sync-knowledge" | "ingest-security" | "ingest" | "version" | "shell"} CliCommand
+ * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "doctor-memory" | "memory-stats" | "prune-memory" | "compact-memory" | "purge-temp-memory" | "init" | "sync-knowledge" | "ingest-security" | "ingest" | "version" | "shell"} CliCommand
  */
 
 /**
@@ -1006,6 +1007,7 @@ function isSupportedCommand(command) {
     command === "memory-stats" ||
     command === "prune-memory" ||
     command === "compact-memory" ||
+    command === "purge-temp-memory" ||
     command === "init" ||
     command === "sync-knowledge" ||
     command === "ingest-security" ||
@@ -1026,7 +1028,20 @@ function applyConfigDefaults(command, rawOptions, loadedConfig) {
   const config = loadedConfig.config;
 
   if (!options.project) {
-    options.project = config.memory.project || config.project || "";
+    // Config takes priority; package.json is only a last-resort fallback
+    const configProject = config.memory.project || config.project || "";
+    if (configProject) {
+      options.project = configProject;
+    } else {
+      // Try to detect from package.json as last resort
+      try {
+        const pkgRaw = readFileSync(path.join(process.cwd(), "package.json"), "utf8");
+        const pkg = JSON.parse(pkgRaw);
+        options.project = pkg.name || "";
+      } catch {
+        options.project = "";
+      }
+    }
   }
 
   if (!options.workspace && !options.input && config.workspace) {
@@ -1659,6 +1674,23 @@ export async function runCli(argv, dependencies = {}) {
     };
   }
 
+  if (command === "purge-temp-memory") {
+    const { purged, remaining } = await purgeExpiredTempMemories(
+      options["memory-base-dir"],
+      options.project
+    );
+    const metric = buildCommandMetric("purge-temp-memory", startedAt);
+    await safeRecordCommandMetric(metric);
+
+    return {
+      exitCode: 0,
+      stdout:
+        format === "json"
+          ? serialize({ action: "purge-temp", purged, remaining, observability: buildObservabilityEvent(metric) })
+          : `Purged ${purged} expired temp memories. ${remaining} active.`
+    };
+  }
+
   if (command === "ingest") {
     const source = requireOption(options, "source");
     const sourcePath = requireOption(options, "path");
@@ -1883,13 +1915,18 @@ export async function runCli(argv, dependencies = {}) {
 
   if (command === "remember") {
     const memoryClient = /** @type {MemoryClientLike} */ (getMemoryClient(options, dependencies));
+    const isTemp = booleanOption(options, "temp", false);
+    const ttlMinutes = numberOption(options, "ttl", loadedConfig.config.memory.tempTtlMinutes ?? 120);
     const writeInput = {
       title: requireOption(options, "title"),
       content: getContentOption(options),
-      type: options.type ?? "learning",
+      type: isTemp ? "temporary" : (options.type ?? "learning"),
       project: options.project,
       scope: options.scope ?? "project",
-      topic: options.topic
+      topic: options.topic,
+      temporary: isTemp,
+      ttlMinutes: isTemp ? ttlMinutes : undefined,
+      maxTempEntries: loadedConfig.config.memory.tempMaxEntries ?? 50
     };
     const hygiene = evaluateMemoryWrite({
       ...writeInput,

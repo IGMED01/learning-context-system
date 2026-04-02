@@ -2,6 +2,7 @@
 
 import { createRequire } from "node:module";
 import { access, readFile } from "node:fs/promises";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -427,6 +428,43 @@ export async function runProjectDoctor(input) {
         ? ""
               : "Install or place the Engram binary only if you want third-tier contingency memory. NEXUS remains canonical on local JSONL + optional external battery."
   });
+
+  // Memory sectorization check — verifies per-project buckets exist
+  const memoryDir = path.resolve(cwd, ".lcs/memory");
+  const memoryDirExists = await pathExists(memoryDir);
+  if (memoryDirExists) {
+    try {
+      const projectBuckets = readdirSync(memoryDir, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== "_default")
+        .map(d => d.name);
+
+      checks.push({
+        id: "memory-sectorization",
+        label: "Memory sectorization by project",
+        status: projectBuckets.length > 0 ? "pass" : "warn",
+        detail: projectBuckets.length > 0
+          ? `Active project buckets: ${projectBuckets.join(", ")}`
+          : "No project-specific memory buckets found. All memories go to _default. Use --project flag when saving.",
+        fix: projectBuckets.length > 0 ? "" : "Use --project flag when saving memories to create project-specific buckets."
+      });
+    } catch {
+      checks.push({
+        id: "memory-sectorization",
+        label: "Memory sectorization by project",
+        status: "warn",
+        detail: "Could not read memory directory.",
+        fix: ""
+      });
+    }
+  } else {
+    checks.push({
+      id: "memory-sectorization",
+      label: "Memory sectorization by project",
+      status: "warn",
+      detail: "Memory directory not yet created. Will appear on first memory write.",
+      fix: ""
+    });
+  }
 
   const summary = checks.reduce(
     (accumulator, check) => {

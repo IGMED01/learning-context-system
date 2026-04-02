@@ -2,6 +2,7 @@
 
 import { mkdir, readFile, writeFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
+import { purgeExpiredTempMemories } from "./memory-hygiene.js";
 import { createChunkRepository } from "../storage/chunk-repository.js";
 import { buildCloseSummaryContent } from "./memory-utils.js";
 
@@ -246,6 +247,69 @@ function searchWithTFIDF(entries, query, options) {
 function projectFilePath(baseDir, project) {
   const projectSlug = project ? slugify(project) : "_default";
   return path.join(baseDir, projectSlug, "memories.jsonl");
+}
+
+/**
+ * Resolve the storage path for temporary memories.
+ * Uses per-project directories: .lcs/memory/{project}/temp-memories.jsonl
+ * Falls back to .lcs/memory/_default/temp-memories.jsonl for unscoped entries.
+ * @param {string} baseDir
+ * @param {string} [project]
+ * @returns {string}
+ */
+function tempMemoryFilePath(baseDir, project) {
+  const projectSlug = project ? slugify(project) : "_default";
+  return path.join(baseDir, projectSlug, "temp-memories.jsonl");
+}
+
+/**
+ * Read entries from a file, returning empty array if file doesn't exist.
+ * Unlike readEntries(), this silently handles ENOENT for optional files.
+ * @param {string} filePath
+ * @returns {Promise<MemoryEntry[]>}
+ */
+async function readEntriesOrEmpty(filePath) {
+  try {
+    return await readEntries(filePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/enoent/i.test(message)) return [];
+    throw error;
+  }
+}
+
+/**
+ * Read all temp entries across all project directories.
+ * Isolates errors per file so one corrupt file doesn't break the whole scan.
+ * @param {string} baseDir
+ * @returns {Promise<MemoryEntry[]>}
+ */
+async function readAllTempEntries(baseDir) {
+  const all = [];
+  try {
+    const dirs = await readdir(baseDir, { withFileTypes: true });
+    for (const dirent of dirs) {
+      if (!dirent.isDirectory()) continue;
+      const fp = path.join(baseDir, dirent.name, "temp-memories.jsonl");
+      try {
+        all.push(...await readEntries(fp));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/enoent/i.test(message)) continue;
+        throw error;
+      }
+    }
+  } catch (error) {
+    if (
+      typeof error !== "object" ||
+      !error ||
+      !("code" in error) ||
+      error.code !== "ENOENT"
+    ) {
+      throw error;
+    }
+  }
+  return all;
 }
 
 /**
@@ -609,11 +673,22 @@ export function createLocalMemoryStore(options = {}) {
   async function search(query, searchOptions = {}) {
     await ensureMigration();
     const project = searchOptions.project;
+
+    // Purge expired temp memories before searching
+    await purgeExpiredTempMemories(baseDir, project);
+
     const entries = project
       ? await readEntries(projectFilePath(baseDir, project))
       : await readAllEntries(baseDir);
 
-    const results = searchWithTFIDF(entries, query, {
+    // Include temp memories (already purged of expired entries)
+    const tempEntries = project
+      ? await readEntriesOrEmpty(tempMemoryFilePath(baseDir, project))
+      : await readAllTempEntries(baseDir);
+
+    const allEntries = [...entries, ...tempEntries];
+
+    const results = searchWithTFIDF(allEntries, query, {
       project: searchOptions.project,
       scope: searchOptions.scope,
       type: searchOptions.type,
@@ -635,10 +710,29 @@ export function createLocalMemoryStore(options = {}) {
    */
   async function save(input) {
     await ensureMigration();
-    const fp = projectFilePath(baseDir, input.project);
+    const isTemp = input.temporary === true || input.type === "temporary";
+    const fp = isTemp
+      ? tempMemoryFilePath(baseDir, input.project)
+      : projectFilePath(baseDir, input.project);
     const entries = await readEntries(fp);
     const createdAt = new Date().toISOString();
     const id = `${createdAt.replace(/[-:.TZ]/gu, "")}-${slugify(input.title).slice(0, 20)}`;
+
+    // Calculate expiresAt for temporary memories
+    const ttlMinutes = input.ttlMinutes ?? 120;
+    const expiresAt = isTemp
+      ? new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString()
+      : undefined;
+
+    // Enforce max entries for temporary memories (FIFO eviction)
+    // +1 because we're about to push one more entry after this check
+    if (isTemp) {
+      const maxEntries = input.maxTempEntries ?? 50;
+      if (entries.length >= maxEntries) {
+        entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        entries.splice(0, entries.length - maxEntries + 1);
+      }
+    }
 
     /** @type {MemoryEntry} */
     const entry = {
@@ -650,6 +744,7 @@ export function createLocalMemoryStore(options = {}) {
       scope: input.scope ?? "project",
       topic: input.topic ?? "",
       createdAt,
+      ...(isTemp ? { expiresAt, ttlMinutes, autoExpire: true } : {}),
       ...extractHygieneMetadata(asRecord(input))
     };
 
@@ -658,7 +753,7 @@ export function createLocalMemoryStore(options = {}) {
 
     return {
       id,
-      stdout: `Saved local memory #${id}`,
+      stdout: `Saved ${isTemp ? 'temporary ' : ''}local memory #${id}${isTemp ? ` (expires: ${expiresAt})` : ''}`,
       provider: "local"
     };
   }
@@ -877,6 +972,8 @@ export function createLocalMemoryStore(options = {}) {
     delete: deleteMemory,
     list,
     health,
+    // Temp memory management
+    purgeExpiredTempMemories: () => purgeExpiredTempMemories(baseDir),
     // Legacy compatibility
     recallContext,
     searchMemories,

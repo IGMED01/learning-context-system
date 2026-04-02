@@ -88,6 +88,46 @@ function projectFilePath(baseDir, project) {
 }
 
 /**
+ * Resolve the storage path for temporary memories.
+ * @param {string} baseDir
+ * @param {string | undefined} project
+ */
+function tempMemoryFilePath(baseDir, project) {
+  return path.join(baseDir, slugify(project || "_default"), "temp-memories.jsonl");
+}
+
+/**
+ * Purge expired temporary memories from a project's temp file.
+ * @param {string} baseDir
+ * @param {string | undefined} [project]
+ * @returns {Promise<{ purged: number, remaining: number }>}
+ */
+export async function purgeExpiredTempMemories(baseDir, project = undefined) {
+  const tempPath = tempMemoryFilePath(baseDir, project);
+  try {
+    const raw = await readFile(tempPath, "utf8");
+    const lines = raw.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+    if (!lines.length) return { purged: 0, remaining: 0 };
+
+    const entries = lines.map((line) => JSON.parse(line)).filter((e) => e && typeof e === "object");
+    const now = new Date();
+    const valid = entries.filter(e => !e.expiresAt || new Date(e.expiresAt) > now);
+    const purged = entries.length - valid.length;
+
+    if (purged > 0) {
+      const payload = valid.map((entry) => JSON.stringify(entry)).join("\n");
+      await writeFile(tempPath, payload ? `${payload}\n` : "", "utf8");
+    }
+
+    return { purged, remaining: valid.length };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/enoent/i.test(message)) return { purged: 0, remaining: 0 };
+    throw error;
+  }
+}
+
+/**
  * @param {string} cwd
  * @param {string | undefined} quarantineDir
  */
@@ -120,6 +160,22 @@ async function readEntries(filePath) {
 }
 
 /**
+ * Read entries from a file, returning empty array if file doesn't exist.
+ * Unlike readEntries(), this silently handles ENOENT for optional files.
+ * @param {string} filePath
+ * @returns {Promise<MemoryEntry[]>}
+ */
+async function readEntriesOrEmpty(filePath) {
+  try {
+    return await readEntries(filePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/enoent/i.test(message)) return [];
+    throw error;
+  }
+}
+
+/**
  * @param {string} filePath
  * @param {MemoryEntry[]} entries
  */
@@ -137,7 +193,13 @@ async function writeEntries(filePath, entries) {
 async function readScopedMemoryFiles(baseDir, project) {
   if (project) {
     const filePath = projectFilePath(baseDir, project);
-    return [{ project, filePath, entries: await readEntries(filePath) }];
+    const tempFilePath = tempMemoryFilePath(baseDir, project);
+    const entries = await readEntries(filePath);
+    const tempEntries = await readEntriesOrEmpty(tempFilePath);
+    // Filter expired temp entries
+    const now = new Date();
+    const activeTemp = tempEntries.filter(e => !e.expiresAt || new Date(e.expiresAt) > now);
+    return [{ project, filePath, entries: [...entries, ...activeTemp] }];
   }
 
   try {
@@ -152,10 +214,16 @@ async function readScopedMemoryFiles(baseDir, project) {
 
       const projectId = dirent.name === "_default" ? "" : dirent.name;
       const filePath = path.join(baseDir, dirent.name, "memories.jsonl");
+      const tempFilePath = path.join(baseDir, dirent.name, "temp-memories.jsonl");
+      const entries = await readEntries(filePath);
+      const tempEntries = await readEntriesOrEmpty(tempFilePath);
+      // Filter expired temp entries
+      const now = new Date();
+      const activeTemp = tempEntries.filter(e => !e.expiresAt || new Date(e.expiresAt) > now);
       scoped.push({
         project: projectId,
         filePath,
-        entries: await readEntries(filePath)
+        entries: [...entries, ...activeTemp]
       });
     }
 
@@ -404,7 +472,8 @@ function evaluateEntry(entry, indexes) {
     healthScore,
     quarantineCandidate,
     reasons,
-    createdAt: typeof record.createdAt === "string" ? record.createdAt : ""
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
+    expiresAt: typeof record.expiresAt === "string" ? record.expiresAt : ""
   };
 }
 
@@ -959,7 +1028,12 @@ export async function runMemoryStats(options = {}) {
       noiseRate: Number((doctor.summary.testNoise / total).toFixed(3)),
       duplicateRate: Number((doctor.summary.duplicates / total).toFixed(3)),
       healthyRate: Number((doctor.summary.healthy / total).toFixed(3)),
-      quarantineRate: Number((doctor.summary.quarantineCandidates / total).toFixed(3))
+      quarantineRate: Number((doctor.summary.quarantineCandidates / total).toFixed(3)),
+      tempMemories: {
+        total: disposableCount,
+        expired: entries.filter(e => e.expiresAt && new Date(e.expiresAt) <= new Date()).length,
+        active: entries.filter(e => !e.expiresAt || new Date(e.expiresAt) > new Date()).length
+      }
     }
   };
 }
