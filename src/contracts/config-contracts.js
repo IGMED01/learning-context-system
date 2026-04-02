@@ -31,7 +31,8 @@
  *   limit: number,
  *   scope: string,
  *   type: string,
- *   backend: "resilient" | "local-only",
+ *   backend: "resilient" | "local-only" | "parallel",
+ *   isolation: "strict" | "relaxed",
  *   strictRecall: boolean,
  *   degradedRecall: boolean,
  *   autoRecall: boolean,
@@ -270,6 +271,7 @@ export function defaultProjectConfig() {
       scope: "project",
       type: "",
       backend: "resilient",
+      isolation: "strict",
       strictRecall: false,
       degradedRecall: true,
       autoRecall: true,
@@ -403,9 +405,19 @@ export function validateProjectConfig(value) {
     memoryBackend !== undefined &&
     memoryBackend !== "resilient" &&
     memoryBackend !== "engram-only" &&
-    memoryBackend !== "local-only"
+    memoryBackend !== "local-only" &&
+    memoryBackend !== "parallel"
   ) {
-    fail("Project config.memory.backend must be 'resilient' or 'local-only' (legacy alias: 'engram-only').");
+    fail("Project config.memory.backend must be 'resilient', 'parallel', or 'local-only' (legacy alias: 'engram-only').");
+  }
+
+  const memoryIsolation = optionalString(memory?.isolation, "Project config.memory.isolation");
+  if (
+    memoryIsolation !== undefined &&
+    memoryIsolation !== "strict" &&
+    memoryIsolation !== "relaxed"
+  ) {
+    fail("Project config.memory.isolation must be 'strict' or 'relaxed'.");
   }
 
   const normalizedMemoryBackend =
@@ -492,6 +504,7 @@ export function validateProjectConfig(value) {
         optionalString(memory?.type, "Project config.memory.type") ??
         defaults.memory.type,
       backend: normalizedMemoryBackend ?? defaults.memory.backend,
+      isolation: memoryIsolation ?? defaults.memory.isolation,
       strictRecall:
         optionalBoolean(memory?.strictRecall, "Project config.memory.strictRecall") ??
         defaults.memory.strictRecall,

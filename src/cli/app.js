@@ -16,6 +16,8 @@ import { loadWorkspaceChunks } from "../io/workspace-chunks.js";
 import { createEngramClient as createEngramBatteryClient } from "../memory/engram-client.js";
 import { createExternalBatteryMemoryClient } from "../memory/external-battery-memory-client.js";
 import { createLocalMemoryStore } from "../memory/local-memory-store.js";
+import { createObsidianMemoryProvider } from "../memory/obsidian-memory-provider.js";
+import { createParallelMemoryClient } from "../memory/parallel-memory-client.js";
 import {
   buildAcceptedMemoryMetadata,
   evaluateMemoryWrite,
@@ -84,7 +86,11 @@ import {
  */
 
 /**
- * @typedef {"resilient" | "local-only"} MemoryBackendMode
+ * @typedef {"resilient" | "local-only" | "parallel"} MemoryBackendMode
+ */
+
+/**
+ * @typedef {"strict" | "relaxed"} MemoryIsolationMode
  */
 
 /**
@@ -118,16 +124,33 @@ import {
  *   config?: { dataDir?: string, filePath?: string },
  *   search?: (
  *     query: string,
- *     options?: { project?: string, scope?: string, type?: string, limit?: number }
+ *     options?: {
+ *       project?: string,
+ *       scope?: string,
+ *       type?: string,
+ *       language?: string,
+ *       isolationMode?: "strict" | "relaxed",
+ *       changedFiles?: string[],
+ *       limit?: number
+ *     }
  *   ) => Promise<import("../types/core-contracts.d.ts").MemorySearchResult>,
  *   searchMemories?: (
  *     query: string,
- *     options?: { project?: string, scope?: string, type?: string, limit?: number }
+ *     options?: {
+ *       project?: string,
+ *       scope?: string,
+ *       type?: string,
+ *       language?: string,
+ *       isolationMode?: "strict" | "relaxed",
+ *       changedFiles?: string[],
+ *       limit?: number
+ *     }
  *   ) => Promise<Record<string, unknown> & { stdout?: string }>,
  *   save?: (input: {
  *     title: string,
  *     content: string,
  *     type?: string,
+ *     language?: string,
  *     project?: string,
  *     scope?: string,
  *     topic?: string
@@ -136,6 +159,7 @@ import {
  *     title: string,
  *     content: string,
  *     type?: string,
+ *     language?: string,
  *     project?: string,
  *     scope?: string,
  *     topic?: string
@@ -148,7 +172,8 @@ import {
  *     title?: string,
  *     project?: string,
  *     scope?: string,
- *     type?: string
+ *     type?: string,
+ *     language?: string
  *   }) => Promise<Record<string, unknown>>
  * }} MemoryClientLike
  */
@@ -160,6 +185,7 @@ import {
  *   engramClient?: MemoryClientLike,
  *   externalBatteryClient?: MemoryClientLike,
  *   localMemoryClient?: MemoryClientLike,
+ *   obsidianMemoryClient?: MemoryClientLike,
  *   notionClient?: {
  *     sync?: (entry: import("../integrations/knowledge-provider.js").KnowledgeEntry) => Promise<Record<string, unknown>>,
  *     appendKnowledgeEntry?: (entry: Record<string, unknown>) => Promise<Record<string, unknown>>,
@@ -220,6 +246,8 @@ import {
  *   query?: string,
  *   type?: string,
  *   scope?: string,
+ *   language?: string,
+ *   isolationMode?: "strict" | "relaxed",
  *   limit?: number | null,
  *   entries?: import("../types/core-contracts.d.ts").MemoryEntry[],
  *   stdout?: string,
@@ -227,6 +255,8 @@ import {
  *   dataDir?: string,
  *   filePath?: string,
  *   provider?: string,
+ *   providerChain?: string[],
+ *   fallbackProvider?: string,
  *   degraded?: boolean,
  *   warning?: string,
  *   error?: string,
@@ -497,13 +527,29 @@ function parseMemoryBackendMode(value) {
     return "resilient";
   }
 
-  if (value === "resilient" || value === "local-only") {
+  if (value === "resilient" || value === "local-only" || value === "parallel") {
     return value;
   }
 
   throw new Error(
-    "Option --memory-backend must be one of: resilient, local-only."
+    "Option --memory-backend must be one of: resilient, parallel, local-only."
   );
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {MemoryIsolationMode}
+ */
+function parseMemoryIsolationMode(value) {
+  if (!value || value === "true") {
+    return "strict";
+  }
+
+  if (value === "strict" || value === "relaxed") {
+    return value;
+  }
+
+  throw new Error("Option --memory-isolation must be one of: strict, relaxed.");
 }
 
 /**
@@ -534,6 +580,22 @@ function getExternalBatteryMemoryClient(options, dependencies) {
     binaryPath: options["engram-bin"],
     dataDir: options["engram-data-dir"],
     cwd: process.cwd()
+  });
+}
+
+/**
+ * @param {CliOptions} options
+ * @param {AppDependencies} dependencies
+ */
+function getObsidianMemoryClient(options, dependencies) {
+  if (dependencies.obsidianMemoryClient) {
+    return dependencies.obsidianMemoryClient;
+  }
+
+  return createObsidianMemoryProvider({
+    cwd: process.cwd(),
+    vaultDir: options["obsidian-vault"],
+    pollIntervalMs: numberOption(options, "obsidian-poll-interval-ms", 30_000)
   });
 }
 
@@ -581,14 +643,35 @@ function getMemoryClient(options, dependencies) {
   }
 
   const backendMode = parseMemoryBackendMode(options["memory-backend"]);
+  const isolationMode = parseMemoryIsolationMode(options["memory-isolation"]);
+  const batteryEnabled = booleanOption(options, "external-battery", true);
 
   if (backendMode === "local-only") {
     return getLocalMemoryClient(options, dependencies);
   }
 
+  if (backendMode === "parallel") {
+    const local = getLocalMemoryClient(options, dependencies);
+    const obsidian = getObsidianMemoryClient(options, dependencies);
+    const parallel = createParallelMemoryClient({
+      primary: /** @type {any} */ (local),
+      secondary: /** @type {any} */ (obsidian),
+      isolation: isolationMode
+    });
+
+    if (!batteryEnabled) {
+      return parallel;
+    }
+
+    return createExternalBatteryMemoryClient({
+      primary: /** @type {any} */ (parallel),
+      battery: /** @type {any} */ (getExternalBatteryMemoryClient(options, dependencies)),
+      enabled: true
+    });
+  }
+
   const local = getLocalMemoryClient(options, dependencies);
   const fallbackEnabled = booleanOption(options, "local-memory-fallback", true);
-  const batteryEnabled = booleanOption(options, "external-battery", true);
   const primaryChain = createResilientMemoryClient({
     primary: /** @type {any} */ (local),
     fallback: /** @type {any} */ (local),
@@ -610,12 +693,53 @@ function getMemoryClient(options, dependencies) {
 /**
  * @param {MemoryClientLike} memoryClient
  * @param {string} query
- * @param {{ project?: string, scope?: string, type?: string, limit?: number }} [options]
+ * @param {{
+ *   project?: string,
+ *   scope?: string,
+ *   type?: string,
+ *   language?: string,
+ *   isolationMode?: "strict" | "relaxed",
+ *   changedFiles?: string[],
+ *   limit?: number
+ * }} [options]
  * @returns {Promise<RecallCommandResult>}
  */
 async function searchMemoryClient(memoryClient, query, options = {}) {
   if (typeof memoryClient.search === "function") {
-    return /** @type {RecallCommandResult} */ (await memoryClient.search(query, options));
+    const result = await memoryClient.search(query, options);
+    return {
+      mode: "search",
+      query,
+      project: options.project ?? "",
+      scope: options.scope ?? "",
+      type: options.type ?? "",
+      language: options.language ?? "",
+      isolationMode: options.isolationMode,
+      limit: options.limit ?? 5,
+      entries: Array.isArray(result.entries) ? result.entries : [],
+      stdout: typeof result.stdout === "string" ? result.stdout : "",
+      stderr: "",
+      dataDir: memoryClient.config?.dataDir ?? "",
+      filePath: memoryClient.config?.filePath,
+      provider:
+        typeof result.provider === "string" && result.provider.trim()
+          ? result.provider
+          : "memory",
+      providerChain: Array.isArray(result.providerChain)
+        ? result.providerChain.filter(
+            (entry) => typeof entry === "string" && entry.trim().length > 0
+          )
+        : undefined,
+      fallbackProvider:
+        typeof result.fallbackProvider === "string" && result.fallbackProvider.trim()
+          ? result.fallbackProvider
+          : undefined,
+      degraded: result.degraded === true,
+      warning: typeof result.warning === "string" ? result.warning : undefined,
+      error: typeof result.error === "string" ? result.error : undefined,
+      failureKind: typeof result.failureKind === "string" ? result.failureKind : undefined,
+      fixHint: typeof result.fixHint === "string" ? result.fixHint : undefined
+    };
   }
 
   if (typeof memoryClient.searchMemories !== "function") {
@@ -634,6 +758,7 @@ async function searchMemoryClient(memoryClient, query, options = {}) {
     project: options.project ?? "",
     scope: options.scope ?? "",
     type: options.type ?? "",
+    language: options.language ?? "",
     limit: options.limit ?? 5,
     entries:
       Array.isArray(legacyResult.entries) && legacyResult.entries.length
@@ -1237,6 +1362,12 @@ function applyConfigDefaults(command, rawOptions, loadedConfig) {
     options["memory-scope"] = config.memory.scope;
   }
 
+  if (!options.scope && config.memory.scope) {
+    if (command === "recall" || command === "remember" || command === "close") {
+      options.scope = config.memory.scope;
+    }
+  }
+
   if (!options["memory-type"] && config.memory.type) {
     options["memory-type"] = config.memory.type;
   }
@@ -1287,6 +1418,10 @@ function applyConfigDefaults(command, rawOptions, loadedConfig) {
     options["memory-backend"] = config.memory.backend || "resilient";
   }
 
+  if (!options["memory-isolation"]) {
+    options["memory-isolation"] = config.memory.isolation || "strict";
+  }
+
   if (!options["knowledge-backend"] && config.sync?.knowledgeBackend) {
     options["knowledge-backend"] = config.sync.knowledgeBackend;
   }
@@ -1322,6 +1457,8 @@ function applyConfigDefaults(command, rawOptions, loadedConfig) {
  *   project?: string,
  *   type?: string,
  *   scope?: string,
+ *   language?: string,
+ *   isolationMode?: "strict" | "relaxed",
  *   limit?: number,
  *   provider?: "memory" | "local"
  * }} input
@@ -1341,6 +1478,8 @@ function buildDegradedRecallResult(memoryClient, input, error) {
     query: input.query ?? "",
     type: input.type ?? "",
     scope: input.scope ?? "",
+    language: input.language ?? "",
+    isolationMode: input.isolationMode,
     limit: input.limit ?? null,
     stdout: "",
     stderr: "",
@@ -1985,11 +2124,13 @@ export async function runCli(argv, dependencies = {}) {
 
   if (command === "recall") {
     const memoryBackend = parseMemoryBackendMode(options["memory-backend"]);
+    const memoryIsolation = parseMemoryIsolationMode(options["memory-isolation"]);
     const memoryClient = /** @type {MemoryClientLike} */ (getMemoryClient(options, dependencies));
     const project = options.project;
     const query = options.query;
     const type = options.type;
     const scope = options.scope;
+    const language = options["memory-language"];
     const limit =
       query !== undefined
         ? assertNumberRules(numberOption(options, "limit", 5), "limit", {
@@ -2014,6 +2155,8 @@ export async function runCli(argv, dependencies = {}) {
               project,
               type,
               scope,
+              language,
+              isolationMode: memoryIsolation,
               limit
             })
           : await memoryClient.recallContext(project)
@@ -2036,6 +2179,8 @@ export async function runCli(argv, dependencies = {}) {
           project,
           type,
           scope,
+          language,
+          isolationMode: memoryIsolation,
           limit,
           provider: memoryBackend === "local-only" ? "local" : "memory"
         },
@@ -2108,6 +2253,7 @@ export async function runCli(argv, dependencies = {}) {
       title: requireOption(options, "title"),
       content: getContentOption(options),
       type: isTemp ? "temporary" : (options.type ?? "learning"),
+      language: options["memory-language"],
       project: options.project,
       scope: options.scope ?? "project",
       topic: options.topic,
@@ -2189,7 +2335,8 @@ export async function runCli(argv, dependencies = {}) {
       title: options.title,
       project: options.project,
       scope: options.scope ?? "project",
-      type: options.type ?? "learning"
+      type: options.type ?? "learning",
+      language: options["memory-language"]
     };
     const closePreviewTitle = closeInput.title ?? `Session close - ${new Date().toISOString().slice(0, 10)}`;
     const closePreviewContent = buildCloseSummaryContent({

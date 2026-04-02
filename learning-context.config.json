@@ -17,6 +17,7 @@
     "limit": 3,
     "scope": "project",
     "backend": "resilient",
+    "isolation": "strict",
     "autoRecall": true,
     "autoRemember": false,
     "strictRecall": false,

@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 const execFile = promisify(execFileCallback);
 
 /** @typedef {"recall" | "teach" | "remember" | "doctor" | "select"} ShellTabId */
-/** @typedef {"resilient" | "local-only"} MemoryBackendMode */
+/** @typedef {"resilient" | "parallel" | "local-only"} MemoryBackendMode */
 /** @typedef {"text" | "json"} OutputFormat */
 /** @typedef {"auto" | "safe"} ShellRenderMode */
 /** @typedef {"initial" | "navigation" | "layout" | "manual-clear" | "notice" | "command"} ShellRenderReason */
@@ -280,6 +280,10 @@ function renderFramedBox(lines, options = {}) {
  * @returns {MemoryBackendMode}
  */
 function normalizeMemoryBackend(value) {
+  if (value === "parallel") {
+    return value;
+  }
+
   if (value === "local-only") {
     return value;
   }
@@ -1601,10 +1605,11 @@ function renderShellSessionLine(state, options = {}) {
  */
 function renderShellBanner(state, options = {}) {
   const color = options.color ?? true;
-  const memoryMode =
-    state.session.memoryBackend === "local-only"
-        ? "LOCAL"
-        : "RESILIENT";
+  const memoryMode = state.session.memoryBackend === "local-only"
+    ? "LOCAL"
+    : state.session.memoryBackend === "parallel"
+      ? "PARALLEL"
+      : "RESILIENT";
   const health = `${ansi("●", "1;38;5;118", color)} ${ansi("ONLINE", "1;38;5;118", color)}`;
   const header = justify(
     `${ansi("NEXUS", "1;38;5;51", color)} ${ansi("DARK NEON CONSOLE", "1;38;5;201", color)}`,
@@ -1962,7 +1967,7 @@ export function renderShellHelp(state) {
     `- /tab <${tabNames}>  switch active tab`,
     "- /set project <name>",
     "- /set workspace <dir>",
-    "- /set backend <resilient|local-only>",
+    "- /set backend <resilient|parallel|local-only>",
     "- /set format <text|json>",
     "- /status             show live shell status",
     "- /menu [mode]        toggle/open/close shell menu",
@@ -2196,6 +2201,7 @@ export async function runShellCommand(input) {
     "/set project ",
     "/set workspace ",
     "/set backend resilient",
+    "/set backend parallel",
     "/set backend local-only",
     "/set format text",
     "/set format json",

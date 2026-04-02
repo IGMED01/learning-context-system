@@ -346,6 +346,9 @@ export interface MemorySearchOptions {
   project?: string;
   scope?: string;
   type?: string;
+  language?: string;
+  isolationMode?: "strict" | "relaxed";
+  changedFiles?: string[];
   limit?: number;
 }
 
@@ -353,6 +356,7 @@ export interface MemorySaveInput {
   title: string;
   content: string;
   type?: string;
+  language?: string;
   project?: string;
   scope?: string;
   topic?: string;
@@ -380,6 +384,7 @@ export interface MemoryCloseInput {
   project?: string;
   scope?: string;
   type?: string;
+  language?: string;
   sourceKind?: string;
   protected?: boolean;
   reviewStatus?: string;
@@ -397,6 +402,7 @@ export interface MemoryEntry {
   title: string;
   content: string;
   type: string;
+  language?: string;
   project: string;
   scope: string;
   topic: string;

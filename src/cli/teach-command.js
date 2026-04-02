@@ -2,6 +2,8 @@
 
 import { buildLearningPacket } from "../learning/mentor-loop.js";
 import { createLocalMemoryStore } from "../memory/local-memory-store.js";
+import { createObsidianMemoryProvider } from "../memory/obsidian-memory-provider.js";
+import { createParallelMemoryClient } from "../memory/parallel-memory-client.js";
 import { createResilientMemoryClient } from "../memory/resilient-memory-client.js";
 import {
   buildAcceptedMemoryMetadata,
@@ -85,8 +87,8 @@ import {
 
 /**
  * @typedef {{
- *   memoryClient?: ReturnType<typeof createResilientMemoryClient>,
- *   engramClient?: ReturnType<typeof createResilientMemoryClient>,
+ *   memoryClient?: import("../types/core-contracts.d.ts").MemoryProvider,
+ *   engramClient?: import("../types/core-contracts.d.ts").MemoryProvider,
  *   axiomInjector?: { retrieve?: (context?: Record<string, unknown>) => Promise<Array<Record<string, unknown>>> }
  * }} AppDependencies
  */
@@ -104,6 +106,42 @@ function getInjectedMemoryClient(dependencies = {}) {
   }
 
   return null;
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"resilient" | "parallel" | "local-only"}
+ */
+function parseMemoryBackendMode(value) {
+  if (!value || value === "true") {
+    return "resilient";
+  }
+
+  if (value === "engram-only") {
+    return "resilient";
+  }
+
+  if (value === "resilient" || value === "parallel" || value === "local-only") {
+    return value;
+  }
+
+  throw new Error("Option --memory-backend must be one of: resilient, parallel, local-only.");
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"strict" | "relaxed"}
+ */
+function parseMemoryIsolationMode(value) {
+  if (!value || value === "true") {
+    return "strict";
+  }
+
+  if (value === "strict" || value === "relaxed") {
+    return value;
+  }
+
+  throw new Error("Option --memory-isolation must be one of: strict, relaxed.");
 }
 
 /**
@@ -135,7 +173,7 @@ function getInjectedMemoryClient(dependencies = {}) {
 
 /**
  * @param {AppDependencies} [dependencies]
- * @returns {ReturnType<typeof createResilientMemoryClient>}
+ * @returns {import("../types/core-contracts.d.ts").MemoryProvider}
  */
 function getMemoryClient(options, dependencies = {}) {
   const injectedMemoryClient = getInjectedMemoryClient(dependencies);
@@ -143,10 +181,31 @@ function getMemoryClient(options, dependencies = {}) {
     return injectedMemoryClient;
   }
 
+  const backendMode = parseMemoryBackendMode(options["memory-backend"]);
+  const isolationMode = parseMemoryIsolationMode(options["memory-isolation"]);
+
   const local = createLocalMemoryStore({
     filePath: options["memory-fallback-file"],
     baseDir: options["memory-base-dir"]
   });
+
+  if (backendMode === "local-only") {
+    return local;
+  }
+
+  if (backendMode === "parallel") {
+    const obsidian = createObsidianMemoryProvider({
+      cwd: process.cwd(),
+      vaultDir: options["obsidian-vault"],
+      pollIntervalMs: numberOption(options, "obsidian-poll-interval-ms", 30_000)
+    });
+
+    return createParallelMemoryClient({
+      primary: /** @type {any} */ (local),
+      secondary: /** @type {any} */ (obsidian),
+      isolation: isolationMode
+    });
+  }
 
   return createResilientMemoryClient({
     primary: local,
@@ -155,9 +214,17 @@ function getMemoryClient(options, dependencies = {}) {
 }
 
 /**
- * @param {ReturnType<typeof createResilientMemoryClient>} memoryClient
+ * @param {import("../types/core-contracts.d.ts").MemoryProvider} memoryClient
  * @param {string} query
- * @param {{ project?: string, scope?: string, type?: string, limit?: number }} [options]
+ * @param {{
+ *   project?: string,
+ *   scope?: string,
+ *   type?: string,
+ *   language?: string,
+ *   isolationMode?: "strict" | "relaxed",
+ *   changedFiles?: string[],
+ *   limit?: number
+ * }} [options]
  */
 async function searchMemoryClient(memoryClient, query, options = {}) {
   if (typeof memoryClient.search === "function") {
@@ -191,7 +258,7 @@ async function searchMemoryClient(memoryClient, query, options = {}) {
 }
 
 /**
- * @param {ReturnType<typeof createResilientMemoryClient>} memoryClient
+ * @param {import("../types/core-contracts.d.ts").MemoryProvider} memoryClient
  * @param {import("../types/core-contracts.d.ts").MemorySaveInput} input
  */
 async function saveMemoryClient(memoryClient, input) {
@@ -316,6 +383,45 @@ function buildAxiomFocusTerms(changedFiles, task, objective, focus) {
 }
 
 /**
+ * @param {string[]} changedFiles
+ * @returns {string}
+ */
+function inferMemoryLanguage(changedFiles) {
+  /** @type {Record<string, string>} */
+  const extensionLanguageMap = {
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".go": "go",
+    ".py": "python",
+    ".java": "java",
+    ".rb": "ruby",
+    ".rs": "rust",
+    ".php": "php",
+    ".cs": "csharp"
+  };
+
+  /** @type {Map<string, number>} */
+  const scores = new Map();
+
+  for (const file of changedFiles) {
+    const normalized = String(file ?? "").trim().toLowerCase();
+    const extension = normalized.match(/\.[a-z0-9]+$/u)?.[0] ?? "";
+    const language = extensionLanguageMap[extension];
+    if (!language) {
+      continue;
+    }
+    scores.set(language, (scores.get(language) ?? 0) + 1);
+  }
+
+  const ranked = [...scores.entries()].sort((left, right) => right[1] - left[1]);
+  return ranked[0]?.[0] ?? "";
+}
+
+/**
  * @param {string} message
  */
 function classifyRememberStatus(message) {
@@ -421,6 +527,13 @@ export async function runTeachCommand(input) {
   const memoryClient = getMemoryClient(options, dependencies);
   const memoryScope = options["memory-scope"] ?? "project";
   const memoryType = options["memory-type"];
+  const memoryIsolation = parseMemoryIsolationMode(
+    options["memory-isolation"] ?? loadedConfig.config.memory.isolation
+  );
+  const explicitMemoryLanguage =
+    typeof options["memory-language"] === "string" ? options["memory-language"].trim().toLowerCase() : "";
+  const inferredMemoryLanguage = inferMemoryLanguage(changedFiles);
+  const memoryLanguage = explicitMemoryLanguage || inferredMemoryLanguage;
   const noRecall = booleanOption(options, "no-recall", false);
   const autoRecall = booleanOption(options, "auto-recall", loadedConfig.config.memory.autoRecall);
   const strictRecall = booleanOption(
@@ -451,11 +564,19 @@ export async function runTeachCommand(input) {
     limit: memoryLimit,
     scope: memoryScope,
     type: memoryType,
+    language: memoryLanguage,
+    isolationMode: memoryIsolation,
     strictRecall,
     alreadySurfacedMemoryIds,
     usedTools,
     baseChunks: payload.chunks,
-    search: (query, searchOptions) => searchMemoryClient(memoryClient, query, searchOptions)
+    search: (query, searchOptions) =>
+      searchMemoryClient(memoryClient, query, {
+        ...searchOptions,
+        isolationMode: memoryIsolation,
+        changedFiles,
+        language: searchOptions?.language ?? memoryLanguage
+      })
   });
   const packet = buildLearningPacket({
     task,
@@ -598,6 +719,7 @@ export async function runTeachCommand(input) {
         },
         memoryType,
         memoryScope,
+        memoryLanguage,
         security: loadedConfig.config.security
       });
       packetWithMemory.autoMemory.rememberRedactionCount = rememberInput.security.redactionCount;
@@ -620,6 +742,7 @@ export async function runTeachCommand(input) {
           title: rememberInput.title,
           content: rememberInput.content,
           type: rememberInput.type,
+          language: rememberInput.language,
           scope: rememberInput.scope,
           project: rememberInput.project,
           sourceKind: "auto-remember",
@@ -633,6 +756,7 @@ export async function runTeachCommand(input) {
           title: rememberInput.title,
           content: rememberInput.content,
           type: rememberInput.type,
+          language: rememberInput.language,
           scope: rememberInput.scope,
           project: rememberInput.project,
           ...buildAcceptedMemoryMetadata(hygiene, { sourceKind: "auto-remember" })

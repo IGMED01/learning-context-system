@@ -164,6 +164,8 @@ import {
 } from "../src/memory/memory-staleness.js";
 import { createExternalBatteryMemoryClient } from "../src/memory/external-battery-memory-client.js";
 import { createLocalMemoryStore } from "../src/memory/local-memory-store.js";
+import { createObsidianMemoryProvider } from "../src/memory/obsidian-memory-provider.js";
+import { createParallelMemoryClient } from "../src/memory/parallel-memory-client.js";
 import { createResilientMemoryClient } from "../src/memory/resilient-memory-client.js";
 import { buildTeachRecallQueries } from "../src/memory/recall-queries.js";
 import { resolveTeachRecall } from "../src/memory/teach-recall.js";
@@ -2567,7 +2569,8 @@ run("project config parses security policy overrides", () => {
       memory: {
         autoRecall: false,
         autoRemember: true,
-        backend: "engram-only"
+        backend: "engram-only",
+        isolation: "relaxed"
       },
       security: {
         ignoreSensitiveFiles: false,
@@ -2600,6 +2603,7 @@ run("project config parses security policy overrides", () => {
   assert.equal(parsed.memory.autoRecall, false);
   assert.equal(parsed.memory.autoRemember, true);
   assert.equal(parsed.memory.backend, "resilient");
+  assert.equal(parsed.memory.isolation, "relaxed");
   assert.equal(parsed.security.ignoreSensitiveFiles, false);
   assert.equal(parsed.security.redactSensitiveContent, false);
   assert.equal(parsed.security.ignoreGeneratedFiles, false);
@@ -2629,7 +2633,22 @@ run("project config rejects unsupported memory backend values", () => {
         }),
         "inline"
       ),
-    /memory\.backend must be 'resilient' or 'local-only' \(legacy alias: 'engram-only'\)/i
+    /memory\.backend must be 'resilient', 'parallel', or 'local-only' \(legacy alias: 'engram-only'\)/i
+  );
+});
+
+run("project config rejects unsupported memory isolation values", () => {
+  assert.throws(
+    () =>
+      parseProjectConfig(
+        JSON.stringify({
+          memory: {
+            isolation: "mixed"
+          }
+        }),
+        "inline"
+      ),
+    /memory\.isolation must be 'strict' or 'relaxed'/i
   );
 });
 
@@ -3763,6 +3782,45 @@ run("doctor reports local-only backend without external semantic tier checks", a
   }
 });
 
+run("doctor reports parallel backend with obsidian second-brain check", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-doctor-parallel-"));
+
+  try {
+    await writeFile(
+      path.join(tempRoot, "package.json"),
+      JSON.stringify({ name: "doctor-parallel-fixture" }, null, 2),
+      "utf8"
+    );
+
+    const config = defaultProjectConfig();
+    config.project = "doctor-parallel-fixture";
+    config.workspace = ".";
+    config.memory.backend = "parallel";
+    config.memory.isolation = "strict";
+
+    const result = await runProjectDoctor({
+      cwd: tempRoot,
+      configInfo: {
+        found: true,
+        path: path.join(tempRoot, "learning-context.config.json"),
+        config
+      }
+    });
+
+    const backendCheck = result.checks.find((check) => check.id === "memory-backend");
+    const obsidianCheck = result.checks.find((check) => check.id === "obsidian-memory");
+
+    assert.ok(backendCheck);
+    assert.equal(backendCheck.status, "pass");
+    assert.match(backendCheck.detail, /parallel/i);
+    assert.ok(obsidianCheck);
+    assert.equal(obsidianCheck.status, "warn");
+    assert.match(obsidianCheck.detail, /obsidian vault/i);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 run("cli doctor emits runtime metadata in json mode", async () => {
   const result = await runCli(["doctor", "--format", "json"]);
   const parsed = JSON.parse(result.stdout);
@@ -4852,6 +4910,120 @@ run("NEXUS:3 local memory store persists updatedAt and millisecond timestamps", 
     assert.equal(Date.parse(String(listed[0].updatedAt)) >= Date.parse(String(listed[0].createdAt)), true);
     assert.equal(Number(listed[0].updatedAtMs) >= Number(listed[0].createdAtMs), true);
   } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("local memory store enforces strict language isolation and relaxed fallback", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-local-memory-language-"));
+  const store = createLocalMemoryStore({
+    filePath: path.join(tempRoot, "memory-store.jsonl"),
+    baseDir: path.join(tempRoot, "memory")
+  });
+
+  try {
+    await store.save({
+      title: "TS middleware order",
+      content: "TypeScript middleware should validate tokens first.",
+      type: "decision",
+      language: "typescript",
+      project: "learning-context-system",
+      scope: "project"
+    });
+    await store.save({
+      title: "Go middleware chain",
+      content: "Go middleware order differs in this service.",
+      type: "decision",
+      language: "go",
+      project: "learning-context-system",
+      scope: "project"
+    });
+    await store.save({
+      title: "Generic middleware checklist",
+      content: "Shared checklist for middleware reviews.",
+      type: "pattern",
+      project: "learning-context-system",
+      scope: "project"
+    });
+
+    const strictResult = await store.search("middleware", {
+      project: "learning-context-system",
+      scope: "project",
+      language: "typescript",
+      isolationMode: "strict",
+      limit: 5
+    });
+    assert.equal(strictResult.entries.length, 1);
+    assert.equal(strictResult.entries[0].language, "typescript");
+
+    const relaxedResult = await store.search("middleware", {
+      project: "learning-context-system",
+      scope: "project",
+      language: "typescript",
+      isolationMode: "relaxed",
+      limit: 5
+    });
+    assert.equal(relaxedResult.entries.some((entry) => entry.language === "go"), false);
+    assert.equal(relaxedResult.entries.some((entry) => !entry.language), true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+run("parallel memory client writes to local and obsidian and applies strict language filters", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "lcs-parallel-memory-"));
+  const local = createLocalMemoryStore({
+    filePath: path.join(tempRoot, "memory-store.jsonl"),
+    baseDir: path.join(tempRoot, "memory")
+  });
+  const obsidian = createObsidianMemoryProvider({
+    cwd: tempRoot,
+    vaultDir: ".lcs/obsidian-vault"
+  });
+  const parallel = createParallelMemoryClient({
+    primary: /** @type {any} */ (local),
+    secondary: /** @type {any} */ (obsidian),
+    isolation: "strict"
+  });
+
+  try {
+    await parallel.save({
+      title: "TS auth boundary",
+      content: "TypeScript auth boundary memory.",
+      type: "decision",
+      language: "typescript",
+      project: "learning-context-system",
+      scope: "project"
+    });
+    await parallel.save({
+      title: "Go auth boundary",
+      content: "Go auth boundary memory.",
+      type: "decision",
+      language: "go",
+      project: "learning-context-system",
+      scope: "project"
+    });
+
+    const localEntries = await local.list({ project: "learning-context-system", limit: 10 });
+    const obsidianEntries = await obsidian.list({ project: "learning-context-system", limit: 10 });
+    assert.equal(localEntries.length >= 2, true);
+    assert.equal(obsidianEntries.length >= 2, true);
+
+    const strictResult = await parallel.search("auth boundary", {
+      project: "learning-context-system",
+      scope: "project",
+      language: "typescript",
+      isolationMode: "strict",
+      limit: 5
+    });
+
+    assert.equal(strictResult.entries.length, 1);
+    assert.equal(strictResult.entries.every((entry) => entry.language === "typescript"), true);
+    assert.equal(Array.isArray(strictResult.providerChain), true);
+    assert.equal(strictResult.providerChain.includes("local"), true);
+    assert.equal(strictResult.providerChain.includes("obsidian"), true);
+  } finally {
+    await parallel.stop?.();
     await rm(tempRoot, { recursive: true, force: true });
   }
 });
