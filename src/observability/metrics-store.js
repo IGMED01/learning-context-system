@@ -5,6 +5,15 @@ import path from "node:path";
 
 const OBSERVABILITY_SCHEMA_VERSION = "1.0.0";
 const DEFAULT_OBSERVABILITY_FILE = ".lcs/observability.json";
+const METRIC_FLUSH_INTERVAL_MS = 1_000;
+const METRIC_BUFFER_FLUSH_THRESHOLD = 100;
+/** @type {Map<string, CommandMetric[]>} */
+const metricBufferByPath = new Map();
+/** @type {Map<string, NodeJS.Timeout>} */
+const metricFlushTimers = new Map();
+/** @type {Map<string, Promise<{ flushed: number, error: string }>>} */
+const metricFlushInFlight = new Map();
+let metricShutdownHooksRegistered = false;
 
 /**
  * @typedef {{
@@ -364,6 +373,129 @@ function resolveMetricsPath(options = {}) {
 }
 
 /**
+ * @param {string} filePath
+ */
+function getMetricBuffer(filePath) {
+  let queue = metricBufferByPath.get(filePath);
+  if (!queue) {
+    queue = [];
+    metricBufferByPath.set(filePath, queue);
+  }
+
+  return queue;
+}
+
+/**
+ * @param {string} filePath
+ */
+function clearMetricFlushTimer(filePath) {
+  const timer = metricFlushTimers.get(filePath);
+  if (timer) {
+    clearTimeout(timer);
+    metricFlushTimers.delete(filePath);
+  }
+}
+
+/**
+ * @param {string} filePath
+ */
+function scheduleMetricFlush(filePath) {
+  if (metricFlushTimers.has(filePath)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    metricFlushTimers.delete(filePath);
+    void flushMetricsPath(filePath);
+  }, METRIC_FLUSH_INTERVAL_MS);
+  timer.unref?.();
+  metricFlushTimers.set(filePath, timer);
+}
+
+/**
+ * @param {string} filePath
+ * @returns {Promise<{ flushed: number, error: string }>}
+ */
+async function flushMetricsPath(filePath) {
+  const inFlight = metricFlushInFlight.get(filePath);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  clearMetricFlushTimer(filePath);
+
+  const run = (async () => {
+    const queue = getMetricBuffer(filePath);
+    if (queue.length === 0) {
+      return { flushed: 0, error: "" };
+    }
+
+    const batch = queue.splice(0, queue.length);
+
+    try {
+      const loaded = await loadStore(filePath);
+      for (const metric of batch) {
+        applyMetric(loaded.store, metric);
+      }
+      await persistStore(filePath, loaded.store);
+      return {
+        flushed: batch.length,
+        error: ""
+      };
+    } catch (error) {
+      // Requeue at the front to avoid dropping metrics.
+      queue.unshift(...batch);
+      return {
+        flushed: 0,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  })();
+
+  metricFlushInFlight.set(filePath, run);
+  try {
+    return await run;
+  } finally {
+    metricFlushInFlight.delete(filePath);
+  }
+}
+
+/**
+ * @returns {Promise<void>}
+ */
+async function flushAllMetrics() {
+  const paths = new Set([
+    ...metricBufferByPath.keys(),
+    ...metricFlushInFlight.keys()
+  ]);
+
+  for (const filePath of paths) {
+    // eslint-disable-next-line no-await-in-loop
+    await flushMetricsPath(filePath);
+  }
+}
+
+function registerMetricShutdownHooks() {
+  if (metricShutdownHooksRegistered) {
+    return;
+  }
+
+  metricShutdownHooksRegistered = true;
+
+  process.once("SIGTERM", () => {
+    void flushAllMetrics();
+  });
+
+  process.once("beforeExit", () => {
+    if (![...metricBufferByPath.values()].some((queue) => queue.length > 0)) {
+      return;
+    }
+
+    return flushAllMetrics();
+  });
+}
+
+/**
  * @param {CommandMetric} metric
  * @param {{ cwd?: string, filePath?: string }} [options]
  */
@@ -371,9 +503,20 @@ export async function recordCommandMetric(metric, options = {}) {
   const filePath = resolveMetricsPath(options);
 
   try {
-    const loaded = await loadStore(filePath);
-    applyMetric(loaded.store, metric);
-    await persistStore(filePath, loaded.store);
+    registerMetricShutdownHooks();
+    const queue = getMetricBuffer(filePath);
+    queue.push(metric);
+
+    if (queue.length >= METRIC_BUFFER_FLUSH_THRESHOLD) {
+      const flushed = await flushMetricsPath(filePath);
+      return {
+        stored: !flushed.error,
+        filePath,
+        error: flushed.error
+      };
+    }
+
+    scheduleMetricFlush(filePath);
 
     return {
       stored: true,
@@ -421,6 +564,7 @@ function commandSummary(commands) {
  */
 export async function getObservabilityReport(options = {}) {
   const filePath = resolveMetricsPath(options);
+  const flushResult = await flushMetricsPath(filePath);
   const loaded = await loadStore(filePath);
   const totals = loaded.store.totals;
   const recall = loaded.store.recall;
@@ -442,7 +586,7 @@ export async function getObservabilityReport(options = {}) {
     schemaVersion: OBSERVABILITY_SCHEMA_VERSION,
     filePath,
     found: loaded.found,
-    loadError: loaded.error,
+    loadError: flushResult.error || loaded.error,
     updatedAt: loaded.store.updatedAt,
     totals: {
       runs: totals.runs,

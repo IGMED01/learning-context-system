@@ -785,8 +785,8 @@ export function recordCommandMetric(metric) {
 **DoD**:
 - [x] `output-auditor.log()` no bloquea el event loop
 - [x] `tryServeStatic()` no usa `readFileSync`
-- [ ] `recordCommandMetric()` hace batch writes cada 1 segundo
-- [ ] Métricas no se pierden en `SIGTERM`
+- [x] `recordCommandMetric()` hace batch writes cada 1 segundo
+- [x] Métricas no se pierden en `SIGTERM`
 
 ### 2.4 — Tool Interface Pattern (KB3)
 
