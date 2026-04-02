@@ -5,10 +5,13 @@ Central index for all repository documentation.
 ## Start here
 
 1. [README](../README.md) — product overview, architecture map, quick start
-2. [NEXUS Plan](./planning/nexus-plan.md) — phase/layer checklist and execution status
-3. [Planning index](./planning/roadmap.md) — current priorities by section
-4. [NEXUS API guide](./nexus-api.md) — API, OpenAPI, SDK, and demo UI
-5. [Usage guide](./usage.md) — CLI contracts and command workflows
+2. [Implementation plan (v3)](./implementation-plan.md) — hardening and architecture execution plan
+3. [Hardening checklist](./nexus-hardening-checklist.md) — closure status for security and quality gates
+4. [Knowledge backends guide](./knowledge-backends.md) — local-only, Obsidian, Notion, and DLQ flows
+5. [NEXUS Plan](./planning/nexus-plan.md) — phase/layer checklist and execution status
+6. [Planning index](./planning/roadmap.md) — current priorities by section
+7. [NEXUS API guide](./nexus-api.md) — API, OpenAPI, SDK, and demo UI
+8. [Usage guide](./usage.md) — CLI contracts and command workflows
 
 ## Architecture and operations
 
