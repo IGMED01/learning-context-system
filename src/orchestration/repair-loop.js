@@ -21,6 +21,13 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { runCodeGate, getGateErrors, formatGateErrors } from "../guard/code-gate.js";
 import { spawnAgent, isAgentRuntimeAvailable } from "./nexus-agent-runtime.js";
+import {
+  TASK_STATUS,
+  TASK_TYPES,
+  createTask,
+  isTerminal,
+  updateTaskStatus
+} from "../core/task.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").CodeGateResult} CodeGateResult */
 /** @typedef {import("../types/core-contracts.d.ts").CodeGateError} CodeGateError */
@@ -110,9 +117,10 @@ async function runGateAgainstCandidate(input) {
  *   finalCode: string,
  *   attempts: RepairAttempt[],
  *   totalAttempts: number,
- *   reason: "pass" | "max-iterations" | "no-progress" | "error",
+ *   reason: "pass" | "max-iterations" | "no-progress" | "error" | "cancelled",
  *   finalGateResult: CodeGateResult | null,
- *   durationMs: number
+ *   durationMs: number,
+ *   taskId?: string
  * }} RepairLoopResult
  */
 
@@ -237,7 +245,8 @@ function repairInline(code, errors) {
  *   context?: string,
  *   useRuntimeAgent?: boolean,
  *   gateRunner?: (input: { cwd: string, tools: Array<"lint" | "typecheck" | "build" | "test"> }) => Promise<CodeGateResult>,
- *   onAttempt?: (attempt: RepairAttempt) => void
+ *   onAttempt?: (attempt: RepairAttempt) => void,
+ *   signal?: AbortSignal
  * }} opts
  * @returns {Promise<RepairLoopResult>}
  */
@@ -251,10 +260,64 @@ export async function runRepairLoop(opts) {
     context,
     useRuntimeAgent,
     gateRunner,
-    onAttempt
+    onAttempt,
+    signal
   } = opts;
 
   const start = Date.now();
+  const task = createTask(TASK_TYPES.REPAIR, "repair-loop", {
+    cwd,
+    targetPath: targetPath ?? "",
+    tools,
+    maxIterations
+  });
+  updateTaskStatus(task.id, TASK_STATUS.RUNNING);
+
+  const cancelTask = (reason = "cancelled") => {
+    if (!isTerminal(task.status)) {
+      updateTaskStatus(task.id, TASK_STATUS.CANCELLED, reason);
+    }
+  };
+
+  const failTask = (error) => {
+    if (!isTerminal(task.status)) {
+      updateTaskStatus(task.id, TASK_STATUS.FAILED, error);
+    }
+  };
+
+  const completeTask = () => {
+    if (!isTerminal(task.status)) {
+      updateTaskStatus(task.id, TASK_STATUS.COMPLETED);
+    }
+  };
+
+  const isCancelled = () => signal?.aborted || task.abortController.signal.aborted;
+
+  if (signal) {
+    signal.addEventListener("abort", () => {
+      task.abortController.abort();
+      cancelTask("cancelled");
+    }, { once: true });
+  }
+
+  const buildCancelledResult = (finalCode, attempts) => {
+    cancelTask("cancelled");
+    return {
+      success: false,
+      finalCode,
+      attempts,
+      totalAttempts: attempts.length,
+      reason: "cancelled",
+      finalGateResult: null,
+      durationMs: Date.now() - start,
+      taskId: task.id
+    };
+  };
+
+  if (isCancelled()) {
+    return buildCancelledResult(initialCode, []);
+  }
+
   const runtimeAvailable = useRuntimeAgent !== false && (await isAgentRuntimeAvailable());
 
   /** @type {RepairAttempt[]} */
@@ -263,6 +326,10 @@ export async function runRepairLoop(opts) {
   const seenFingerprints = new Set();
 
   for (let i = 0; i < maxIterations; i++) {
+    if (isCancelled()) {
+      return buildCancelledResult(currentCode, attempts);
+    }
+
     const attemptStart = Date.now();
 
     // Run the gate against the current candidate code
@@ -286,6 +353,7 @@ export async function runRepairLoop(opts) {
     if (gateResult.passed) {
       attempts.push(attempt);
       onAttempt?.(attempt);
+      completeTask();
 
       return {
         success: true,
@@ -294,7 +362,8 @@ export async function runRepairLoop(opts) {
         totalAttempts: attempts.length,
         reason: "pass",
         finalGateResult: gateResult,
-        durationMs: Date.now() - start
+        durationMs: Date.now() - start,
+        taskId: task.id
       };
     }
 
@@ -303,6 +372,7 @@ export async function runRepairLoop(opts) {
     if (seenFingerprints.has(fingerprint)) {
       attempts.push(attempt);
       onAttempt?.(attempt);
+      failTask("Repair loop no progress");
 
       return {
         success: false,
@@ -311,7 +381,8 @@ export async function runRepairLoop(opts) {
         totalAttempts: attempts.length,
         reason: "no-progress",
         finalGateResult: gateResult,
-        durationMs: Date.now() - start
+        durationMs: Date.now() - start,
+        taskId: task.id
       };
     }
 
@@ -337,6 +408,7 @@ export async function runRepairLoop(opts) {
     onAttempt?.(attempt);
 
     if (!repairedCode) {
+      failTask("No repair output");
       // Can't repair — stop loop
       break;
     }
@@ -353,6 +425,20 @@ export async function runRepairLoop(opts) {
     gateRunner
   });
 
+  if (isCancelled()) {
+    return buildCancelledResult(currentCode, attempts);
+  }
+
+  if (finalGate.passed) {
+    completeTask();
+  } else {
+    failTask(
+      attempts.length >= maxIterations
+        ? "Max repair iterations reached"
+        : "Final gate failed"
+    );
+  }
+
   return {
     success: finalGate.passed,
     finalCode: currentCode,
@@ -360,7 +446,8 @@ export async function runRepairLoop(opts) {
     totalAttempts: attempts.length,
     reason: finalGate.passed ? "pass" : attempts.length >= maxIterations ? "max-iterations" : "error",
     finalGateResult: finalGate,
-    durationMs: Date.now() - start
+    durationMs: Date.now() - start,
+    taskId: task.id
   };
 }
 

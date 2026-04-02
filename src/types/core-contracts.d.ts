@@ -572,6 +572,7 @@ export interface ApiRequest {
   body: Record<string, unknown>;
   headers: Record<string, string>;
   query: Record<string, string>;
+  params?: Record<string, string>;
 }
 
 export interface ApiResponse {

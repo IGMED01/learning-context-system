@@ -26,6 +26,13 @@ import { createAxiomInjector } from "../memory/axiom-injector.js";
 import { spawnAgent, spawnSwarm, isAgentRuntimeAvailable } from "./nexus-agent-runtime.js";
 import { runCodeGate, getGateErrors, formatGateErrors } from "../guard/code-gate.js";
 import { log } from "../core/logger.js";
+import {
+  TASK_STATUS,
+  TASK_TYPES,
+  createTask,
+  isTerminal,
+  updateTaskStatus
+} from "../core/task.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
 /** @typedef {import("../types/core-contracts.d.ts").SelectedChunk} SelectedChunk */
@@ -47,7 +54,8 @@ import { log } from "../core/logger.js";
  *   useSwarm?: boolean,
  *   swarmAgents?: number,
  *   scoringProfile?: string,
- *   sddProfile?: string
+ *   sddProfile?: string,
+ *   signal?: AbortSignal
  * }} NexusAgentOptions
  */
 
@@ -75,6 +83,7 @@ import { log } from "../core/logger.js";
  *   },
  *   gateResult?: import("../types/core-contracts.d.ts").CodeGateResult,
  *   agentId?: string,
+ *   taskId?: string,
  *   error?: string
  * }} NexusAgentResult
  */
@@ -276,7 +285,8 @@ export async function spawnNexusAgent(opts) {
     useSwarm = false,
     swarmAgents,
     scoringProfile,
-    sddProfile
+    sddProfile,
+    signal
   } = opts;
   const safeChangedFiles = Array.isArray(changedFiles)
     ? changedFiles.filter((entry) => typeof entry === "string").slice(0, 100)
@@ -285,6 +295,60 @@ export async function spawnNexusAgent(opts) {
   const safeMaxChunks = clampNumber(maxChunks, 1, 20, 6);
   const safeSwarmAgents = clampNumber(swarmAgents, 1, 8, 3);
   const focusQuery = focus ?? `${safeTask} ${safeObjective}`.trim();
+  const task = createTask(TASK_TYPES.AGENT, safeTask, {
+    objective: safeObjective,
+    workspace,
+    project,
+    agentType,
+    runGate,
+    changedFiles: safeChangedFiles
+  });
+
+  updateTaskStatus(task.id, TASK_STATUS.RUNNING);
+
+  const cancelTask = (reason = "cancelled") => {
+    if (!isTerminal(task.status)) {
+      updateTaskStatus(task.id, TASK_STATUS.CANCELLED, reason);
+    }
+  };
+
+  const failTask = (error) => {
+    if (!isTerminal(task.status)) {
+      updateTaskStatus(task.id, TASK_STATUS.FAILED, error);
+    }
+  };
+
+  const completeTask = () => {
+    if (!isTerminal(task.status)) {
+      updateTaskStatus(task.id, TASK_STATUS.COMPLETED);
+    }
+  };
+
+  const isCancelled = () => signal?.aborted || task.abortController.signal.aborted;
+  const getCancelResult = (error = "cancelled") => {
+    cancelTask(error);
+    return {
+      success: false,
+      output: "",
+      nexusContext: {
+        selectedChunks: selected.length,
+        usedTokens,
+        structuralHits,
+        axiomsInjected,
+        sddCoverage,
+        sddGate
+      },
+      taskId: task.id,
+      error
+    };
+  };
+
+  if (signal) {
+    signal.addEventListener("abort", () => {
+      task.abortController.abort();
+      cancelTask("cancelled");
+    }, { once: true });
+  }
 
   // ── Step 1: NEXUS context selection ─────────────────────────────────────────
   let selected = /** @type {SelectedChunk[]} */ ([]);
@@ -292,6 +356,23 @@ export async function spawnNexusAgent(opts) {
   let structuralHits = 0;
   let sddCoverage = /** @type {Record<string, boolean>} */ ({});
   let sddSummary = /** @type {{ requiredKinds?: string[], coverage?: Record<string, boolean> } | null} */ (null);
+  let axiomsInjected = 0;
+  let sddGate = {
+    enabled: false,
+    passed: true,
+    minCoverageRatio: 1,
+    coverageRatio: 0,
+    minRequiredKinds: 1,
+    requiredKinds: [],
+    coveredKinds: [],
+    missingKinds: [],
+    reason: "pending"
+  };
+
+  try {
+    if (isCancelled()) {
+      return getCancelResult();
+    }
 
   try {
     const workspaceResult = await loadWorkspaceChunks(workspace);
@@ -338,12 +419,20 @@ export async function spawnNexusAgent(opts) {
     });
     // Non-fatal: proceed without workspace context
   }
-  const sddGate = evaluateSddFailFastGate({
+  sddGate = evaluateSddFailFastGate({
     runGate,
     sdd: sddSummary
   });
 
+  if (isCancelled()) {
+    return getCancelResult();
+  }
+
   if (runGate && !sddGate.passed) {
+    const message = `SDD gate blocked agent run: ${sddGate.reason}. Missing: ${
+      sddGate.missingKinds.length ? sddGate.missingKinds.join(", ") : "n/a"
+    }.`;
+    failTask(message);
     return {
       success: false,
       output: "",
@@ -355,15 +444,13 @@ export async function spawnNexusAgent(opts) {
         sddCoverage,
         sddGate
       },
-      error: `SDD gate blocked agent run: ${sddGate.reason}. Missing: ${
-        sddGate.missingKinds.length ? sddGate.missingKinds.join(", ") : "n/a"
-      }.`
+      taskId: task.id,
+      error: message
     };
   }
 
   // ── Step 2: Axiom injection ──────────────────────────────────────────────────
   let axiomBlock = "";
-  let axiomsInjected = 0;
 
   try {
     const injector = createAxiomInjector({ project, maxAxioms: 3 });
@@ -379,6 +466,10 @@ export async function spawnNexusAgent(opts) {
     // Non-fatal: proceed without axioms
   }
 
+  if (isCancelled()) {
+    return getCancelResult();
+  }
+
   // ── Step 3: Build enriched context ───────────────────────────────────────────
   const context = buildAgentContext(selected, axiomBlock, safeTask, safeObjective, safeChangedFiles);
 
@@ -386,6 +477,8 @@ export async function spawnNexusAgent(opts) {
   const runtimeAvailable = await isAgentRuntimeAvailable();
 
   if (!runtimeAvailable) {
+    const message = "NEXUS agent runtime is disabled in this workspace.";
+    failTask(message);
     return {
       success: false,
       output: "",
@@ -397,8 +490,13 @@ export async function spawnNexusAgent(opts) {
         sddCoverage,
         sddGate
       },
-      error: "NEXUS agent runtime is disabled in this workspace."
+      taskId: task.id,
+      error: message
     };
+  }
+
+  if (isCancelled()) {
+    return getCancelResult();
   }
 
   // ── Step 5: Spawn runtime agent / swarm ──────────────────────────────────────
@@ -428,6 +526,10 @@ export async function spawnNexusAgent(opts) {
     agentSuccess = agentResult.success;
   }
 
+  if (isCancelled()) {
+    return getCancelResult();
+  }
+
   const nexusContext = {
     selectedChunks: selected.length,
     usedTokens,
@@ -438,12 +540,15 @@ export async function spawnNexusAgent(opts) {
   };
 
   if (!agentSuccess) {
+    const message = "Agent execution did not complete successfully";
+    failTask(message);
     return {
       success: false,
       output: agentOutput,
       nexusContext,
       agentId,
-      error: "Agent execution did not complete successfully"
+      taskId: task.id,
+      error: message
     };
   }
 
@@ -451,6 +556,12 @@ export async function spawnNexusAgent(opts) {
   if (runGate && agentOutput) {
     const gateResult = await runCodeGate({ cwd: workspace, tools: ["typecheck", "lint"] });
     const gateErrors = getGateErrors(gateResult);
+    const gateErrorText = gateErrors.length ? formatGateErrors(gateErrors) : undefined;
+    if (gateResult.passed) {
+      completeTask();
+    } else {
+      failTask(gateErrorText ?? "Code gate failed");
+    }
 
     return {
       success: gateResult.passed,
@@ -458,16 +569,42 @@ export async function spawnNexusAgent(opts) {
       nexusContext,
       gateResult,
       agentId,
-      error: gateErrors.length ? formatGateErrors(gateErrors) : undefined
+      taskId: task.id,
+      error: gateErrorText
     };
   }
 
-  return {
-    success: true,
-    output: agentOutput,
-    nexusContext,
-    agentId
-  };
+    completeTask();
+
+    return {
+      success: true,
+      output: agentOutput,
+      nexusContext,
+      agentId,
+      taskId: task.id
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isCancelled()) {
+      return getCancelResult(message || "cancelled");
+    }
+
+    failTask(message);
+    return {
+      success: false,
+      output: "",
+      nexusContext: {
+        selectedChunks: selected.length,
+        usedTokens,
+        structuralHits,
+        axiomsInjected,
+        sddCoverage,
+        sddGate
+      },
+      taskId: task.id,
+      error: message
+    };
+  }
 }
 
 /**

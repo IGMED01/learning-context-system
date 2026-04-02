@@ -23,6 +23,7 @@ import type {
   ApiRoute,
   ApiServerConfig
 } from "../types/core-contracts.d.ts";
+import { findCommand } from "../core/command-registry.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -130,7 +131,8 @@ export function buildApiRequest(
     path: requestUrl.pathname,
     body,
     headers,
-    query
+    query,
+    params: {}
   };
 }
 
@@ -221,11 +223,18 @@ export async function handleRequest(
     const apiReq = buildApiRequest(httpReq, body);
     const route = matchRoute(apiReq.method, apiReq.path);
 
-    if (!route) {
-      apiResponse = errorResponse(404, `No route matches ${apiReq.method} ${apiReq.path}`);
-    } else {
+    if (route) {
       const chainedHandler = buildMiddlewareChain(route.handler);
       apiResponse = await chainedHandler(apiReq);
+    } else {
+      const commandMatch = await findCommand(apiReq.method, apiReq.path);
+      if (!commandMatch) {
+        apiResponse = errorResponse(404, `No route matches ${apiReq.method} ${apiReq.path}`);
+      } else {
+        apiReq.params = commandMatch.params;
+        const chainedHandler = buildMiddlewareChain(commandMatch.command.handler);
+        apiResponse = await chainedHandler(apiReq);
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

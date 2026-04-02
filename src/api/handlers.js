@@ -10,6 +10,7 @@
 import { runCli } from "../cli/app.js";
 import { evaluateGuard } from "../guard/guard-engine.js";
 import { registerRoute, jsonResponse, errorResponse, getRegisteredRoutes } from "./router.js";
+import { getAllCommands as getRegisteredCommands } from "../core/command-registry.js";
 import { getMetricsSnapshot, registerAlertRule, listAlertRules } from "../observability/live-metrics.js";
 import { getObservabilityReport } from "../observability/metrics-store.js";
 import { runEvalSuite, loadEvalSuite } from "../eval/eval-runner.js";
@@ -39,6 +40,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { sanitizeChunkContent } from "../guard/chunk-sanitizer.js";
 import { resolveSafePathWithinWorkspace as resolveWorkspacePath } from "../utils/path-utils.js";
+import "./commands/tasks.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -638,12 +640,20 @@ registerRoute("GET", "/api/health", async () => {
 
 registerRoute("GET", "/api/routes", async () => {
   const registered = getRegisteredRoutes();
+  const commands = getRegisteredCommands();
+  const routes = [
+    ...registered.map((route) => ({
+      method: route.method,
+      path: route.path
+    })),
+    ...commands.map((command) => ({
+      method: command.method,
+      path: command.path
+    }))
+  ];
 
   return jsonResponse(200, {
-    routes: registered.map((r) => ({
-      method: r.method,
-      path: r.path
-    }))
+    routes
   });
 });
 

@@ -25,6 +25,7 @@ import type { GuardConfig, GuardInput } from "../types/core-contracts.d.ts";
 import { runCli } from "../cli/app.js";
 import { evaluateGuard, formatGuardResultAsText } from "../guard/guard-engine.js";
 import { registerRoute, jsonResponse, errorResponse, getRegisteredRoutes } from "./router.js";
+import { getAllCommands as getRegisteredCommands } from "../core/command-registry.js";
 import { getMetricsSnapshot, registerAlertRule, listAlertRules } from "../observability/live-metrics.js";
 import { getObservabilityReport } from "../observability/metrics-store.js";
 import { runEvalSuite, loadEvalSuite } from "../eval/eval-runner.js";
@@ -57,6 +58,7 @@ import { chatCompletion } from "../llm/openrouter-provider.js";
 import { parseLlmResponse } from "../llm/response-parser.js";
 import { recordCommandMetric } from "../observability/metrics-store.js";
 import path from "node:path";
+import "./commands/tasks.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -545,13 +547,21 @@ registerRoute("GET", "/api/health", async (_req: ApiRequest): Promise<ApiRespons
 // ── GET /api/routes ──────────────────────────────────────────────────
 
 registerRoute("GET", "/api/routes", async (_req: ApiRequest): Promise<ApiResponse> => {
-  const routes = getRegisteredRoutes();
+  const registered = getRegisteredRoutes();
+  const commands = getRegisteredCommands();
+  const routes = [
+    ...registered.map((route) => ({
+      method: route.method,
+      path: route.path
+    })),
+    ...commands.map((command) => ({
+      method: command.method,
+      path: command.path
+    }))
+  ];
 
   return jsonResponse(200, {
-    routes: routes.map((r) => ({
-      method: r.method,
-      path: r.path
-    }))
+    routes
   });
 });
 

@@ -84,6 +84,15 @@ import {
 } from "../src/api/security-runtime.js";
 import { createSanitizedCliErrorPayload } from "../src/api/handlers.js";
 import { matchRoute } from "../src/api/router.js";
+import { findCommand, registerCommand } from "../src/core/command-registry.js";
+import {
+  TASK_STATUS,
+  TASK_TYPES,
+  clearTaskStore,
+  createTask,
+  getTask,
+  updateTaskStatus
+} from "../src/core/task.js";
 import { loadApiAxioms } from "../src/api/axioms-loader.js";
 import { createChangeDetector } from "../src/sync/change-detector.js";
 import { createVersionTracker } from "../src/sync/version-tracker.js";
@@ -9000,9 +9009,33 @@ run("NEXUS:10 bridge spawns NEXUS agent with local runtime", async () => {
     assert.equal(typeof result.output, "string");
     assert.equal(result.output.length > 0, true);
     assert.equal(result.nexusContext.selectedChunks >= 0, true);
+    assert.equal(typeof result.taskId, "string");
+    const task = getTask(String(result.taskId ?? ""));
+    assert.ok(task);
+    assert.equal(task?.status, TASK_STATUS.COMPLETED);
+    assert.equal(Boolean(task?.startedAt), true);
+    assert.equal(Boolean(task?.endedAt), true);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+run("NEXUS:10 bridge marks task as cancelled when external signal is aborted", async () => {
+  clearTaskStore();
+  const ac = new AbortController();
+  ac.abort();
+
+  const result = await spawnNexusAgent({
+    task: "Cancel this run",
+    signal: ac.signal
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(typeof result.taskId, "string");
+  assert.match(String(result.error ?? ""), /cancelled/i);
+  const task = getTask(String(result.taskId ?? ""));
+  assert.ok(task);
+  assert.equal(task?.status, TASK_STATUS.CANCELLED);
 });
 
 run("NEXUS:10 bridge enforces SDD fail-fast when runGate=true and coverage is insufficient", async () => {
@@ -9045,6 +9078,10 @@ run("NEXUS:10 bridge enforces SDD fail-fast when runGate=true and coverage is in
     assert.equal(result.nexusContext.sddGate?.enabled, true);
     assert.equal(result.nexusContext.sddGate?.passed, false);
     assert.equal((result.nexusContext.sddGate?.missingKinds?.length ?? 0) >= 1, true);
+    assert.equal(typeof result.taskId, "string");
+    const task = getTask(String(result.taskId ?? ""));
+    assert.ok(task);
+    assert.equal(task?.status, TASK_STATUS.FAILED);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
@@ -9088,9 +9125,90 @@ run("NEXUS:10 bridge keeps SDD gate optional when runGate=false", async () => {
     assert.equal(result.success, true);
     assert.equal(result.nexusContext.sddGate?.enabled, false);
     assert.equal(result.nexusContext.sddGate?.passed, true);
+    assert.equal(typeof result.taskId, "string");
+    const task = getTask(String(result.taskId ?? ""));
+    assert.ok(task);
+    assert.equal(task?.status, TASK_STATUS.COMPLETED);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+run("NEXUS:10 command registry resolves task endpoints with params and duplicate guard", async () => {
+  clearTaskStore();
+  const task = createTask(TASK_TYPES.WORKFLOW, "test task");
+  updateTaskStatus(task.id, TASK_STATUS.RUNNING);
+
+  const listMatch = await findCommand("GET", "/api/tasks");
+  assert.ok(listMatch);
+  const listResponse = await listMatch.command.handler({
+    method: "GET",
+    path: "/api/tasks",
+    body: {},
+    headers: {},
+    query: {},
+    params: {}
+  });
+  assert.equal(listResponse.status, 200);
+  const listedTasks = Array.isArray(listResponse.body.tasks) ? listResponse.body.tasks : [];
+  const listed = listedTasks.find((entry) => entry.id === task.id);
+  assert.ok(listed);
+  assert.equal("abortController" in listed, false);
+
+  const detailMatch = await findCommand("GET", `/api/tasks/${task.id}`);
+  assert.ok(detailMatch);
+  assert.equal(detailMatch?.params.id, task.id);
+  const detailResponse = await detailMatch.command.handler({
+    method: "GET",
+    path: `/api/tasks/${task.id}`,
+    body: {},
+    headers: {},
+    query: {},
+    params: detailMatch.params
+  });
+  assert.equal(detailResponse.status, 200);
+  assert.equal(detailResponse.body.task?.id, task.id);
+
+  const cancelMatch = await findCommand("POST", `/api/tasks/${task.id}/cancel`);
+  assert.ok(cancelMatch);
+  assert.equal(cancelMatch?.params.id, task.id);
+  const cancelResponse = await cancelMatch.command.handler({
+    method: "POST",
+    path: `/api/tasks/${task.id}/cancel`,
+    body: {},
+    headers: {},
+    query: {},
+    params: cancelMatch.params
+  });
+  assert.equal(cancelResponse.status, 200);
+  assert.equal(cancelResponse.body.cancelled, true);
+  assert.equal(getTask(task.id)?.status, TASK_STATUS.CANCELLED);
+
+  const uniquePath = `/api/registry-test-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  registerCommand({
+    method: "GET",
+    path: uniquePath,
+    handler: async () => ({
+      status: 200,
+      body: {
+        ok: true
+      }
+    })
+  });
+  assert.throws(
+    () =>
+      registerCommand({
+        method: "GET",
+        path: uniquePath,
+        handler: async () => ({
+          status: 200,
+          body: {
+            ok: true
+          }
+        })
+      }),
+    /already registered/i
+  );
 });
 
 run("NEXUS:10 /api/eval rejects suitePath outside workspace root", async () => {
@@ -11151,6 +11269,7 @@ run("NEXUS:4 code gate runs typecheck and reports pass on clean cwd", async () =
 });
 
 run("NEXUS:4 repair loop validates target candidate code and restores workspace file", async () => {
+  clearTaskStore();
   const tempRoot = await mkdtemp(path.join(process.cwd(), "tmp-repair-loop-"));
   const sourceDir = path.join(tempRoot, "src");
   const targetFile = path.join(sourceDir, "sample.ts");
@@ -11209,11 +11328,38 @@ run("NEXUS:4 repair loop validates target candidate code and restores workspace 
     assert.equal(result.reason, "pass");
     assert.equal(result.finalGateResult?.passed, true);
     assert.equal(result.totalAttempts, 1);
+    assert.equal(typeof result.taskId, "string");
+    assert.equal(getTask(String(result.taskId ?? ""))?.status, TASK_STATUS.COMPLETED);
     assert.deepEqual(gateSnapshots, [repairedCode]);
     assert.equal(await readFile(targetFile, "utf8"), originalCode);
   } finally {
     await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
+});
+
+run("NEXUS:4 repair loop marks task as cancelled when signal is aborted", async () => {
+  clearTaskStore();
+  const abortController = new AbortController();
+  abortController.abort();
+
+  const result = await runRepairLoop({
+    code: "export const value = 1;",
+    useRuntimeAgent: false,
+    signal: abortController.signal,
+    gateRunner: async () => ({
+      status: "pass",
+      tools: [],
+      errorCount: 0,
+      warningCount: 0,
+      durationMs: 0,
+      passed: true
+    })
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "cancelled");
+  assert.equal(typeof result.taskId, "string");
+  assert.equal(getTask(String(result.taskId ?? ""))?.status, TASK_STATUS.CANCELLED);
 });
 
 run("NEXUS:4 getGateErrors returns only error-severity items", () => {
