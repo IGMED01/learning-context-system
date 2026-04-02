@@ -1,15 +1,6 @@
 // @ts-check
 
-import { createHmac, timingSafeEqual } from "node:crypto";
-
-/**
- * @param {string} value
- */
-function decodeBase64Url(value) {
-  const normalized = value.replace(/-/gu, "+").replace(/_/gu, "/");
-  const padded = `${normalized}${"=".repeat((4 - (normalized.length % 4 || 4)) % 4)}`;
-  return Buffer.from(padded, "base64");
-}
+import jwt from "jsonwebtoken";
 
 /**
  * @param {unknown} value
@@ -18,29 +9,51 @@ function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+const JWT_ALGORITHMS = ["HS256"];
+
 /**
- * @param {string} payload
- * @returns {{ ok: true, value: Record<string, unknown> } | { ok: false, value: Record<string, unknown> }}
+ * @param {unknown} error
  */
-function parseJsonObject(payload) {
-  try {
-    const parsed = JSON.parse(payload);
-    if (!isRecord(parsed)) {
-      return {
-        ok: false,
-        value: {}
-      };
-    }
-    return {
-      ok: true,
-      value: parsed
-    };
-  } catch {
-    return {
-      ok: false,
-      value: {}
-    };
+function mapJwtReason(error) {
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error ?? "").toLowerCase();
+  const code =
+    typeof error === "object" &&
+    error &&
+    "name" in error &&
+    typeof error.name === "string"
+      ? error.name
+      : "";
+
+  if (code === "TokenExpiredError" || /expired/.test(message)) {
+    return "token-expired";
   }
+
+  if (code === "NotBeforeError" || /not active/.test(message)) {
+    return "token-not-active";
+  }
+
+  if (/invalid algorithm/i.test(message)) {
+    return "invalid-algorithm";
+  }
+
+  if (/invalid issuer/i.test(message)) {
+    return "invalid-issuer";
+  }
+
+  if (/invalid audience|audience invalid|jwt audience invalid/i.test(message)) {
+    return "invalid-audience";
+  }
+
+  if (/invalid signature/i.test(message)) {
+    return "invalid-signature";
+  }
+
+  if (/jwt malformed|invalid token|jwt must be provided|invalid compact jwt/i.test(message)) {
+    return "malformed-token";
+  }
+
+  return "invalid-token";
 }
 
 /**
@@ -53,7 +66,6 @@ function parseJsonObject(payload) {
  * }} [options]
  */
 function verifyHs256Token(token, secret, options = {}) {
-  const parts = token.split(".");
   const issuer = String(options.issuer ?? "").trim();
   const audiences = Array.isArray(options.audiences)
     ? options.audiences.map((entry) => String(entry).trim()).filter(Boolean)
@@ -61,132 +73,37 @@ function verifyHs256Token(token, secret, options = {}) {
   const clockSkewSeconds = Number.isFinite(Number(options.clockSkewSeconds))
     ? Math.max(0, Math.trunc(Number(options.clockSkewSeconds)))
     : 30;
-  const nowSeconds = Math.floor(Date.now() / 1000);
 
-  if (parts.length !== 3) {
-    return {
-      valid: false,
-      reason: "malformed-token",
-      payload: {}
-    };
-  }
+  try {
+    const verified = jwt.verify(token, secret, {
+      algorithms: JWT_ALGORITHMS,
+      clockTolerance: clockSkewSeconds,
+      issuer: issuer || undefined,
+      audience: audiences.length ? audiences : undefined
+    });
+    const payload = isRecord(verified) ? verified : {};
+    const nowSeconds = Math.floor(Date.now() / 1000);
 
-  const [encodedHeader, encodedPayload, encodedSignature] = parts;
-  const headerJson = decodeBase64Url(encodedHeader).toString("utf8");
-  const parsedHeader = parseJsonObject(headerJson);
-  const header = parsedHeader.value;
-
-  if (!parsedHeader.ok) {
-    return {
-      valid: false,
-      reason: "malformed-token",
-      payload: {}
-    };
-  }
-
-  if (typeof header.alg !== "string" || header.alg.toUpperCase() !== "HS256") {
-    return {
-      valid: false,
-      reason: "invalid-algorithm",
-      payload: {}
-    };
-  }
-
-  if (
-    header.typ !== undefined &&
-    (typeof header.typ !== "string" || header.typ.toUpperCase() !== "JWT")
-  ) {
-    return {
-      valid: false,
-      reason: "invalid-token-type",
-      payload: {}
-    };
-  }
-
-  const expected = createHmac("sha256", secret)
-    .update(`${encodedHeader}.${encodedPayload}`)
-    .digest();
-  const signature = decodeBase64Url(encodedSignature);
-
-  if (
-    expected.length !== signature.length ||
-    !timingSafeEqual(expected, signature)
-  ) {
-    return {
-      valid: false,
-      reason: "invalid-signature",
-      payload: {}
-    };
-  }
-
-  const payloadJson = decodeBase64Url(encodedPayload).toString("utf8");
-  const parsedPayload = parseJsonObject(payloadJson);
-  const payload = parsedPayload.value;
-
-  if (!parsedPayload.ok) {
-    return {
-      valid: false,
-      reason: "malformed-token",
-      payload: {}
-    };
-  }
-
-  if (typeof payload.nbf === "number" && payload.nbf > nowSeconds + clockSkewSeconds) {
-    return {
-      valid: false,
-      reason: "token-not-active",
-      payload
-    };
-  }
-
-  if (typeof payload.iat === "number" && payload.iat > nowSeconds + clockSkewSeconds) {
-    return {
-      valid: false,
-      reason: "invalid-issued-at",
-      payload
-    };
-  }
-
-  if (typeof payload.exp === "number" && nowSeconds >= payload.exp + clockSkewSeconds) {
-    return {
-      valid: false,
-      reason: "token-expired",
-      payload
-    };
-  }
-
-  if (issuer) {
-    if (typeof payload.iss !== "string" || payload.iss.trim() !== issuer) {
+    if (typeof payload.iat === "number" && payload.iat > nowSeconds + clockSkewSeconds) {
       return {
         valid: false,
-        reason: "invalid-issuer",
+        reason: "invalid-issued-at",
         payload
       };
     }
+
+    return {
+      valid: true,
+      reason: "",
+      payload
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      reason: mapJwtReason(error),
+      payload: {}
+    };
   }
-
-  if (audiences.length > 0) {
-    const tokenAudiences = Array.isArray(payload.aud)
-      ? payload.aud.filter((entry) => typeof entry === "string").map((entry) => entry.trim())
-      : typeof payload.aud === "string"
-        ? [payload.aud.trim()]
-        : [];
-    const audienceMatched = tokenAudiences.some((entry) => audiences.includes(entry));
-
-    if (!audienceMatched) {
-      return {
-        valid: false,
-        reason: "invalid-audience",
-        payload
-      };
-    }
-  }
-
-  return {
-    valid: true,
-    reason: "",
-    payload
-  };
 }
 
 /**

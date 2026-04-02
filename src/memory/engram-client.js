@@ -308,6 +308,7 @@ export function createEngramClient(options = {}) {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error && typeof error.stack === "string" ? error.stack : "";
       const stdout =
         typeof error === "object" &&
         error &&
@@ -324,18 +325,21 @@ export function createEngramClient(options = {}) {
         runtimePlatform === "win32" && isSpawnPermissionError(error)
           ? "Fix: unblock or reauthorize the Engram battery binary; NEXUS no longer falls back through cmd.exe."
           : "";
-
-      throw new Error(
+      const failure = new Error(
         [
           `Engram command failed: ${config.binaryPath} ${args.join(" ")}`,
           stderr,
           stdout,
           message,
-          permissionFix
+          permissionFix,
+          stack
         ]
           .filter(Boolean)
           .join("\n")
       );
+      failure.cause = error;
+
+      throw failure;
     }
   }
 

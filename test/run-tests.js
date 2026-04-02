@@ -9287,6 +9287,110 @@ run("NEXUS:10 /api/chat and /api/ask enforce shared chunk validation in server r
   }
 });
 
+run("NEXUS:10 API demo route is disabled by default and returns 404", async () => {
+  const apiKey = "nexus-test-key";
+  const server = createNexusApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    demo: {
+      enabled: false
+    },
+    auth: {
+      requireAuth: true,
+      apiKeys: [apiKey]
+    },
+    sync: {
+      autoStart: false
+    }
+  });
+
+  let started = false;
+
+  try {
+    const start = await server.start();
+    started = true;
+    const baseUrl = `http://127.0.0.1:${start.port}`;
+    const demoWithoutAuth = await fetch(`${baseUrl}/api/demo`);
+    const demoWithAuth = await fetch(`${baseUrl}/api/demo`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+    const withoutAuthPayload = await demoWithoutAuth.json();
+    const withAuthPayload = await demoWithAuth.json();
+
+    assert.equal(demoWithoutAuth.status, 404);
+    assert.equal(demoWithAuth.status, 404);
+    assert.equal(withoutAuthPayload.errorCode, "route_not_found");
+    assert.equal(withAuthPayload.errorCode, "route_not_found");
+  } finally {
+    if (started) {
+      await server.stop();
+    }
+  }
+});
+
+run("NEXUS:10 API server applies configured timeout defaults and overrides", async () => {
+  const previousKeepAlive = process.env.LCS_KEEP_ALIVE_TIMEOUT;
+  const previousHeaders = process.env.LCS_HEADERS_TIMEOUT;
+  const previousRequest = process.env.LCS_REQUEST_TIMEOUT;
+
+  try {
+    process.env.LCS_KEEP_ALIVE_TIMEOUT = "35000";
+    process.env.LCS_HEADERS_TIMEOUT = "36000";
+    process.env.LCS_REQUEST_TIMEOUT = "61000";
+
+    const fromEnv = createNexusApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      auth: {
+        requireAuth: false
+      },
+      sync: {
+        autoStart: false
+      }
+    });
+    assert.equal(fromEnv.server.keepAliveTimeout, 35000);
+    assert.equal(fromEnv.server.headersTimeout, 36000);
+    assert.equal(fromEnv.server.requestTimeout, 61000);
+
+    const fromOptions = createNexusApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      auth: {
+        requireAuth: false
+      },
+      sync: {
+        autoStart: false
+      },
+      timeouts: {
+        keepAliveTimeoutMs: 41000,
+        headersTimeoutMs: 42000,
+        requestTimeoutMs: 43000
+      }
+    });
+    assert.equal(fromOptions.server.keepAliveTimeout, 41000);
+    assert.equal(fromOptions.server.headersTimeout, 42000);
+    assert.equal(fromOptions.server.requestTimeout, 43000);
+  } finally {
+    if (previousKeepAlive === undefined) {
+      delete process.env.LCS_KEEP_ALIVE_TIMEOUT;
+    } else {
+      process.env.LCS_KEEP_ALIVE_TIMEOUT = previousKeepAlive;
+    }
+    if (previousHeaders === undefined) {
+      delete process.env.LCS_HEADERS_TIMEOUT;
+    } else {
+      process.env.LCS_HEADERS_TIMEOUT = previousHeaders;
+    }
+    if (previousRequest === undefined) {
+      delete process.env.LCS_REQUEST_TIMEOUT;
+    } else {
+      process.env.LCS_REQUEST_TIMEOUT = previousRequest;
+    }
+  }
+});
+
 run("NEXUS:10 /api/evals/domain-suite blocks suitePath traversal in server runtime", async () => {
   const apiKey = "nexus-test-key";
   const server = createNexusApiServer({
@@ -9657,6 +9761,9 @@ run("NEXUS:10 API compatibility endpoints require auth while health stays public
   const server = createNexusApiServer({
     host: "127.0.0.1",
     port: 0,
+    demo: {
+      enabled: true
+    },
     auth: {
       requireAuth: true,
       apiKeys: [apiKey]
@@ -10791,6 +10898,9 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
   const server = createNexusApiServer({
     host: "127.0.0.1",
     port: 0,
+    demo: {
+      enabled: true
+    },
     auth: {
       requireAuth: true,
       apiKeys: [apiKey]

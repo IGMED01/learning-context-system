@@ -25,6 +25,7 @@ import { selectEndpointContext } from "../context/context-mode.js";
 import { createAxiomInjector } from "../memory/axiom-injector.js";
 import { spawnAgent, spawnSwarm, isAgentRuntimeAvailable } from "./nexus-agent-runtime.js";
 import { runCodeGate, getGateErrors, formatGateErrors } from "../guard/code-gate.js";
+import { log } from "../core/logger.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
 /** @typedef {import("../types/core-contracts.d.ts").SelectedChunk} SelectedChunk */
@@ -329,7 +330,12 @@ export async function spawnNexusAgent(opts) {
         : [],
       coverage: sddCoverage
     };
-  } catch {
+  } catch (error) {
+    log("warn", "nexus agent context selection failed", {
+      workspace,
+      project,
+      error: error instanceof Error ? error.message : String(error)
+    });
     // Non-fatal: proceed without workspace context
   }
   const sddGate = evaluateSddFailFastGate({
@@ -365,7 +371,11 @@ export async function spawnNexusAgent(opts) {
 
     axiomBlock = await injector.inject({ language, framework, focusTerms });
     axiomsInjected = axiomBlock ? (axiomBlock.match(/##/g) ?? []).length : 0;
-  } catch {
+  } catch (error) {
+    log("warn", "nexus agent axiom injection failed", {
+      project,
+      error: error instanceof Error ? error.message : String(error)
+    });
     // Non-fatal: proceed without axioms
   }
 

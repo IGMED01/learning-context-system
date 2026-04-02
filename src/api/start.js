@@ -17,6 +17,8 @@ import {
   resolveCorsOrigin,
   sendRateLimitExceeded
 } from "./security-runtime.js";
+import { log } from "../core/logger.js";
+import { resolveSafePathWithinWorkspace } from "../utils/path-utils.js";
 
 // Import handlers to register all routes
 import "./handlers.js";
@@ -38,6 +40,22 @@ function parseCsvEnv(raw) {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+/**
+ * @param {unknown} value
+ * @param {number} fallback
+ * @param {number} [min]
+ * @param {number} [max]
+ * @returns {number}
+ */
+function parseTimeoutMs(value, fallback, min = 1_000, max = 600_000) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < min || numeric > max) {
+    return fallback;
+  }
+
+  return Math.trunc(numeric);
 }
 
 const MIME_TYPES = {
@@ -63,11 +81,22 @@ const MIME_TYPES = {
  * @returns {boolean}
  */
 function tryServeStatic(urlPath, res) {
-  // Prevent directory traversal
-  const safePath = path.normalize(urlPath).replace(/^(\.\.[/\\])+/, "");
-  const filePath = path.join(UI_DIST, safePath);
+  const rawPath = String(urlPath ?? "");
+  const normalizedPath = rawPath.replace(/^[/\\]+/u, "");
+  if (!normalizedPath) {
+    return false;
+  }
 
-  if (!filePath.startsWith(UI_DIST)) return false;
+  let filePath;
+  try {
+    filePath = resolveSafePathWithinWorkspace(normalizedPath, UI_DIST, "staticPath");
+  } catch (error) {
+    log("warn", "static file path rejected", {
+      path: rawPath,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return false;
+  }
 
   try {
     const stat = fs.statSync(filePath);
@@ -84,7 +113,12 @@ function tryServeStatic(urlPath, res) {
     });
     res.end(content);
     return true;
-  } catch {
+  } catch (error) {
+    log("warn", "static file read failed", {
+      path: rawPath,
+      filePath,
+      error: error instanceof Error ? error.message : String(error)
+    });
     return false;
   }
 }
@@ -99,7 +133,11 @@ function serveSpaFallback(res) {
     const content = fs.readFileSync(indexPath, "utf8");
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
     res.end(content);
-  } catch {
+  } catch (error) {
+    log("warn", "spa fallback failed", {
+      path: indexPath,
+      error: error instanceof Error ? error.message : String(error)
+    });
     res.writeHead(404, { "Content-Type": "text/plain" });
     res.end("UI not built. Run: cd ui && npm run build");
   }
@@ -120,7 +158,12 @@ const apiKeys = [
 const jwtSecret = process.env.LCS_API_JWT_SECRET || "";
 const jwtIssuer = process.env.LCS_API_JWT_ISSUER || "";
 const jwtAudience = parseCsvEnv(process.env.LCS_API_JWT_AUDIENCE);
-const jwtClockSkewSeconds = Number(process.env.LCS_API_JWT_CLOCK_SKEW_SECONDS || 30);
+const jwtClockSkewSeconds = parseTimeoutMs(
+  process.env.LCS_JWT_CLOCK_SKEW ?? process.env.LCS_API_JWT_CLOCK_SKEW_SECONDS,
+  30,
+  0,
+  600
+);
 const auth = createAuthMiddleware({
   requireAuth,
   apiKeys,
@@ -202,6 +245,19 @@ const server = http.createServer(async (req, res) => {
   // SPA fallback — serve index.html for client-side routing
   serveSpaFallback(res);
 });
+
+server.keepAliveTimeout = parseTimeoutMs(
+  process.env.LCS_KEEP_ALIVE_TIMEOUT ?? process.env.LCS_API_KEEP_ALIVE_TIMEOUT,
+  30_000
+);
+server.headersTimeout = parseTimeoutMs(
+  process.env.LCS_HEADERS_TIMEOUT ?? process.env.LCS_API_HEADERS_TIMEOUT,
+  30_000
+);
+server.requestTimeout = parseTimeoutMs(
+  process.env.LCS_REQUEST_TIMEOUT ?? process.env.LCS_API_REQUEST_TIMEOUT,
+  60_000
+);
 
 server.listen(port, host, () => {
   console.log(`NEXUS production server listening on http://${host}:${port}`);

@@ -4,6 +4,8 @@
  * Set OPENROUTER_API_KEY env var, or GROQ_API_KEY for Groq fallback.
  */
 
+import { log } from "../core/logger.js";
+
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
@@ -87,7 +89,12 @@ export async function chatCompletion({ query, context, model }) {
         tokens: data.usage?.total_tokens ?? 0,
         provider: p.name
       };
-    } catch {
+    } catch (error) {
+      log("warn", "openrouter provider call failed", {
+        provider: p.name,
+        model: p.model,
+        error: error instanceof Error ? error.message : String(error)
+      });
       continue;
     }
   }

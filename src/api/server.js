@@ -131,6 +131,77 @@ function createRequestId() {
 }
 
 /**
+ * @param {unknown} value
+ * @param {boolean} fallback
+ */
+function parseBooleanFlag(value, fallback = false) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return fallback;
+}
+
+/**
+ * @param {unknown} value
+ * @param {number} fallback
+ * @param {number} [min]
+ * @param {number} [max]
+ */
+function parseTimeoutMs(value, fallback, min = 1_000, max = 600_000) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < min || numeric > max) {
+    return fallback;
+  }
+
+  return Math.trunc(numeric);
+}
+
+/**
+ * @param {ReturnType<typeof buildNexusOpenApiSpec>} spec
+ * @param {{ includeDemoPath: boolean }} options
+ */
+function buildSanitizedOpenApiSpec(spec, options) {
+  const sanitized = structuredClone(spec);
+
+  delete sanitized.security;
+
+  if (sanitized.components && typeof sanitized.components === "object" && !Array.isArray(sanitized.components)) {
+    delete sanitized.components.securitySchemes;
+  }
+
+  if (!options.includeDemoPath) {
+    delete sanitized.paths["/api/demo"];
+  }
+
+  for (const methods of Object.values(sanitized.paths)) {
+    if (!methods || typeof methods !== "object" || Array.isArray(methods)) {
+      continue;
+    }
+
+    for (const descriptor of Object.values(methods)) {
+      if (!descriptor || typeof descriptor !== "object" || Array.isArray(descriptor)) {
+        continue;
+      }
+
+      delete descriptor.security;
+    }
+  }
+
+  return sanitized;
+}
+
+/**
  * @param {{
  *   rawChunks?: number,
  *   rawTokens?: number,
@@ -1354,6 +1425,14 @@ function normalizePromptRequest(body, endpoint) {
  *   },
  *   evals?: {
  *     defaultDomainSuitePath?: string
+ *   },
+ *   demo?: {
+ *     enabled?: boolean
+ *   },
+ *   timeouts?: {
+ *     keepAliveTimeoutMs?: number,
+ *     headersTimeoutMs?: number,
+ *     requestTimeoutMs?: number
  *   }
  * }} [options]
  */
@@ -1511,11 +1590,20 @@ export function createNexusApiServer(options = {}) {
   const defaultDomainSuitePath = path.resolve(
     options.evals?.defaultDomainSuitePath ?? "benchmark/domain-eval-suite.json"
   );
-  const openApiSpec = buildNexusOpenApiSpec({
-    title: options.openApi?.title,
-    version: options.openApi?.version,
-    description: options.openApi?.description
-  });
+  const demoEnabled = parseBooleanFlag(
+    options.demo?.enabled ?? process.env.LCS_DEMO_ENABLED,
+    false
+  );
+  const openApiSpec = buildSanitizedOpenApiSpec(
+    buildNexusOpenApiSpec({
+      title: options.openApi?.title,
+      version: options.openApi?.version,
+      description: options.openApi?.description
+    }),
+    {
+      includeDemoPath: demoEnabled
+    }
+  );
   const demoPage = buildNexusDemoPage();
   const compatibilityRoutes = [
     "GET /api/health",
@@ -1526,7 +1614,6 @@ export function createNexusApiServer(options = {}) {
     "POST /api/chat",
     "POST /api/guard",
     "GET /api/openapi.json",
-    "GET /api/demo",
     "GET /api/guard/policies",
     "POST /api/guard/output",
     "POST /api/pipeline/run",
@@ -1542,6 +1629,9 @@ export function createNexusApiServer(options = {}) {
     "GET /api/versioning/compare",
     "POST /api/versioning/rollback-plan"
   ];
+  if (demoEnabled) {
+    compatibilityRoutes.splice(compatibilityRoutes.indexOf("GET /api/guard/policies"), 0, "GET /api/demo");
+  }
 
   const host = options.host ?? "127.0.0.1";
   const port = Math.max(0, Number(options.port ?? 8787));
@@ -1621,9 +1711,11 @@ export function createNexusApiServer(options = {}) {
           "/api/routes",
           "/api/metrics",
           "/api/openapi.json",
-          "/api/demo",
           "/api/guard/policies"
         ]);
+        if (demoEnabled) {
+          earlyCompatibilityPath.add("/api/demo");
+        }
 
         if (earlyCompatibilityPath.has(pathname)) {
           const authResult = auth.authorize({
@@ -1720,6 +1812,24 @@ export function createNexusApiServer(options = {}) {
       }
 
       if (method === "GET" && pathname === "/api/demo") {
+        if (!demoEnabled) {
+          sendErrorJson(response, 404, {
+            requestId,
+            code: "route_not_found",
+            message: "Route GET /api/demo not found."
+          });
+          await recordApiMetric("api.demo", requestStartedAt, {
+            command: "api.demo",
+            durationMs: 0,
+            degraded: true,
+            safety: {
+              blocked: true,
+              reason: "demo-disabled"
+            }
+          });
+          return;
+        }
+
         sendHtml(response, 200, demoPage);
         await recordApiMetric("api.demo", requestStartedAt);
         return;
@@ -2869,6 +2979,28 @@ export function createNexusApiServer(options = {}) {
       );
     }
   });
+
+  const keepAliveTimeoutMs = parseTimeoutMs(
+    options.timeouts?.keepAliveTimeoutMs ??
+      process.env.LCS_KEEP_ALIVE_TIMEOUT ??
+      process.env.LCS_API_KEEP_ALIVE_TIMEOUT,
+    30_000
+  );
+  const headersTimeoutMs = parseTimeoutMs(
+    options.timeouts?.headersTimeoutMs ??
+      process.env.LCS_HEADERS_TIMEOUT ??
+      process.env.LCS_API_HEADERS_TIMEOUT,
+    30_000
+  );
+  const requestTimeoutMs = parseTimeoutMs(
+    options.timeouts?.requestTimeoutMs ??
+      process.env.LCS_REQUEST_TIMEOUT ??
+      process.env.LCS_API_REQUEST_TIMEOUT,
+    60_000
+  );
+  server.keepAliveTimeout = keepAliveTimeoutMs;
+  server.headersTimeout = headersTimeoutMs;
+  server.requestTimeout = requestTimeoutMs;
 
   return {
     host,

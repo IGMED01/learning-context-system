@@ -2,6 +2,7 @@
 
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { log } from "../core/logger.js";
 
 /**
  * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
@@ -142,12 +143,30 @@ function resolveQuarantineBaseDir(cwd = process.cwd(), quarantineDir) {
 async function readEntries(filePath) {
   try {
     const raw = await readFile(filePath, "utf8");
-    return raw
+    const lines = raw
       .split(/\r?\n/u)
       .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter((entry) => entry && typeof entry === "object");
+      .filter(Boolean);
+    /** @type {MemoryEntry[]} */
+    const parsed = [];
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      try {
+        const entry = JSON.parse(line);
+        if (entry && typeof entry === "object") {
+          parsed.push(/** @type {MemoryEntry} */ (entry));
+        }
+      } catch (error) {
+        log("warn", "memory hygiene skipped corrupted JSONL line", {
+          filePath,
+          lineNumber: index + 1,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    return parsed;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
