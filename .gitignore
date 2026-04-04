@@ -12,6 +12,18 @@ ESTRATEGIA-AGENTES-PRIVADO.md
 engram_*.zip
 tools/engram/
 
+# Local env vars (never commit credentials)
+.env
+.env.local
+
+# TLS certificates (never commit private keys)
+certs/
+
+# Demo UI — local only, not published to GitHub
+ui/
+src/interface/nexus-demo-page.html
+src/interface/nexus-demo-page.js
+
 # Node / build
 node_modules/
 dist/

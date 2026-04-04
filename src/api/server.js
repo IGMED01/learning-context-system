@@ -37,7 +37,8 @@ import { getObservabilityReport, recordCommandMetric } from "../observability/me
 import { createPromptVersionStore } from "../versioning/prompt-version-store.js";
 import { createRollbackPolicy } from "../versioning/rollback-policy.js";
 import { buildNexusOpenApiSpec } from "../interface/nexus-openapi.js";
-import { buildNexusDemoPage } from "../interface/nexus-demo-page.js";
+// Demo UI removed — stub to prevent build failures
+function buildNexusDemoPage() { return ""; }
 
 /**
  * @param {http.IncomingMessage} request

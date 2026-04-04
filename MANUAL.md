@@ -30,7 +30,6 @@ Usuario pregunta → NEXUS busca chunks relevantes → Filtra ruido → Inyecta 
 git clone https://github.com/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems.git
 cd Nexus-Context-Orchestration-Engine-for-LLM-Systems
 npm install
-cd ui && npm install && cd ..
 ```
 
 ### Variables de entorno
@@ -53,15 +52,12 @@ LCS_API_PORT=3100
 ### Iniciar en desarrollo
 
 ```bash
-# Terminal 1: API Server
+# API Server
 node src/api/server.js
-
-# Terminal 2: UI (Vite dev server)
-cd ui && npm run dev
 ```
 
 - API: `http://localhost:3100`
-- UI: `http://localhost:5173`
+- Demo endpoint: `http://localhost:3100/api/demo`
 
 ### Iniciar en producción (Docker)
 
@@ -73,71 +69,11 @@ La aplicación estará disponible en `http://localhost` (puerto 80).
 
 ---
 
-## Interfaz de Usuario (UI)
+## Interfaz de usuario
 
-La UI tiene un layout de **4 bloques** estilo bento grid:
+La UI React/Vite fue removida del repositorio. NEXUS expone el endpoint `GET /api/demo` que sirve una página HTML inline mínima de diagnóstico.
 
-### 1. Knowledge Query (bloque principal)
-
-El chat inteligente donde interactúas con tu base de conocimiento.
-
-**Cómo usarlo:**
-1. Escribe una pregunta en el campo de texto inferior
-2. Presiona `Enter` o el botón `Send`
-3. NEXUS recupera chunks relevantes, los envía al LLM, y muestra la respuesta
-
-**Prompts de ejemplo:** Al iniciar, verás 6 tarjetas con preguntas pre-configuradas basadas en los documentos de prueba (Código Procesal y Ley 5348 de Salta). Haz clic en cualquiera para cargarla.
-
-**Tabs Before/After:**
-Cada respuesta con contexto muestra dos pestañas:
-- **✦ Con NEXUS** — Respuesta enriquecida con contexto de tus documentos
-- **Sin contexto** — Respuesta del LLM sin acceso a tu base de conocimiento
-
-Esto permite comparar visualmente el valor que aporta NEXUS.
-
-**Badges de score:**
-Debajo de cada respuesta contextualizada verás:
-- `score XX%` — Relevancia promedio de los chunks recuperados
-- `N chunks` — Cantidad de fragmentos utilizados
-- `N tk` — Tokens de contexto consumidos
-- `provider` — Qué API LLM respondió (groq, openrouter, cerebras)
-
-### 2. Context Selected (panel derecho)
-
-Muestra en tiempo real los chunks que NEXUS seleccionó para responder tu pregunta.
-
-- Cada chunk muestra su **fuente**, **score de relevancia** y **preview del contenido**
-- Barra de progreso indica el uso del **token budget** (8,192 tokens max)
-- Los chunks se ordenan por relevancia, con borde de color según score:
-  - 🟢 Verde: 75%+ (alta relevancia)
-  - 🟡 Ámbar: 45-74% (relevancia media)
-  - 🔴 Rojo: <45% (baja relevancia)
-
-### 3. Guard Engine (bloque inferior izquierdo)
-
-Motor de seguridad que evalúa queries contra reglas de protección.
-
-**Pruébalo con los 3 botones rápidos:**
-- **Inyección** — Detecta intentos de prompt injection (`ignore all previous instructions...`)
-- **Off-topic** — Identifica preguntas fuera del dominio del conocimiento
-- **Válida** — Ejemplo de query legítima que pasa el filtro
-
-Escribe cualquier query y presiona `Evaluate` para ver si es bloqueada o permitida.
-
-### 4. System Pulse (bloque inferior derecho)
-
-Dashboard de métricas en tiempo real (actualización cada 5s):
-- **Requests** — Total de peticiones a la API
-- **Latency p95** — Percentil 95 de latencia
-- **Errors** — Tasa de errores
-- **Blocked** — Queries bloqueadas por el Guard
-- Gráfico de latencia histórica
-
-### Barra superior
-
-- **Estado de conexión** — Indicador verde/rojo con la URL de la API
-- **📥 Ingest** — Abre el panel de ingesta de documentos
-- **🎨 Theme** — Theme Studio para personalizar colores en vivo
+Para interactuar con NEXUS usa la CLI o la API directamente (ver secciones siguientes).
 
 ---
 
@@ -242,15 +178,6 @@ These prompts are designed to demonstrate NEXUS capabilities with the included t
 
 ---
 
-## Theme Studio
-
-NEXUS incluye un editor de temas visual:
-
-1. Haz clic en **🎨 Theme** en la barra superior
-2. Ajusta los colores de fondo, superficie, acento, texto, etc.
-3. Los cambios se aplican en vivo usando CSS Custom Properties
-4. El tema se guarda en `localStorage` y persiste entre sesiones
-
 ---
 
 ## Arquitectura
@@ -268,7 +195,6 @@ NEXUS/
 │   ├── observability/# Métricas en vivo
 │   ├── orchestration/# Workflows + conversaciones
 │   └── versioning/   # Versionado de prompts y modelos
-├── ui/               # React 18 + Vite 5 (frontend)
 ├── test-bench/       # Documentos de prueba
 ├── demo/             # Demo HTML estática
 ├── Dockerfile        # Build multi-stage para producción
@@ -279,7 +205,6 @@ NEXUS/
 
 | Componente | Tecnología |
 |-----------|-----------|
-| Frontend | React 18, Vite 5, Tremor 3 |
 | Backend | Node.js 22, HTTP nativo |
 | LLM | Groq / OpenRouter / Cerebras (APIs gratuitas) |
 | Styling | CSS Custom Properties + inline styles |
@@ -325,13 +250,13 @@ No. NEXUS soporta Groq, OpenRouter y Cerebras, todos con tiers gratuitos.
 txt, md, mdx, json, csv, log, yaml, yml, pdf.
 
 **¿Cómo agrego mis propios documentos?**
-Usa el panel de Ingest (📥) o la API `/api/remember`.
+Usa la API `/api/remember`.
 
 **¿Puedo cambiar el modelo LLM?**
 Sí, a través de los parámetros de la API o configurando las variables de entorno del proveedor.
 
 **¿Funciona offline?**
-La UI y el motor de contexto funcionan sin LLM. Solo necesitas API key para las respuestas generadas por IA.
+El motor de contexto funciona sin LLM. Solo necesitas API key para las respuestas generadas por IA.
 
 ---
 

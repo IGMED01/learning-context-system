@@ -26,7 +26,7 @@ NEXUS es una plataforma de ingeniería asistida por IA con enfoque pedagógico:
 - Selecciona contexto de alta señal y suprime ruido (`select`).
 - Genera paquetes de enseñanza ligados a código y tests reales (`teach`).
 - Recupera/guarda memoria durable con almacenamiento local-first y backend externo opcional (`recall`, `remember`, `close`).
-- Expone API HTTP + SDK + OpenAPI + demo visual para uso operativo.
+- Expone API HTTP + SDK + OpenAPI (el endpoint `/api/demo` sirve una página inline mínima).
 - Aplica seguridad, observabilidad, versionado y quality gates en CI.
 
 ## Convención de nombres

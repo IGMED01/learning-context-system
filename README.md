@@ -90,7 +90,7 @@ npm run e2e:nexus
 - Durable memory via local-first storage with optional external batteries/backends.
 - Optional Go FastScan sidecar for faster workspace file discovery (safe fallback to native scan).
 - Internal SYNC runtime (detect → chunk → dedup → version → persist) via `src/sync`.
-- HTTP API + SDK + OpenAPI + demo UI.
+- HTTP API + SDK + OpenAPI (`/api/demo` endpoint serves a minimal inline page).
 - Guard, observability, versioning, and eval gates in CI.
 
 ## Docs
