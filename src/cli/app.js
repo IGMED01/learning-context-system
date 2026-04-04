@@ -723,7 +723,6 @@ function getMemoryClient(options, dependencies) {
 
   const local = getLocalMemoryClient(options, dependencies);
   const fallbackEnabled = booleanOption(options, "local-memory-fallback", true);
-  const batteryEnabled = booleanOption(options, "external-battery", true);
   const primaryChain = createResilientMemoryClient({
     primary: /** @type {any} */ (local),
     fallback: /** @type {any} */ (local),
