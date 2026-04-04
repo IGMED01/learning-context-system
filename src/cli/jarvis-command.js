@@ -305,7 +305,7 @@ export async function runJarvisCommand(opts) {
           ].filter(Boolean).join("\n"),
           { maxTokens: 600, temperature: 0 }
         );
-        proposalOutput = typeof proposalResult === "string" ? proposalResult : (proposalResult.text ?? "");
+        proposalOutput = typeof proposalResult === "string" ? proposalResult : (proposalResult.content ?? "");
       }
     } catch {
       // Proposal is optional — proceed without it
@@ -384,7 +384,7 @@ export async function runJarvisCommand(opts) {
           ].join("\n"),
           { maxTokens: 800, temperature: 0 }
         );
-        const text = typeof reviewResult === "string" ? reviewResult : (reviewResult.text ?? "[]");
+        const text = typeof reviewResult === "string" ? reviewResult : (reviewResult.content ?? "[]");
         const cleaned = text.replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "").trim();
         const parsed = JSON.parse(cleaned);
         return { findings: Array.isArray(parsed) ? parsed : [] };
