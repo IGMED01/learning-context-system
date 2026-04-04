@@ -28,9 +28,10 @@ import { createAxiomInjector } from "../memory/axiom-injector.js";
 // ── Task classification ───────────────────────────────────────────────
 
 const TASK_PATTERNS = [
+  // test_only antes que recall: "write tests for recall module" debe ser test_only, no recall
+  { type: "test_only",     pattern: /\b(escribir tests?|write tests?|agregar tests?|add tests?|test coverage|crear tests?|create tests?)\b/i },
   { type: "recall",        pattern: /\b(recordar|recall|qué decidimos|what did we|explain|explicar|lookup|qué hace|what is)\b/i },
-  { type: "audit",         pattern: /\b(audit|revisar código|security check|review only|solo revisar)\b/i },
-  { type: "test_only",     pattern: /\b(escribir tests|write tests|agregar tests|add tests|test coverage)\b/i },
+  { type: "audit",         pattern: /\b(audit|auditar|revisar c[oó]digo|security check|review only|solo revisar|code review)\b/i },
   { type: "security_scan", pattern: /\b(es seguro|is this safe|viola|violates|check axioms|chequear axiomas)\b/i }
 ];
 
