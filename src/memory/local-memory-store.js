@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { createChunkRepository } from "../storage/chunk-repository.js";
 import { buildCloseSummaryContent } from "./memory-utils.js";
+import { tokenize, slugify, compactText, truncate as truncateText, makeTimestampId } from "../utils/text-utils.js";
 
 /**
  * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
@@ -20,57 +21,14 @@ import { buildCloseSummaryContent } from "./memory-utils.js";
 
 /**
  * @param {string} value
- * @returns {string}
- */
-function compactLine(value) {
-  return String(value).replace(/\s+/gu, " ").trim();
-}
-
-/**
- * @param {string} value
- * @returns {string}
- */
-function slugify(value) {
-  const slug = compactLine(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/(^-|-$)/gu, "");
-
-  return slug || "memory";
-}
-
-/**
- * @param {string} value
  * @param {number} maxLength
  * @returns {string}
  */
 function truncate(value, maxLength) {
-  const compacted = compactLine(value);
-  return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 3)}...` : compacted;
+  return truncateText(value, maxLength);
 }
 
 // ── TF-IDF Search Engine ─────────────────────────────────────────────
-
-/** Common stopwords filtered from search queries and documents */
-const STOPWORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "by", "de", "del", "el", "en",
-  "es", "for", "from", "has", "he", "in", "is", "it", "its", "la", "las",
-  "lo", "los", "of", "on", "or", "que", "se", "the", "to", "un", "una",
-  "was", "were", "will", "with", "y"
-]);
-
-/**
- * Tokenize text into normalized terms, filtering stopwords.
- * @param {string} text
- * @returns {string[]}
- */
-function tokenize(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\u00e0-\u024f]+/gu, " ")
-    .split(/\s+/u)
-    .filter((t) => t.length > 1 && !STOPWORDS.has(t));
-}
 
 /**
  * Compute term frequency: count of each term / total terms.
@@ -244,7 +202,7 @@ function searchWithTFIDF(entries, query, options) {
  * @returns {string}
  */
 function projectFilePath(baseDir, project) {
-  const projectSlug = project ? slugify(project) : "_default";
+  const projectSlug = project ? slugify(project, { fallback: "_default" }) : "_default";
   return path.join(baseDir, projectSlug, "memories.jsonl");
 }
 
@@ -638,7 +596,7 @@ export function createLocalMemoryStore(options = {}) {
     const fp = projectFilePath(baseDir, input.project);
     const entries = await readEntries(fp);
     const createdAt = new Date().toISOString();
-    const id = `${createdAt.replace(/[-:.TZ]/gu, "")}-${slugify(input.title).slice(0, 20)}`;
+    const id = makeTimestampId(input.title);
 
     /** @type {MemoryEntry} */
     const entry = {

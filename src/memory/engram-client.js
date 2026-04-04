@@ -31,6 +31,22 @@ const execFile = promisify(execFileCallback);
  */
 
 /**
+ * Resolve the platform-specific default path for the Engram binary.
+ * On Windows: tools/engram/engram.exe
+ * On other platforms: tools/engram/engram
+ * Override with ENGRAM_BIN environment variable.
+ *
+ * @returns {string}
+ */
+function defaultEngramBinaryName() {
+  return process.env.ENGRAM_BIN ?? (
+    process.platform === "win32"
+      ? "tools/engram/engram.exe"
+      : "tools/engram/engram"
+  );
+}
+
+/**
  * @param {{ cwd?: string, binaryPath?: string, dataDir?: string }} [options]
  * @returns {EngramResolvedConfig}
  */
@@ -38,7 +54,7 @@ export function resolveEngramConfig(options = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const binaryPath = path.resolve(
     cwd,
-    options.binaryPath ?? process.env.ENGRAM_BIN ?? "tools/engram/engram.exe"
+    options.binaryPath ?? defaultEngramBinaryName()
   );
   const dataDir = path.resolve(cwd, options.dataDir ?? process.env.ENGRAM_DATA_DIR ?? ".engram");
 

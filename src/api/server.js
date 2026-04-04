@@ -1,6 +1,7 @@
 // @ts-check
 
 import http from "node:http";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { createAuthMiddleware } from "./auth-middleware.js";
 import { enforceOutputGuard } from "../guard/output-guard.js";
@@ -257,11 +258,27 @@ function getRequestUrl(request) {
  *   },
  *   evals?: {
  *     defaultDomainSuitePath?: string
+ *   },
+ *   rateLimit?: {
+ *     maxRequestsPerMinute?: number
+ *   },
+ *   cors?: {
+ *     origins?: string[]
  *   }
  * }} [options]
  */
 export function createNexusApiServer(options = {}) {
-  const auth = createAuthMiddleware(options.auth);
+  // Auto-generate an API key when auth is enabled but no keys/secret configured
+  const authConfig = { ...options.auth };
+  const hasKeys = authConfig.apiKeys && authConfig.apiKeys.length > 0;
+  const hasJwt = authConfig.jwtSecret && authConfig.jwtSecret.trim().length > 0;
+  if (authConfig.requireAuth !== false && !hasKeys && !hasJwt) {
+    const generatedKey = `nxs-${randomBytes(24).toString("hex")}`;
+    authConfig.apiKeys = [generatedKey];
+    process.stderr.write(`[nexus-api] Auth enabled — generated API key: ${generatedKey}\n`);
+    process.stderr.write(`[nexus-api] Pass it via header: x-api-key: ${generatedKey}\n`);
+  }
+  const auth = createAuthMiddleware(authConfig);
   const outputAuditor = createOutputAuditor({
     filePath: options.outputAuditFilePath
   });
@@ -458,13 +475,69 @@ export function createNexusApiServer(options = {}) {
     );
   }
 
+  // ── Rate limiter (sliding window per IP) ────────────────────────
+  const RATE_WINDOW_MS = 60_000;
+  const RATE_MAX_REQUESTS = options.rateLimit?.maxRequestsPerMinute ?? 120;
+  /** @type {Map<string, { count: number, resetAt: number }>} */
+  const rateBuckets = new Map();
+
+  // Evict expired buckets every 5 minutes to prevent unbounded growth
+  const evictInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [ip, bucket] of rateBuckets) {
+      if (now > bucket.resetAt) rateBuckets.delete(ip);
+    }
+  }, 5 * 60_000);
+  evictInterval.unref(); // Don't keep process alive for this timer
+
+  /**
+   * @param {string} ip
+   * @returns {boolean}
+   */
+  function isRateLimited(ip) {
+    const now = Date.now();
+    const bucket = rateBuckets.get(ip);
+    if (!bucket || now > bucket.resetAt) {
+      rateBuckets.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
+      return false;
+    }
+    bucket.count += 1;
+    return bucket.count > RATE_MAX_REQUESTS;
+  }
+
+  // CORS configuration
+  const allowedOrigins = options.cors?.origins ?? ["*"];
+
   const server = http.createServer(async (request, response) => {
     const requestStartedAt = Date.now();
     const requestId = createRequestId();
     response.setHeader("x-request-id", requestId);
 
+    // CORS headers
+    const origin = request.headers.origin ?? "";
+    const corsAllowed = allowedOrigins.includes("*") || allowedOrigins.includes(origin);
+    response.setHeader("Access-Control-Allow-Origin", corsAllowed ? (origin || "*") : "");
+    response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type, x-api-key, Authorization");
+    response.setHeader("Access-Control-Max-Age", "86400");
+
     try {
       const method = request.method ?? "GET";
+
+      // Handle CORS preflight
+      if (method === "OPTIONS") {
+        response.statusCode = 204;
+        response.end();
+        return;
+      }
+
+      // Rate limiting
+      const clientIp = request.socket.remoteAddress ?? "unknown";
+      if (isRateLimited(clientIp)) {
+        sendJson(response, 429, { error: "Too many requests. Retry after 60 seconds." });
+        return;
+      }
+
       const requestUrl = getRequestUrl(request);
       const pathname = requestUrl.pathname || "/";
 

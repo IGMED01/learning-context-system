@@ -189,7 +189,7 @@ export async function detectClusters(opts) {
 
 /**
  * Generate a system prompt for a specialist agent from cluster axioms.
- * This is a template-based synthesis (LLM synthesis is in the ruflo-nexus-agent bridge).
+ * This is a template-based synthesis via LLM meta-programming.
  *
  * @param {AxiomCluster} cluster
  * @returns {string}

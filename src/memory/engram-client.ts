@@ -6,7 +6,13 @@ import type {
   Chunk,
   EngramCommandResult,
   EngramResolvedConfig,
-  EngramSearchOptions
+  EngramSearchOptions,
+  MemorySearchOptions,
+  MemorySaveInput,
+  MemorySearchResult,
+  MemorySaveResult,
+  MemoryHealthResult,
+  MemoryEntry
 } from "../types/core-contracts.d.ts";
 
 const execFile = promisify(execFileCallback);
@@ -68,6 +74,18 @@ interface ExecErrorLike {
   message?: unknown;
 }
 
+/**
+ * Return the platform-appropriate default Engram binary name.
+ * Prefers ENGRAM_BIN environment variable, then platform detection.
+ */
+function defaultEngramBinaryName(): string {
+  return process.env.ENGRAM_BIN ?? (
+    process.platform === "win32"
+      ? "tools/engram/engram.exe"
+      : "tools/engram/engram"
+  );
+}
+
 export function resolveEngramConfig(options: {
   cwd?: string;
   binaryPath?: string;
@@ -76,7 +94,7 @@ export function resolveEngramConfig(options: {
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const binaryPath = path.resolve(
     cwd,
-    options.binaryPath ?? process.env.ENGRAM_BIN ?? "tools/engram/engram.exe"
+    options.binaryPath ?? defaultEngramBinaryName()
   );
   const dataDir = path.resolve(cwd, options.dataDir ?? process.env.ENGRAM_DATA_DIR ?? ".engram");
 
@@ -420,8 +438,71 @@ export function createEngramClient(options: CreateEngramClientOptions = {}) {
     };
   }
 
+  // ── MemoryProvider interface methods ──
+
+  async function search(query: string, searchOpts: MemorySearchOptions = {}): Promise<MemorySearchResult> {
+    const result = await searchMemories(query, searchOpts);
+    const entries: MemoryEntry[] = result.stdout
+      ? result.stdout.split(/\n/).filter(l => l.trim()).slice(0, searchOpts.limit ?? 5).map((line, i) => ({
+          id: `engram-${i}`,
+          title: line.trim(),
+          content: line.trim(),
+          type: "memory",
+          project: searchOpts.project ?? "",
+          scope: searchOpts.scope ?? "project",
+          topic: "",
+          createdAt: new Date().toISOString()
+        }))
+      : [];
+    return { entries, stdout: result.stdout, provider: "engram" };
+  }
+
+  async function save(input: MemorySaveInput): Promise<MemorySaveResult> {
+    const result = await saveMemory(input);
+    const idMatch = result.stdout?.match(/#([^\s]+)/);
+    return { id: idMatch?.[1] ?? `engram-${Date.now()}`, stdout: result.stdout, provider: "engram" };
+  }
+
+  async function deleteMemory(_id: string, _project?: string): Promise<{ deleted: boolean; id: string }> {
+    return { deleted: false, id: _id };
+  }
+
+  async function list(listOpts: { project?: string; limit?: number } = {}): Promise<MemoryEntry[]> {
+    const result = await recallContext(listOpts.project);
+    const limit = listOpts.limit ?? 50;
+    return result.stdout
+      ? result.stdout.split(/\n/).filter(l => l.trim()).slice(0, limit).map((line, i) => ({
+          id: `engram-list-${i}`,
+          title: line.trim(),
+          content: line.trim(),
+          type: "memory",
+          project: listOpts.project ?? "",
+          scope: "project",
+          topic: "",
+          createdAt: new Date().toISOString()
+        }))
+      : [];
+  }
+
+  async function health(): Promise<MemoryHealthResult> {
+    try {
+      await execute(["--version"]);
+      return { healthy: true, provider: "engram", detail: `Engram binary at ${config.binaryPath}` };
+    } catch (error) {
+      return { healthy: false, provider: "engram", detail: `Engram not available: ${error instanceof Error ? error.message : error}` };
+    }
+  }
+
   return {
+    name: "engram" as const,
     config,
+    // MemoryProvider interface
+    search,
+    save,
+    delete: deleteMemory,
+    list,
+    health,
+    // Legacy compatibility
     recallContext,
     searchMemories,
     saveMemory,

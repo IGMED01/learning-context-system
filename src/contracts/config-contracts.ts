@@ -67,6 +67,25 @@ export interface ProjectGuardConfig {
   defaultBlockMessage: string;
 }
 
+export interface ProjectLlmConfig {
+  provider: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  tokenBudget: number;
+  maxContextChunks: number;
+  requireAuth: boolean;
+  apiKeys: string[];
+}
+
+export interface ProjectModelsConfig {
+  proposal: string;
+  codegen: string;
+  review: string;
+  security: string;
+  repair: string;
+}
+
 export interface ProjectConfig {
   schemaVersion: string;
   project: string;
@@ -79,6 +98,8 @@ export interface ProjectConfig {
   scan: ProjectScanConfig;
   safety: ProjectSafetyConfig;
   guard: ProjectGuardConfig;
+  llm: ProjectLlmConfig;
+  models: ProjectModelsConfig;
 }
 
 function fail(message: string): never {
@@ -185,7 +206,7 @@ export function defaultProjectConfig(): ProjectConfig {
       autoRemember: false
     },
     engram: {
-      binaryPath: "tools/engram/engram.exe",
+      binaryPath: process.platform === "win32" ? "tools/engram/engram.exe" : "tools/engram/engram",
       dataDir: ".engram"
     },
     security: {
@@ -210,6 +231,23 @@ export function defaultProjectConfig(): ProjectConfig {
       enabled: false,
       rules: [],
       defaultBlockMessage: "This query is outside the scope of this project."
+    },
+    llm: {
+      provider: "claude",
+      model: "claude-3-5-sonnet-20241022",
+      temperature: 0.2,
+      maxTokens: 700,
+      tokenBudget: 520,
+      maxContextChunks: 8,
+      requireAuth: true,
+      apiKeys: []
+    },
+    models: {
+      proposal: "",
+      codegen: "",
+      review: "",
+      security: "",
+      repair: ""
     }
   };
 }
@@ -256,6 +294,10 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
     assertObject(config.llm, "Project config.llm");
   }
 
+  if (config.models !== undefined) {
+    assertObject(config.models, "Project config.models");
+  }
+
   const output = config.output;
   const selection = config.selection;
   const memory = config.memory;
@@ -264,6 +306,8 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
   const scan = config.scan;
   const safety = config.safety;
   const guard = config.guard;
+  const llm = config.llm as Record<string, unknown> | undefined;
+  const models = config.models as Record<string, unknown> | undefined;
 
   const defaultFormat = optionalString(output?.defaultFormat, "Project config.output.defaultFormat");
 
@@ -421,6 +465,23 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
       defaultBlockMessage:
         optionalString(guard?.defaultBlockMessage, "Project config.guard.defaultBlockMessage") ??
         defaults.guard.defaultBlockMessage
+    },
+    llm: {
+      provider: optionalString(llm?.provider, "Project config.llm.provider") ?? defaults.llm.provider,
+      model: optionalString(llm?.model, "Project config.llm.model") ?? defaults.llm.model,
+      temperature: optionalNumber(llm?.temperature, "Project config.llm.temperature", { min: 0, max: 2 }) ?? defaults.llm.temperature,
+      maxTokens: optionalNumber(llm?.maxTokens, "Project config.llm.maxTokens", { min: 64, integer: true }) ?? defaults.llm.maxTokens,
+      tokenBudget: optionalNumber(llm?.tokenBudget, "Project config.llm.tokenBudget", { min: 80, integer: true }) ?? defaults.llm.tokenBudget,
+      maxContextChunks: optionalNumber(llm?.maxContextChunks, "Project config.llm.maxContextChunks", { min: 1, integer: true }) ?? defaults.llm.maxContextChunks,
+      requireAuth: optionalBoolean(llm?.requireAuth, "Project config.llm.requireAuth") ?? defaults.llm.requireAuth,
+      apiKeys: optionalStringArray(llm?.apiKeys, "Project config.llm.apiKeys") ?? defaults.llm.apiKeys
+    },
+    models: {
+      proposal: optionalString(models?.proposal, "Project config.models.proposal") ?? defaults.models.proposal,
+      codegen: optionalString(models?.codegen, "Project config.models.codegen") ?? defaults.models.codegen,
+      review: optionalString(models?.review, "Project config.models.review") ?? defaults.models.review,
+      security: optionalString(models?.security, "Project config.models.security") ?? defaults.models.security,
+      repair: optionalString(models?.repair, "Project config.models.repair") ?? defaults.models.repair
     }
   };
 }

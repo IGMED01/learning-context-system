@@ -1,5 +1,7 @@
 // @ts-check
 
+import { sleep } from "../utils/text-utils.js";
+
 /**
  * @typedef {import("../types/core-contracts.d.ts").RetryConfig} RetryConfig
  */
@@ -42,10 +44,3 @@ export async function withRetry(fn, config = {}) {
   throw lastError;
 }
 
-/**
- * @param {number} ms
- * @returns {Promise<void>}
- */
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}

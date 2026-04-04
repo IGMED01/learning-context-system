@@ -9,7 +9,7 @@
  *   - Max iterations: configurable (default 3)
  *   - Loop guard: stops on same-error fingerprint (avoids infinite loops)
  *   - Trace: saves each attempt with gate result and repair prompt
- *   - Repair: delegates to Ruflo coder agent or inline LLM call
+ *   - Repair: inline heuristic fixes + LLM-guided correction
  *
  * DoD Sprint 4:
  *   ✓ First repair loop stable
@@ -18,7 +18,7 @@
  */
 
 import { runCodeGate, getGateErrors, formatGateErrors } from "../guard/code-gate.js";
-import { spawnAgent, isRufloSwarmAvailable } from "./ruflo-swarm-adapter.js";
+import { createClaudeProvider } from "../llm/claude-provider.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").CodeGateResult} CodeGateResult */
 /** @typedef {import("../types/core-contracts.d.ts").CodeGateError} CodeGateError */
@@ -92,33 +92,6 @@ function buildRepairPrompt(code, errors, context = "") {
 }
 
 /**
- * Attempt a repair using Ruflo's coder agent.
- *
- * @param {string} code
- * @param {CodeGateError[]} errors
- * @param {string} [context]
- * @returns {Promise<string | null>}
- */
-async function repairWithRuflo(code, errors, context) {
-  const prompt = buildRepairPrompt(code, errors, context);
-
-  const result = await spawnAgent({
-    agentType: "coder",
-    name: `nexus-repair-${Date.now()}`,
-    task: "Fix compilation errors in the provided code",
-    context: prompt
-  });
-
-  if (!result.success || !result.output) {
-    return null;
-  }
-
-  // Extract code block from agent output if wrapped in markdown fences
-  const codeMatch = result.output.match(/```(?:\w+)?\n([\s\S]+?)```/);
-  return codeMatch ? codeMatch[1].trim() : result.output.trim() || null;
-}
-
-/**
  * Attempt an inline repair (no external agent — simple heuristic fixes).
  *
  * @param {string} code
@@ -132,8 +105,7 @@ function repairInline(code, errors) {
   for (const error of errors) {
     // TS2304: Cannot find name 'X' — often a missing type import
     if (error.code === "TS2304" || error.code === "TS2552") {
-      const nameMatch = error.message.match(/Cannot find name '(\w+)'/);
-      if (nameMatch) {
+      if (/Cannot find name '\w+'/.test(error.message)) {
         // Add a // @ts-ignore as a minimal fix to unblock the loop
         const lines = patched.split("\n");
         const lineIndex = (error.line ?? 1) - 1;
@@ -157,6 +129,35 @@ function repairInline(code, errors) {
 }
 
 /**
+ * Attempt an LLM-guided repair using the Claude provider.
+ *
+ * @param {string} code
+ * @param {CodeGateError[]} errors
+ * @param {{ apiKey?: string, model?: string, context?: string, prompt?: string }} opts
+ * @returns {Promise<string | null>}
+ */
+async function repairWithLlm(code, errors, opts = {}) {
+  const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  const provider = createClaudeProvider({ apiKey, model: opts.model });
+  // Use pre-built prompt if provided, otherwise build it (avoids redundant computation)
+  const prompt = opts.prompt ?? buildRepairPrompt(code, errors, opts.context);
+
+  try {
+    const result = await provider.generate(prompt, { maxTokens: 4096, temperature: 0 });
+    const text = typeof result.text === "string" ? result.text.trim() : "";
+    if (!text || text.length < 10) return null;
+
+    // Strip markdown fences if the LLM wrapped the response
+    const cleaned = text.replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "");
+    return cleaned || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Run the repair loop.
  *
  * @param {{
@@ -165,7 +166,8 @@ function repairInline(code, errors) {
  *   tools?: Array<"lint" | "typecheck" | "build" | "test">,
  *   maxIterations?: number,
  *   context?: string,
- *   useRuflo?: boolean,
+ *   apiKey?: string,
+ *   model?: string,
  *   onAttempt?: (attempt: RepairAttempt) => void
  * }} opts
  * @returns {Promise<RepairLoopResult>}
@@ -177,12 +179,12 @@ export async function runRepairLoop(opts) {
     tools = ["typecheck", "lint"],
     maxIterations = 3,
     context,
-    useRuflo,
+    apiKey,
+    model,
     onAttempt
   } = opts;
 
   const start = Date.now();
-  const rufloAvailable = useRuflo !== false && (await isRufloSwarmAvailable());
 
   /** @type {RepairAttempt[]} */
   const attempts = [];
@@ -238,14 +240,11 @@ export async function runRepairLoop(opts) {
 
     seenFingerprints.add(fingerprint);
 
-    // Attempt repair
+    // Attempt repair — LLM first, inline heuristic fallback
     let repairedCode = null;
-    let repairPrompt = buildRepairPrompt(currentCode, errors, context);
+    const repairPrompt = buildRepairPrompt(currentCode, errors, context);
 
-    if (rufloAvailable) {
-      repairedCode = await repairWithRuflo(currentCode, errors, context);
-    }
-
+    repairedCode = await repairWithLlm(currentCode, errors, { apiKey, model, context, prompt: repairPrompt });
     if (!repairedCode) {
       repairedCode = repairInline(currentCode, errors);
     }

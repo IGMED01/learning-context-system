@@ -1,5 +1,7 @@
 // @ts-check
 
+import { compactText as compactTextUtil } from "../utils/text-utils.js";
+
 const DEFAULT_MAX_HIGHLIGHTS = 5;
 const DEFAULT_BODY_EXCERPT_CHARS = 900;
 
@@ -7,7 +9,7 @@ const DEFAULT_BODY_EXCERPT_CHARS = 900;
  * @param {unknown} value
  */
 function compactText(value) {
-  return typeof value === "string" ? value.replace(/\s+/gu, " ").trim() : "";
+  return typeof value === "string" ? compactTextUtil(value) : "";
 }
 
 /**

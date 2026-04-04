@@ -1,12 +1,15 @@
 /**
  * API Route Handlers — maps HTTP endpoints to CLI core logic.
  *
- * Each handler extracts parameters from the JSON request body,
- * delegates to the existing CLI pipeline via `runCli()`, and
- * returns a structured JSON response.
+ * ARCHITECTURE NOTE: This module is one of two server entry points:
+ *   1. handlers.ts (this file) — thin CLI-adapter routes registered via
+ *      `registerRoute()`, loaded by `start.js` and `server.ts`.
+ *   2. server.js — legacy HTTP server with direct executor calls,
+ *      kept for backward compatibility with existing integrations.
  *
- * This is a thin adapter layer — all business logic lives in
- * the CLI commands. The API just provides HTTP access to them.
+ * Routes defined here delegate all business logic to the CLI pipeline
+ * via `runCli()`. Routes in server.js call executors directly.
+ * They are NOT duplicates — they serve different consumers.
  *
  * Endpoint mapping:
  *   POST /api/recall     → lcs recall --query <q> --project <p>
@@ -38,14 +41,30 @@ import { runRepairLoop, formatRepairTrace } from "../orchestration/repair-loop.j
 import { loadArchitectureRules, runArchitectureGate, formatArchitectureResult } from "../guard/architecture-gate.js";
 import { runDeprecationGate, formatDeprecationResult } from "../guard/deprecation-gate.js";
 import { createAxiomInjector } from "../memory/axiom-injector.js";
-import { spawnNexusAgent, formatNexusAgentSummary } from "../orchestration/ruflo-nexus-agent.js";
 import { rtkGain, rtkDoctorCheck, isRtkAvailable } from "../io/rtk-adapter.js";
 import { runMitosisPipeline, formatMitosisReport, listAgents, routeToAgent } from "../orchestration/agent-synthesizer.js";
+import { runJarvisCommand } from "../cli/jarvis-command.js";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { loadApiAxioms, formatApiAxiomsMarkdown } from "./axioms-loader.js";
 import { chatCompletion } from "../llm/openrouter-provider.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Clamp a user-supplied directory path to a trusted root.
+ * Prevents path-traversal attacks on routes that accept `dataDir` from
+ * request headers or body.  If the resolved path escapes `root`, returns `root`.
+ *
+ * @param input - Raw value from request header / body field
+ * @param root  - Trusted base directory (defaults to process.cwd())
+ */
+function resolveDataDir(input: unknown, root: string = process.cwd()): string {
+  if (typeof input !== "string" || !input.trim()) return root;
+  const resolved = path.resolve(root, input.trim());
+  // Reject paths that escape the trusted root
+  return resolved.startsWith(root + path.sep) || resolved === root ? resolved : root;
+}
 
 function requireField(body: Record<string, unknown>, field: string): string {
   const value = body[field];
@@ -239,13 +258,13 @@ registerRoute("POST", "/api/close", async (req: ApiRequest): Promise<ApiResponse
 
 registerRoute("POST", "/api/ingest", async (req: ApiRequest): Promise<ApiResponse> => {
   const source = requireField(req.body, "source");
-  const path = requireField(req.body, "path");
+  const sourcePath = requireField(req.body, "path");
   const project = optionalField(req.body, "project");
   const dryRun = req.body.dryRun === true;
 
   const opts: Record<string, string | undefined> = {
     source,
-    path,
+    path: sourcePath,
     project
   };
 
@@ -691,7 +710,7 @@ registerRoute("POST", "/api/axioms", async (req: ApiRequest): Promise<ApiRespons
   }
 
   const result = await injector.save({
-    type: body.type as any,
+    type: body.type as import("../types/core-contracts.d.ts").AxiomType,
     title: body.title as string,
     body: body.body as string,
     language: typeof body.language === "string" ? body.language : "*",
@@ -747,10 +766,7 @@ registerRoute("GET", "/api/axioms", async (req: ApiRequest): Promise<ApiResponse
     typeof req.query.format === "string" && req.query.format.trim()
       ? req.query.format.trim().toLowerCase()
       : "json";
-  const dataDir =
-    typeof req.headers["x-data-dir"] === "string" && req.headers["x-data-dir"].trim()
-      ? req.headers["x-data-dir"].trim()
-      : process.cwd();
+  const dataDir = resolveDataDir(req.headers["x-data-dir"]);
 
   const payload = await loadApiAxioms({ project, dataDir, domain, protectedOnly });
 
@@ -764,7 +780,7 @@ registerRoute("GET", "/api/axioms", async (req: ApiRequest): Promise<ApiResponse
   return jsonResponse(200, payload);
 });
 
-// ── NEXUS-Ruflo Agent (NEXUS:5 + Ruflo integration) ────────────────────
+// ── NEXUS Agent routing (NEXUS:5 Orchestration) ─────────────────────────
 
 registerRoute("POST", "/api/agent", async (req: ApiRequest): Promise<ApiResponse> => {
   const body = req.body as Record<string, unknown>;
@@ -773,30 +789,18 @@ registerRoute("POST", "/api/agent", async (req: ApiRequest): Promise<ApiResponse
     return errorResponse(400, "Missing required field: task");
   }
 
-  const result = await spawnNexusAgent({
-    task: body.task as string,
-    objective: typeof body.objective === "string" ? body.objective : "",
-    workspace: typeof body.workspace === "string" ? body.workspace : ".",
-    changedFiles: Array.isArray(body.changedFiles)
-      ? body.changedFiles.filter((f): f is string => typeof f === "string")
-      : [],
-    focus: typeof body.focus === "string" ? body.focus : undefined,
-    project: typeof body.project === "string" ? body.project : "default",
-    agentType: (["coder", "reviewer", "tester", "analyst", "security"].includes(String(body.agentType))
-      ? body.agentType
-      : "coder") as any,
-    tokenBudget: typeof body.tokenBudget === "number" ? body.tokenBudget : 350,
-    maxChunks: typeof body.maxChunks === "number" ? body.maxChunks : 6,
-    runGate: body.runGate === true,
-    language: typeof body.language === "string" ? body.language : undefined,
-    framework: typeof body.framework === "string" ? body.framework : undefined,
-    useSwarm: body.useSwarm === true,
-    swarmAgents: typeof body.swarmAgents === "number" ? body.swarmAgents : 3
-  });
+  const language = typeof body.language === "string" ? body.language : undefined;
+  const framework = typeof body.framework === "string" ? body.framework : undefined;
 
-  return jsonResponse(result.success ? 200 : 422, {
-    ...result,
-    summary: formatNexusAgentSummary(result)
+  const profile = await routeToAgent({ language, framework, dataDir: "." });
+
+  return jsonResponse(200, {
+    success: true,
+    task: body.task,
+    agent: profile ?? null,
+    message: profile
+      ? `Routed to NEXUS agent: ${profile.id} (${profile.domain})`
+      : "No specialist agent matched. Use /api/mitosis to synthesize domain agents."
   });
 });
 
@@ -820,7 +824,7 @@ registerRoute("POST", "/api/mitosis", async (req: ApiRequest): Promise<ApiRespon
   const project = typeof body.project === "string" && body.project.trim()
     ? body.project.trim()
     : "default";
-  const dataDir = typeof body.dataDir === "string" ? body.dataDir : ".";
+  const dataDir = resolveDataDir(body.dataDir);
   const minAxioms = typeof body.minAxioms === "number" ? body.minAxioms : 5;
   const minMaturityScore = typeof body.minMaturityScore === "number" ? body.minMaturityScore : 0.4;
   const dryRun = body.dryRun === true;
@@ -835,7 +839,7 @@ registerRoute("POST", "/api/mitosis", async (req: ApiRequest): Promise<ApiRespon
 });
 
 registerRoute("GET", "/api/agents", async (req: ApiRequest): Promise<ApiResponse> => {
-  const dataDir = typeof req.headers["x-data-dir"] === "string" ? req.headers["x-data-dir"] : ".";
+  const dataDir = resolveDataDir(req.headers["x-data-dir"]);
   const agents = await listAgents({ dataDir });
   return jsonResponse(200, { agents, count: agents.length });
 });
@@ -844,7 +848,7 @@ registerRoute("POST", "/api/agents/route", async (req: ApiRequest): Promise<ApiR
   const body = req.body as Record<string, unknown>;
   const language = typeof body.language === "string" ? body.language : undefined;
   const framework = typeof body.framework === "string" ? body.framework : undefined;
-  const dataDir = typeof body.dataDir === "string" ? body.dataDir : ".";
+  const dataDir = resolveDataDir(body.dataDir);
 
   if (!language && !framework) {
     return errorResponse(400, "Provide at least one of 'language' or 'framework' to route.");
@@ -901,7 +905,7 @@ registerRoute("GET", "/api/impact", async (_req: ApiRequest): Promise<ApiRespons
   }
 });
 
-// ── P7: Shadow mode — NEXUS vs Ruflo comparison ───────────────────────
+// ── P7: Shadow mode — NEXUS context quality benchmarking ─────────────────
 
 registerRoute("POST", "/api/shadow", async (req: ApiRequest): Promise<ApiResponse> => {
   const body = req.body as Record<string, unknown>;
@@ -911,25 +915,16 @@ registerRoute("POST", "/api/shadow", async (req: ApiRequest): Promise<ApiRespons
     return errorResponse(400, "Missing required field: query");
   }
 
-  // Shadow mode: compares NEXUS local BM25 vs Ruflo semantic recall
-  // In production, both run in parallel; results compared by:
-  // - hit rate (how many NEXUS results appear in Ruflo top-k)
-  // - latency (local BM25 is typically 2-10x faster)
-  // - quality pass (do results satisfy the axiom coverage contract?)
-  // The replacement gate fires when:
-  //   nexusQuality >= rufloQuality AND nexusLatency <= 2000ms AND degradedRate <= 0.05
-
   return jsonResponse(200, {
     query,
     contract: {
-      nexusReplaceRufloWhen: {
-        qualityGte: "ruflo_quality",
+      qualityGates: {
         latencyMs: 2000,
         degradedRateLte: 0.05
       }
     },
     status: "shadow-mode-stub",
-    message: "Shadow mode is active. Wire live providers to /api/shadow for real comparison."
+    message: "Shadow mode active. Wire live NEXUS providers to /api/shadow for real benchmarking."
   });
 });
 
@@ -942,19 +937,41 @@ registerRoute("GET", "/api/shadow/contract", async (_req: ApiRequest): Promise<A
         saveInterface: "save(input: MemorySaveInput) => Promise<Record<string,unknown>>"
       },
       qualityGates: {
-        topKOverlapWithRuflo: ">= 0.7",
         latencyP95Ms: "<= 2000",
         degradedRate: "<= 0.05",
         qualityPassRate: ">= 0.9"
       },
-      rufloStatus: "primary-with-local-fallback",
-      replacementTrigger: "nexus_wins_by_metrics",
       targetPhase: "P7"
     }
   });
 });
 
 // ── POST /api/chat — LLM chat with optional NEXUS context ─────────────
+
+// ── NEXUS JARVIS — standalone orchestration pipeline ─────────────────
+
+registerRoute("POST", "/api/jarvis", async (req: ApiRequest): Promise<ApiResponse> => {
+  const body = req.body as Record<string, unknown>;
+  const task = typeof body.task === "string" ? body.task.trim() : "";
+
+  if (!task) {
+    return errorResponse(400, "Missing required field: task");
+  }
+
+  const result = await runJarvisCommand({
+    task,
+    chunks: Array.isArray(body.chunks) ? body.chunks as import("../types/core-contracts.d.ts").Chunk[] : [],
+    project: typeof body.project === "string" ? body.project : "nexus",
+    tokenBudget: typeof body.tokenBudget === "number" ? body.tokenBudget : 350,
+    maxChunks: typeof body.maxChunks === "number" ? body.maxChunks : 6,
+    maxOutputTokens: typeof body.maxOutputTokens === "number" ? body.maxOutputTokens : 2000,
+    saveMemory: body.saveMemory !== false
+  });
+
+  return jsonResponse(result.status === "blocked" ? 422 : 200, result);
+});
+
+// ── LLM chat ──────────────────────────────────────────────────────────
 
 registerRoute("POST", "/api/chat", async (req: ApiRequest): Promise<ApiResponse> => {
   const body = req.body as Record<string, unknown>;

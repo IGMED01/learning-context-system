@@ -11,13 +11,7 @@
  * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
  */
 
-/**
- * @param {unknown} error
- * @returns {string}
- */
-function toErrorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
-}
+import { toErrorMessage } from "../utils/text-utils.js";
 
 /**
  * @param {unknown} error
@@ -46,11 +40,11 @@ export function classifyMemoryFailure(error) {
  */
 export function memoryFailureFixHint(failureKind) {
   if (failureKind === "binary-missing") {
-    return "Verify the external memory runtime (Ruflo) is available, or use --memory-backend local-only / --skip-ruflo true.";
+    return "Verify the external memory runtime (Engram) is available, or use --memory-backend local-only to skip the primary tier.";
   }
 
   if (failureKind === "timeout") {
-    return "Retry recall, reduce query scope, or bypass the external memory tier with --skip-ruflo true.";
+    return "Retry recall, reduce query scope, or bypass the external memory tier with --memory-backend local-only.";
   }
 
   if (failureKind === "malformed-output") {

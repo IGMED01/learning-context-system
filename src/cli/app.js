@@ -28,9 +28,9 @@ import {
 } from "../memory/memory-utils.js";
 import {
   classifyMemoryFailure,
-  memoryFailureFixHint
+  memoryFailureFixHint,
+  createResilientMemoryClient
 } from "../memory/resilient-memory-client.js";
-import { createRufloResilientClient } from "../memory/ruflo-resilient-client.js";
 import {
   getObservabilityReport,
   recordCommandMetric
@@ -59,6 +59,9 @@ import {
 import { runTeachCommand } from "./teach-command.js";
 import { runIngestCommand, formatIngestResultAsText } from "./ingest-command.js";
 import { runShellCommand } from "./shell-command.js";
+import { runJarvisCommand, formatJarvisResultAsText } from "./jarvis-command.js";
+import { runArchiveCommand, formatArchiveResultAsText } from "./archive-command.js";
+import { runSelfUpdate, formatUpdateResultAsText } from "./self-update-command.js";
 import { evaluateGuard, formatGuardResultAsText } from "../guard/guard-engine.js";
 import {
   assertNumberRules,
@@ -161,7 +164,7 @@ import {
  */
 
 /**
- * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "doctor-memory" | "memory-stats" | "prune-memory" | "compact-memory" | "init" | "sync-knowledge" | "ingest-security" | "ingest" | "version" | "shell"} CliCommand
+ * @typedef {"select" | "teach" | "readme" | "recall" | "remember" | "close" | "doctor" | "doctor-memory" | "memory-stats" | "prune-memory" | "compact-memory" | "init" | "sync-knowledge" | "ingest-security" | "ingest" | "version" | "shell" | "jarvis" | "archive" | "self-update"} CliCommand
  */
 
 /**
@@ -565,11 +568,10 @@ function getMemoryClient(options, dependencies) {
   const local = getLocalMemoryClient(options, dependencies);
   const fallbackEnabled = booleanOption(options, "local-memory-fallback", true);
   const batteryEnabled = booleanOption(options, "external-battery", true);
-  const primaryChain = createRufloResilientClient({
-    local,
-    project: options.project,
-    enabled: fallbackEnabled,
-    skipRuflo: booleanOption(options, "skip-ruflo", false)
+  const primaryChain = createResilientMemoryClient({
+    primary: /** @type {any} */ (local),
+    fallback: /** @type {any} */ (local),
+    enabled: fallbackEnabled
   });
 
   if (!batteryEnabled) {
@@ -996,7 +998,10 @@ function isSupportedCommand(command) {
     command === "ingest-security" ||
     command === "ingest" ||
     command === "version" ||
-    command === "shell"
+    command === "shell" ||
+    command === "jarvis" ||
+    command === "archive" ||
+    command === "self-update"
   );
 }
 
@@ -1015,7 +1020,7 @@ function applyConfigDefaults(command, rawOptions, loadedConfig) {
   }
 
   if (!options.workspace && !options.input && config.workspace) {
-    if (command === "select" || command === "teach" || command === "readme" || command === "shell") {
+    if (command === "select" || command === "teach" || command === "readme" || command === "shell" || command === "jarvis") {
       options.workspace = config.workspace;
     }
   }
@@ -2034,6 +2039,86 @@ export async function runCli(argv, dependencies = {}) {
                 ...buildRuntimeMeta(startedAt)
               }
             )
+    };
+  }
+
+  if (command === "jarvis") {
+    const task = options.task || options._args?.[0] || "";
+    if (!task) {
+      return { exitCode: 1, stderr: "Error: --task <description> is required for jarvis." };
+    }
+
+    const memoryClient = getMemoryClient(options, dependencies);
+    const jarvisResult = await runJarvisCommand({
+      task,
+      workspace: options.workspace || loadedConfig.config.workspace || ".",
+      securityConfig: loadedConfig.config.security,
+      scanConfig: loadedConfig.config.scan,
+      memoryClient,
+      guardConfig: loadedConfig.config.guard,
+      project: options.project,
+      tokenBudget: numericForSafety?.tokenBudget ?? 350,
+      maxChunks: numericForSafety?.maxChunks ?? 6,
+      maxOutputTokens: numberOption(options, "max-output-tokens", 2000),
+      apiKey: options["api-key"],
+      model: options.model,
+      saveMemory: booleanOption(options, "save-memory", true)
+    });
+
+    const metric = buildCommandMetric("jarvis", startedAt, {
+      degraded: jarvisResult.status !== "completed"
+    });
+    await safeRecordCommandMetric(metric);
+
+    const format = options.format === "json" ? "json" : "text";
+    return {
+      exitCode: jarvisResult.status === "blocked" ? 1 : 0,
+      stdout:
+        format === "text"
+          ? formatJarvisResultAsText(jarvisResult)
+          : serializeCommandResult("jarvis", jarvisResult, format, loadedConfig)
+    };
+  }
+
+  if (command === "archive") {
+    const memoryClient = getMemoryClient(options, dependencies);
+    const archiveResult = await runArchiveCommand({
+      project: options.project || loadedConfig.config.project || "nexus",
+      memoryClient,
+      outputPath: options.output,
+      cwd: options.workspace || loadedConfig.config.workspace || "."
+    });
+    const metric = buildCommandMetric("archive", startedAt, {
+      degraded: archiveResult.status === "failed"
+    });
+    await safeRecordCommandMetric(metric);
+    const format = options.format === "json" ? "json" : "text";
+    return {
+      exitCode: archiveResult.status === "failed" ? 1 : 0,
+      stdout:
+        format === "text"
+          ? formatArchiveResultAsText(archiveResult)
+          : serializeCommandResult("archive", archiveResult, format, loadedConfig)
+    };
+  }
+
+  if (command === "self-update") {
+    const updateResult = await runSelfUpdate({
+      checkOnly: booleanOption(options, "check-only", false),
+      force: booleanOption(options, "force", false),
+      cwd: process.cwd()
+    });
+    const metric = buildCommandMetric("self-update", startedAt, {
+      degraded: updateResult.status === "failed"
+    });
+    await safeRecordCommandMetric(metric);
+    const format = options.format === "json" ? "json" : "text";
+    return {
+      exitCode: updateResult.status === "failed" ? 1 : 0,
+      stdout:
+        format === "text"
+          ? formatUpdateResultAsText(updateResult)
+          : serializeCommandResult("self-update", updateResult, format, loadedConfig)
     };
   }
 

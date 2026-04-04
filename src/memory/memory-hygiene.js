@@ -2,6 +2,7 @@
 
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { slugify, compactText, toErrorMessage } from "../utils/text-utils.js";
 
 /**
  * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
@@ -39,31 +40,14 @@ const GENERIC_MEMORY_PATTERNS = [
 ];
 const PATH_NOISE_PATTERNS = [/[/\\]test[/\\]/u, /[/\\]fixtures?[/\\]/u, /\.spec\./u, /\.test\./u];
 
-/**
- * @param {string} value
- * @returns {string}
- */
-function compactText(value) {
-  return String(value ?? "").replace(/\s+/gu, " ").trim();
-}
 
 /**
- * @param {string} value
- * @returns {string}
- */
-function slugify(value) {
-  const slug = compactText(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/(^-|-$)/gu, "");
-  return slug || "memory";
-}
-
-/**
+ * Tokenize a file-path-aware string (preserves /._- chars for path tokens).
+ * Distinct from text-utils tokenize which is stopword-filtered for search.
  * @param {string} value
  * @returns {string[]}
  */
-function tokenize(value) {
+function tokenizePathAware(value) {
   return compactText(value)
     .toLowerCase()
     .replace(/[^a-z0-9\u00e0-\u024f/_.-]+/gu, " ")
@@ -109,7 +93,7 @@ async function readEntries(filePath) {
       .map((line) => JSON.parse(line))
       .filter((entry) => entry && typeof entry === "object");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toErrorMessage(error);
 
     if (/enoent/i.test(message)) {
       return [];
@@ -161,7 +145,7 @@ async function readScopedMemoryFiles(baseDir, project) {
 
     return scoped;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toErrorMessage(error);
 
     if (/enoent/i.test(message)) {
       return [];
@@ -328,7 +312,7 @@ function scoreHealth(signalScore, durabilityScore, duplicateScore, testNoise, ge
       : 0.55;
   const specificityScore = Math.min(
     1,
-    tokenize([entry.title, entry.content, entry.topic].filter(Boolean).join(" ")).length / 18
+    tokenizePathAware([entry.title, entry.content, entry.topic].filter(Boolean).join(" ")).length / 18
   );
   const health =
     signalScore * 0.35 +
