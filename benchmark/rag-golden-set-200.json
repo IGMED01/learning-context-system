@@ -1,0 +1,2243 @@
+{
+  "suite": "nexus-rag-golden-set-v1",
+  "metadata": {
+    "generatedBy": "scripts/generate-rag-golden-set.js",
+    "totalCases": 200,
+    "totalDocuments": 50,
+    "domains": 10
+  },
+  "documents": [
+    {
+      "id": "auth-doc-1",
+      "project": "gold-auth",
+      "domain": "auth",
+      "title": "Auth middleware boundary",
+      "content": "El middleware autentica JWT, valida issuer y exp antes de ejecutar handlers."
+    },
+    {
+      "id": "auth-doc-2",
+      "project": "gold-auth",
+      "domain": "auth",
+      "title": "Auth test matrix",
+      "content": "La matriz cubre token expirado, firma inválida y ausencia de credenciales."
+    },
+    {
+      "id": "auth-doc-3",
+      "project": "gold-auth",
+      "domain": "auth",
+      "title": "Auth revocation contract",
+      "content": "La revocación invalida sesión en tiempo real y fuerza reautenticación."
+    },
+    {
+      "id": "auth-doc-4",
+      "project": "gold-auth",
+      "domain": "auth",
+      "title": "Frontend style guide",
+      "content": "Documento de estilos visuales y componentes UI."
+    },
+    {
+      "id": "auth-doc-5",
+      "project": "gold-auth",
+      "domain": "auth",
+      "title": "Build notes",
+      "content": "Notas de build y empaquetado para CLI."
+    },
+    {
+      "id": "runbook-doc-1",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "title": "Runbook token compromise",
+      "content": "Ante compromiso de token: rotar llaves, invalidar sesiones y auditar accesos."
+    },
+    {
+      "id": "runbook-doc-2",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "title": "Incident triage checklist",
+      "content": "Checklist de triage: impacto, alcance, mitigación y comunicación."
+    },
+    {
+      "id": "runbook-doc-3",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "title": "Postmortem template",
+      "content": "Template para registrar línea de tiempo, causa raíz y acciones preventivas."
+    },
+    {
+      "id": "runbook-doc-4",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "title": "CSS migration notes",
+      "content": "Notas de migración visual del frontend."
+    },
+    {
+      "id": "runbook-doc-5",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "title": "Analytics dashboard copy",
+      "content": "Texto de presentación para paneles de analytics."
+    },
+    {
+      "id": "compliance-doc-1",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "title": "PII logging policy",
+      "content": "Prohíbe PII en logs en claro; exige redacción o hash irreversible."
+    },
+    {
+      "id": "compliance-doc-2",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "title": "Retention standard",
+      "content": "Retención de logs operativos por 30 días con acceso auditado."
+    },
+    {
+      "id": "compliance-doc-3",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "title": "Access control policy",
+      "content": "Acceso por mínimo privilegio y revisión periódica de permisos."
+    },
+    {
+      "id": "compliance-doc-4",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "title": "UI onboarding guide",
+      "content": "Guía de onboarding para usuarios nuevos."
+    },
+    {
+      "id": "compliance-doc-5",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "title": "SEO checklist",
+      "content": "Checklist de SEO para web pública."
+    },
+    {
+      "id": "session-doc-1",
+      "project": "gold-session",
+      "domain": "session",
+      "title": "Session revocation policy 2026",
+      "content": "Revocación en tiempo real por evento de riesgo y bloqueo preventivo."
+    },
+    {
+      "id": "session-doc-2",
+      "project": "gold-session",
+      "domain": "session",
+      "title": "Session revocation changelog 2026",
+      "content": "Se elimina ventana de 12h y se adopta invalidación inmediata."
+    },
+    {
+      "id": "session-doc-3",
+      "project": "gold-session",
+      "domain": "session",
+      "title": "Session risk scoring",
+      "content": "Score de riesgo combina anomalías de IP, dispositivo y firma."
+    },
+    {
+      "id": "session-doc-4",
+      "project": "gold-session",
+      "domain": "session",
+      "title": "Legacy policy 2025",
+      "content": "Política anterior con revocación por lote cada 12 horas."
+    },
+    {
+      "id": "session-doc-5",
+      "project": "gold-session",
+      "domain": "session",
+      "title": "Design tokens",
+      "content": "Tokens de diseño de interfaz."
+    },
+    {
+      "id": "pipeline-doc-1",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "title": "Pipeline path safety",
+      "content": "sourcePath y suitePath deben resolverse dentro del workspace."
+    },
+    {
+      "id": "pipeline-doc-2",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "title": "Ingest hygiene gate",
+      "content": "Todo chunk ingestado pasa por evaluateMemoryWrite antes de persistir."
+    },
+    {
+      "id": "pipeline-doc-3",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "title": "Project isolation contract",
+      "content": "Storage/recall operan aislados por projectId para evitar mezcla."
+    },
+    {
+      "id": "pipeline-doc-4",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "title": "UI colors",
+      "content": "Paleta de colores del dashboard."
+    },
+    {
+      "id": "pipeline-doc-5",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "title": "Marketing roadmap",
+      "content": "Roadmap comercial anual."
+    },
+    {
+      "id": "observability-doc-1",
+      "project": "gold-observability",
+      "domain": "observability",
+      "title": "SDD metrics spec",
+      "content": "Métricas sdd_coverage_rate, sdd_injected_kinds y sdd_skipped_reason."
+    },
+    {
+      "id": "observability-doc-2",
+      "project": "gold-observability",
+      "domain": "observability",
+      "title": "Teaching metrics spec",
+      "content": "Métricas teaching_coverage_rate y teaching_practice_rate."
+    },
+    {
+      "id": "observability-doc-3",
+      "project": "gold-observability",
+      "domain": "observability",
+      "title": "Noise telemetry metrics",
+      "content": "noise_ratio, redundancy_ratio, context_half_life y source_entropy."
+    },
+    {
+      "id": "observability-doc-4",
+      "project": "gold-observability",
+      "domain": "observability",
+      "title": "Footer copy",
+      "content": "Texto legal para el pie de página."
+    },
+    {
+      "id": "observability-doc-5",
+      "project": "gold-observability",
+      "domain": "observability",
+      "title": "Icon set",
+      "content": "Listado de íconos UI."
+    },
+    {
+      "id": "versioning-doc-1",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "title": "Prompt version store",
+      "content": "Guarda versiones por promptKey con metadata y diff."
+    },
+    {
+      "id": "versioning-doc-2",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "title": "Rollback policy",
+      "content": "Rollback basado en score mínimo y preferencia por versión previa."
+    },
+    {
+      "id": "versioning-doc-3",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "title": "Rollback plan endpoint",
+      "content": "POST /api/versioning/rollback-plan construye plan de recuperación."
+    },
+    {
+      "id": "versioning-doc-4",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "title": "Banner animation",
+      "content": "Animación de portada para web."
+    },
+    {
+      "id": "versioning-doc-5",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "title": "Brand guidelines",
+      "content": "Guía de marca."
+    },
+    {
+      "id": "agent-doc-1",
+      "project": "gold-agent",
+      "domain": "agent",
+      "title": "Agent runtime local-first",
+      "content": "El runtime de agente opera local-first sin dependencia externa obligatoria."
+    },
+    {
+      "id": "agent-doc-2",
+      "project": "gold-agent",
+      "domain": "agent",
+      "title": "Agent SDD gate",
+      "content": "runGate=true aplica fail-fast según cobertura mínima configurable."
+    },
+    {
+      "id": "agent-doc-3",
+      "project": "gold-agent",
+      "domain": "agent",
+      "title": "Agent context profile",
+      "content": "El endpoint agent usa selección de contexto con mode clean y SDD."
+    },
+    {
+      "id": "agent-doc-4",
+      "project": "gold-agent",
+      "domain": "agent",
+      "title": "Landing page text",
+      "content": "Texto de landing comercial."
+    },
+    {
+      "id": "agent-doc-5",
+      "project": "gold-agent",
+      "domain": "agent",
+      "title": "Photo assets list",
+      "content": "Inventario de assets gráficos."
+    },
+    {
+      "id": "rag-doc-1",
+      "project": "gold-rag",
+      "domain": "rag",
+      "title": "RAG auto-retrieve flow",
+      "content": "Si no hay chunks explícitos, /api/ask y /api/chat disparan auto-retrieval."
+    },
+    {
+      "id": "rag-doc-2",
+      "project": "gold-rag",
+      "domain": "rag",
+      "title": "Reranker semantics",
+      "content": "Rerank combina retrievalScore y semanticScore para priorizar contexto."
+    },
+    {
+      "id": "rag-doc-3",
+      "project": "gold-rag",
+      "domain": "rag",
+      "title": "RAG feature flags",
+      "content": "LCS_RAG_AUTO_RETRIEVE y LCS_RAG_ENABLE_RERANK controlan la ruta RAG."
+    },
+    {
+      "id": "rag-doc-4",
+      "project": "gold-rag",
+      "domain": "rag",
+      "title": "Old static FAQ",
+      "content": "FAQ histórica no técnica."
+    },
+    {
+      "id": "rag-doc-5",
+      "project": "gold-rag",
+      "domain": "rag",
+      "title": "Theme palette",
+      "content": "Paleta de tema visual."
+    },
+    {
+      "id": "security-doc-1",
+      "project": "gold-security",
+      "domain": "security",
+      "title": "API body size limits",
+      "content": "La API rechaza body gigante con 413 para evitar abuso."
+    },
+    {
+      "id": "security-doc-2",
+      "project": "gold-security",
+      "domain": "security",
+      "title": "JWT auth hardening",
+      "content": "Valida alg HS256, issuer, audience y ventanas nbf/iat."
+    },
+    {
+      "id": "security-doc-3",
+      "project": "gold-security",
+      "domain": "security",
+      "title": "Rate limit cardinality",
+      "content": "Rate limiter usa eviction TTL-aware y LRU bajo presión de IPs."
+    },
+    {
+      "id": "security-doc-4",
+      "project": "gold-security",
+      "domain": "security",
+      "title": "Typography guide",
+      "content": "Guía tipográfica UI."
+    },
+    {
+      "id": "security-doc-5",
+      "project": "gold-security",
+      "domain": "security",
+      "title": "Illustration notes",
+      "content": "Notas de ilustración."
+    }
+  ],
+  "cases": [
+    {
+      "id": "case-001",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Dónde validamos JWT antes del handler? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "auth-doc-1"
+      ]
+    },
+    {
+      "id": "case-002",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Dónde validamos JWT antes del handler? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "auth-doc-1"
+      ]
+    },
+    {
+      "id": "case-003",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Dónde validamos JWT antes del handler? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "auth-doc-1"
+      ]
+    },
+    {
+      "id": "case-004",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Dónde validamos JWT antes del handler? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "auth-doc-1"
+      ]
+    },
+    {
+      "id": "case-005",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Qué casos mínimos debe cubrir auth tests? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "auth-doc-2"
+      ]
+    },
+    {
+      "id": "case-006",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Qué casos mínimos debe cubrir auth tests? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "auth-doc-2"
+      ]
+    },
+    {
+      "id": "case-007",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Qué casos mínimos debe cubrir auth tests? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "auth-doc-2"
+      ]
+    },
+    {
+      "id": "case-008",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Qué casos mínimos debe cubrir auth tests? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "auth-doc-2"
+      ]
+    },
+    {
+      "id": "case-009",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Cómo funciona la revocación de sesión? (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "auth-doc-3"
+      ]
+    },
+    {
+      "id": "case-010",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Cómo funciona la revocación de sesión? (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "auth-doc-3"
+      ]
+    },
+    {
+      "id": "case-011",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Cómo funciona la revocación de sesión? (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "auth-doc-3"
+      ]
+    },
+    {
+      "id": "case-012",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Cómo funciona la revocación de sesión? (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "auth-doc-3"
+      ]
+    },
+    {
+      "id": "case-013",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "Necesito hardening del boundary de autenticación (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "auth-doc-1",
+        "auth-doc-2"
+      ]
+    },
+    {
+      "id": "case-014",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "Necesito hardening del boundary de autenticación (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "auth-doc-1",
+        "auth-doc-2"
+      ]
+    },
+    {
+      "id": "case-015",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "Necesito hardening del boundary de autenticación (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "auth-doc-1",
+        "auth-doc-2"
+      ]
+    },
+    {
+      "id": "case-016",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "Necesito hardening del boundary de autenticación (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "auth-doc-1",
+        "auth-doc-2"
+      ]
+    },
+    {
+      "id": "case-017",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Qué hacer ante token expirado en producción? (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "auth-doc-2",
+        "auth-doc-3"
+      ]
+    },
+    {
+      "id": "case-018",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Qué hacer ante token expirado en producción? (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "auth-doc-2",
+        "auth-doc-3"
+      ]
+    },
+    {
+      "id": "case-019",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Qué hacer ante token expirado en producción? (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "auth-doc-2",
+        "auth-doc-3"
+      ]
+    },
+    {
+      "id": "case-020",
+      "project": "gold-auth",
+      "domain": "auth",
+      "query": "¿Qué hacer ante token expirado en producción? (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "auth-doc-2",
+        "auth-doc-3"
+      ]
+    },
+    {
+      "id": "case-021",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "¿Cuál es el runbook para compromiso de token? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "runbook-doc-1"
+      ]
+    },
+    {
+      "id": "case-022",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "¿Cuál es el runbook para compromiso de token? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "runbook-doc-1"
+      ]
+    },
+    {
+      "id": "case-023",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "¿Cuál es el runbook para compromiso de token? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "runbook-doc-1"
+      ]
+    },
+    {
+      "id": "case-024",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "¿Cuál es el runbook para compromiso de token? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "runbook-doc-1"
+      ]
+    },
+    {
+      "id": "case-025",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "¿Cómo priorizamos el triage de incidente? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "runbook-doc-2"
+      ]
+    },
+    {
+      "id": "case-026",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "¿Cómo priorizamos el triage de incidente? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "runbook-doc-2"
+      ]
+    },
+    {
+      "id": "case-027",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "¿Cómo priorizamos el triage de incidente? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "runbook-doc-2"
+      ]
+    },
+    {
+      "id": "case-028",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "¿Cómo priorizamos el triage de incidente? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "runbook-doc-2"
+      ]
+    },
+    {
+      "id": "case-029",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Necesito plantilla de postmortem (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "runbook-doc-3"
+      ]
+    },
+    {
+      "id": "case-030",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Necesito plantilla de postmortem (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "runbook-doc-3"
+      ]
+    },
+    {
+      "id": "case-031",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Necesito plantilla de postmortem (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "runbook-doc-3"
+      ]
+    },
+    {
+      "id": "case-032",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Necesito plantilla de postmortem (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "runbook-doc-3"
+      ]
+    },
+    {
+      "id": "case-033",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Pasos de mitigación inmediata en incidente auth (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "runbook-doc-1",
+        "runbook-doc-2"
+      ]
+    },
+    {
+      "id": "case-034",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Pasos de mitigación inmediata en incidente auth (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "runbook-doc-1",
+        "runbook-doc-2"
+      ]
+    },
+    {
+      "id": "case-035",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Pasos de mitigación inmediata en incidente auth (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "runbook-doc-1",
+        "runbook-doc-2"
+      ]
+    },
+    {
+      "id": "case-036",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Pasos de mitigación inmediata en incidente auth (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "runbook-doc-1",
+        "runbook-doc-2"
+      ]
+    },
+    {
+      "id": "case-037",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Cómo documentar incidente y acciones preventivas (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "runbook-doc-2",
+        "runbook-doc-3"
+      ]
+    },
+    {
+      "id": "case-038",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Cómo documentar incidente y acciones preventivas (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "runbook-doc-2",
+        "runbook-doc-3"
+      ]
+    },
+    {
+      "id": "case-039",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Cómo documentar incidente y acciones preventivas (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "runbook-doc-2",
+        "runbook-doc-3"
+      ]
+    },
+    {
+      "id": "case-040",
+      "project": "gold-runbook",
+      "domain": "runbook",
+      "query": "Cómo documentar incidente y acciones preventivas (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "runbook-doc-2",
+        "runbook-doc-3"
+      ]
+    },
+    {
+      "id": "case-041",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Qué política aplica a PII en logs? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "compliance-doc-1"
+      ]
+    },
+    {
+      "id": "case-042",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Qué política aplica a PII en logs? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "compliance-doc-1"
+      ]
+    },
+    {
+      "id": "case-043",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Qué política aplica a PII en logs? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "compliance-doc-1"
+      ]
+    },
+    {
+      "id": "case-044",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Qué política aplica a PII en logs? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "compliance-doc-1"
+      ]
+    },
+    {
+      "id": "case-045",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Cuál es la retención de logs? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "compliance-doc-2"
+      ]
+    },
+    {
+      "id": "case-046",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Cuál es la retención de logs? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "compliance-doc-2"
+      ]
+    },
+    {
+      "id": "case-047",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Cuál es la retención de logs? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "compliance-doc-2"
+      ]
+    },
+    {
+      "id": "case-048",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Cuál es la retención de logs? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "compliance-doc-2"
+      ]
+    },
+    {
+      "id": "case-049",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Cómo es el control de acceso mínimo privilegio? (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "compliance-doc-3"
+      ]
+    },
+    {
+      "id": "case-050",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Cómo es el control de acceso mínimo privilegio? (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "compliance-doc-3"
+      ]
+    },
+    {
+      "id": "case-051",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Cómo es el control de acceso mínimo privilegio? (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "compliance-doc-3"
+      ]
+    },
+    {
+      "id": "case-052",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "¿Cómo es el control de acceso mínimo privilegio? (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "compliance-doc-3"
+      ]
+    },
+    {
+      "id": "case-053",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "Requisitos de compliance para observabilidad (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "compliance-doc-1",
+        "compliance-doc-2"
+      ]
+    },
+    {
+      "id": "case-054",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "Requisitos de compliance para observabilidad (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "compliance-doc-1",
+        "compliance-doc-2"
+      ]
+    },
+    {
+      "id": "case-055",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "Requisitos de compliance para observabilidad (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "compliance-doc-1",
+        "compliance-doc-2"
+      ]
+    },
+    {
+      "id": "case-056",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "Requisitos de compliance para observabilidad (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "compliance-doc-1",
+        "compliance-doc-2"
+      ]
+    },
+    {
+      "id": "case-057",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "Cumplimiento en acceso y auditoría (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "compliance-doc-2",
+        "compliance-doc-3"
+      ]
+    },
+    {
+      "id": "case-058",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "Cumplimiento en acceso y auditoría (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "compliance-doc-2",
+        "compliance-doc-3"
+      ]
+    },
+    {
+      "id": "case-059",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "Cumplimiento en acceso y auditoría (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "compliance-doc-2",
+        "compliance-doc-3"
+      ]
+    },
+    {
+      "id": "case-060",
+      "project": "gold-compliance",
+      "domain": "compliance",
+      "query": "Cumplimiento en acceso y auditoría (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "compliance-doc-2",
+        "compliance-doc-3"
+      ]
+    },
+    {
+      "id": "case-061",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Cuál es la política 2026 de revocación? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "session-doc-1"
+      ]
+    },
+    {
+      "id": "case-062",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Cuál es la política 2026 de revocación? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "session-doc-1"
+      ]
+    },
+    {
+      "id": "case-063",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Cuál es la política 2026 de revocación? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "session-doc-1"
+      ]
+    },
+    {
+      "id": "case-064",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Cuál es la política 2026 de revocación? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "session-doc-1"
+      ]
+    },
+    {
+      "id": "case-065",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Qué cambió en revocación en 2026? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "session-doc-2"
+      ]
+    },
+    {
+      "id": "case-066",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Qué cambió en revocación en 2026? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "session-doc-2"
+      ]
+    },
+    {
+      "id": "case-067",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Qué cambió en revocación en 2026? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "session-doc-2"
+      ]
+    },
+    {
+      "id": "case-068",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Qué cambió en revocación en 2026? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "session-doc-2"
+      ]
+    },
+    {
+      "id": "case-069",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Cómo se calcula riesgo de sesión? (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "session-doc-3"
+      ]
+    },
+    {
+      "id": "case-070",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Cómo se calcula riesgo de sesión? (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "session-doc-3"
+      ]
+    },
+    {
+      "id": "case-071",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Cómo se calcula riesgo de sesión? (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "session-doc-3"
+      ]
+    },
+    {
+      "id": "case-072",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Cómo se calcula riesgo de sesión? (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "session-doc-3"
+      ]
+    },
+    {
+      "id": "case-073",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "Necesito reglas vigentes de sesión y cambios (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "session-doc-1",
+        "session-doc-2"
+      ]
+    },
+    {
+      "id": "case-074",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "Necesito reglas vigentes de sesión y cambios (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "session-doc-1",
+        "session-doc-2"
+      ]
+    },
+    {
+      "id": "case-075",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "Necesito reglas vigentes de sesión y cambios (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "session-doc-1",
+        "session-doc-2"
+      ]
+    },
+    {
+      "id": "case-076",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "Necesito reglas vigentes de sesión y cambios (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "session-doc-1",
+        "session-doc-2"
+      ]
+    },
+    {
+      "id": "case-077",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Qué señales disparan bloqueo preventivo? (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "session-doc-1",
+        "session-doc-3"
+      ]
+    },
+    {
+      "id": "case-078",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Qué señales disparan bloqueo preventivo? (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "session-doc-1",
+        "session-doc-3"
+      ]
+    },
+    {
+      "id": "case-079",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Qué señales disparan bloqueo preventivo? (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "session-doc-1",
+        "session-doc-3"
+      ]
+    },
+    {
+      "id": "case-080",
+      "project": "gold-session",
+      "domain": "session",
+      "query": "¿Qué señales disparan bloqueo preventivo? (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "session-doc-1",
+        "session-doc-3"
+      ]
+    },
+    {
+      "id": "case-081",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Cómo bloqueamos path traversal en pipeline? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "pipeline-doc-1"
+      ]
+    },
+    {
+      "id": "case-082",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Cómo bloqueamos path traversal en pipeline? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "pipeline-doc-1"
+      ]
+    },
+    {
+      "id": "case-083",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Cómo bloqueamos path traversal en pipeline? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "pipeline-doc-1"
+      ]
+    },
+    {
+      "id": "case-084",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Cómo bloqueamos path traversal en pipeline? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "pipeline-doc-1"
+      ]
+    },
+    {
+      "id": "case-085",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Qué gate valida chunks antes de persistir? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "pipeline-doc-2"
+      ]
+    },
+    {
+      "id": "case-086",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Qué gate valida chunks antes de persistir? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "pipeline-doc-2"
+      ]
+    },
+    {
+      "id": "case-087",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Qué gate valida chunks antes de persistir? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "pipeline-doc-2"
+      ]
+    },
+    {
+      "id": "case-088",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Qué gate valida chunks antes de persistir? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "pipeline-doc-2"
+      ]
+    },
+    {
+      "id": "case-089",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Cómo aislamos memoria por proyecto? (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "pipeline-doc-3"
+      ]
+    },
+    {
+      "id": "case-090",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Cómo aislamos memoria por proyecto? (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "pipeline-doc-3"
+      ]
+    },
+    {
+      "id": "case-091",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Cómo aislamos memoria por proyecto? (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "pipeline-doc-3"
+      ]
+    },
+    {
+      "id": "case-092",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "¿Cómo aislamos memoria por proyecto? (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "pipeline-doc-3"
+      ]
+    },
+    {
+      "id": "case-093",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "Contrato de seguridad y aislamiento en pipeline (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "pipeline-doc-1",
+        "pipeline-doc-3"
+      ]
+    },
+    {
+      "id": "case-094",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "Contrato de seguridad y aislamiento en pipeline (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "pipeline-doc-1",
+        "pipeline-doc-3"
+      ]
+    },
+    {
+      "id": "case-095",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "Contrato de seguridad y aislamiento en pipeline (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "pipeline-doc-1",
+        "pipeline-doc-3"
+      ]
+    },
+    {
+      "id": "case-096",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "Contrato de seguridad y aislamiento en pipeline (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "pipeline-doc-1",
+        "pipeline-doc-3"
+      ]
+    },
+    {
+      "id": "case-097",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "Ingest seguro con hygiene gate (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "pipeline-doc-1",
+        "pipeline-doc-2"
+      ]
+    },
+    {
+      "id": "case-098",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "Ingest seguro con hygiene gate (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "pipeline-doc-1",
+        "pipeline-doc-2"
+      ]
+    },
+    {
+      "id": "case-099",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "Ingest seguro con hygiene gate (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "pipeline-doc-1",
+        "pipeline-doc-2"
+      ]
+    },
+    {
+      "id": "case-100",
+      "project": "gold-pipeline",
+      "domain": "pipeline",
+      "query": "Ingest seguro con hygiene gate (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "pipeline-doc-1",
+        "pipeline-doc-2"
+      ]
+    },
+    {
+      "id": "case-101",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué mide SDD en observabilidad? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "observability-doc-1"
+      ]
+    },
+    {
+      "id": "case-102",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué mide SDD en observabilidad? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "observability-doc-1"
+      ]
+    },
+    {
+      "id": "case-103",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué mide SDD en observabilidad? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "observability-doc-1"
+      ]
+    },
+    {
+      "id": "case-104",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué mide SDD en observabilidad? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "observability-doc-1"
+      ]
+    },
+    {
+      "id": "case-105",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué métricas tenemos de teaching? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "observability-doc-2"
+      ]
+    },
+    {
+      "id": "case-106",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué métricas tenemos de teaching? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "observability-doc-2"
+      ]
+    },
+    {
+      "id": "case-107",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué métricas tenemos de teaching? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "observability-doc-2"
+      ]
+    },
+    {
+      "id": "case-108",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué métricas tenemos de teaching? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "observability-doc-2"
+      ]
+    },
+    {
+      "id": "case-109",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué telemetry anti-ruido se captura? (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "observability-doc-3"
+      ]
+    },
+    {
+      "id": "case-110",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué telemetry anti-ruido se captura? (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "observability-doc-3"
+      ]
+    },
+    {
+      "id": "case-111",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué telemetry anti-ruido se captura? (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "observability-doc-3"
+      ]
+    },
+    {
+      "id": "case-112",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "¿Qué telemetry anti-ruido se captura? (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "observability-doc-3"
+      ]
+    },
+    {
+      "id": "case-113",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "Necesito métricas pedagógicas y de cobertura (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "observability-doc-1",
+        "observability-doc-2"
+      ]
+    },
+    {
+      "id": "case-114",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "Necesito métricas pedagógicas y de cobertura (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "observability-doc-1",
+        "observability-doc-2"
+      ]
+    },
+    {
+      "id": "case-115",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "Necesito métricas pedagógicas y de cobertura (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "observability-doc-1",
+        "observability-doc-2"
+      ]
+    },
+    {
+      "id": "case-116",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "Necesito métricas pedagógicas y de cobertura (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "observability-doc-1",
+        "observability-doc-2"
+      ]
+    },
+    {
+      "id": "case-117",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "Cómo medimos ruido de conversación (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "observability-doc-2",
+        "observability-doc-3"
+      ]
+    },
+    {
+      "id": "case-118",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "Cómo medimos ruido de conversación (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "observability-doc-2",
+        "observability-doc-3"
+      ]
+    },
+    {
+      "id": "case-119",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "Cómo medimos ruido de conversación (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "observability-doc-2",
+        "observability-doc-3"
+      ]
+    },
+    {
+      "id": "case-120",
+      "project": "gold-observability",
+      "domain": "observability",
+      "query": "Cómo medimos ruido de conversación (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "observability-doc-2",
+        "observability-doc-3"
+      ]
+    },
+    {
+      "id": "case-121",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Cómo se guardan versiones de prompts? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "versioning-doc-1"
+      ]
+    },
+    {
+      "id": "case-122",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Cómo se guardan versiones de prompts? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "versioning-doc-1"
+      ]
+    },
+    {
+      "id": "case-123",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Cómo se guardan versiones de prompts? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "versioning-doc-1"
+      ]
+    },
+    {
+      "id": "case-124",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Cómo se guardan versiones de prompts? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "versioning-doc-1"
+      ]
+    },
+    {
+      "id": "case-125",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Qué reglas usa rollback policy? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "versioning-doc-2"
+      ]
+    },
+    {
+      "id": "case-126",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Qué reglas usa rollback policy? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "versioning-doc-2"
+      ]
+    },
+    {
+      "id": "case-127",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Qué reglas usa rollback policy? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "versioning-doc-2"
+      ]
+    },
+    {
+      "id": "case-128",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Qué reglas usa rollback policy? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "versioning-doc-2"
+      ]
+    },
+    {
+      "id": "case-129",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Qué endpoint construye rollback plan? (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "versioning-doc-3"
+      ]
+    },
+    {
+      "id": "case-130",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Qué endpoint construye rollback plan? (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "versioning-doc-3"
+      ]
+    },
+    {
+      "id": "case-131",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Qué endpoint construye rollback plan? (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "versioning-doc-3"
+      ]
+    },
+    {
+      "id": "case-132",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "¿Qué endpoint construye rollback plan? (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "versioning-doc-3"
+      ]
+    },
+    {
+      "id": "case-133",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "Versionado y rollback en NEXUS (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "versioning-doc-1",
+        "versioning-doc-2"
+      ]
+    },
+    {
+      "id": "case-134",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "Versionado y rollback en NEXUS (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "versioning-doc-1",
+        "versioning-doc-2"
+      ]
+    },
+    {
+      "id": "case-135",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "Versionado y rollback en NEXUS (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "versioning-doc-1",
+        "versioning-doc-2"
+      ]
+    },
+    {
+      "id": "case-136",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "Versionado y rollback en NEXUS (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "versioning-doc-1",
+        "versioning-doc-2"
+      ]
+    },
+    {
+      "id": "case-137",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "Plan de recuperación por caída de score (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "versioning-doc-2",
+        "versioning-doc-3"
+      ]
+    },
+    {
+      "id": "case-138",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "Plan de recuperación por caída de score (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "versioning-doc-2",
+        "versioning-doc-3"
+      ]
+    },
+    {
+      "id": "case-139",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "Plan de recuperación por caída de score (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "versioning-doc-2",
+        "versioning-doc-3"
+      ]
+    },
+    {
+      "id": "case-140",
+      "project": "gold-versioning",
+      "domain": "versioning",
+      "query": "Plan de recuperación por caída de score (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "versioning-doc-2",
+        "versioning-doc-3"
+      ]
+    },
+    {
+      "id": "case-141",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿El runtime de agente depende de servicios externos? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "agent-doc-1"
+      ]
+    },
+    {
+      "id": "case-142",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿El runtime de agente depende de servicios externos? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "agent-doc-1"
+      ]
+    },
+    {
+      "id": "case-143",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿El runtime de agente depende de servicios externos? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "agent-doc-1"
+      ]
+    },
+    {
+      "id": "case-144",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿El runtime de agente depende de servicios externos? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "agent-doc-1"
+      ]
+    },
+    {
+      "id": "case-145",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿Cómo funciona el fail-fast SDD en agentes? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "agent-doc-2"
+      ]
+    },
+    {
+      "id": "case-146",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿Cómo funciona el fail-fast SDD en agentes? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "agent-doc-2"
+      ]
+    },
+    {
+      "id": "case-147",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿Cómo funciona el fail-fast SDD en agentes? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "agent-doc-2"
+      ]
+    },
+    {
+      "id": "case-148",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿Cómo funciona el fail-fast SDD en agentes? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "agent-doc-2"
+      ]
+    },
+    {
+      "id": "case-149",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿Qué perfil de contexto usa /api/agent? (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "agent-doc-3"
+      ]
+    },
+    {
+      "id": "case-150",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿Qué perfil de contexto usa /api/agent? (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "agent-doc-3"
+      ]
+    },
+    {
+      "id": "case-151",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿Qué perfil de contexto usa /api/agent? (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "agent-doc-3"
+      ]
+    },
+    {
+      "id": "case-152",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "¿Qué perfil de contexto usa /api/agent? (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "agent-doc-3"
+      ]
+    },
+    {
+      "id": "case-153",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "Ejecución segura de agentes en local (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "agent-doc-1",
+        "agent-doc-2"
+      ]
+    },
+    {
+      "id": "case-154",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "Ejecución segura de agentes en local (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "agent-doc-1",
+        "agent-doc-2"
+      ]
+    },
+    {
+      "id": "case-155",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "Ejecución segura de agentes en local (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "agent-doc-1",
+        "agent-doc-2"
+      ]
+    },
+    {
+      "id": "case-156",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "Ejecución segura de agentes en local (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "agent-doc-1",
+        "agent-doc-2"
+      ]
+    },
+    {
+      "id": "case-157",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "Modo clean y cobertura SDD para agentes (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "agent-doc-2",
+        "agent-doc-3"
+      ]
+    },
+    {
+      "id": "case-158",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "Modo clean y cobertura SDD para agentes (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "agent-doc-2",
+        "agent-doc-3"
+      ]
+    },
+    {
+      "id": "case-159",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "Modo clean y cobertura SDD para agentes (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "agent-doc-2",
+        "agent-doc-3"
+      ]
+    },
+    {
+      "id": "case-160",
+      "project": "gold-agent",
+      "domain": "agent",
+      "query": "Modo clean y cobertura SDD para agentes (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "agent-doc-2",
+        "agent-doc-3"
+      ]
+    },
+    {
+      "id": "case-161",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Cuándo se activa auto-retrieve en RAG? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "rag-doc-1"
+      ]
+    },
+    {
+      "id": "case-162",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Cuándo se activa auto-retrieve en RAG? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "rag-doc-1"
+      ]
+    },
+    {
+      "id": "case-163",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Cuándo se activa auto-retrieve en RAG? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "rag-doc-1"
+      ]
+    },
+    {
+      "id": "case-164",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Cuándo se activa auto-retrieve en RAG? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "rag-doc-1"
+      ]
+    },
+    {
+      "id": "case-165",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Qué pondera el reranker semántico? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "rag-doc-2"
+      ]
+    },
+    {
+      "id": "case-166",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Qué pondera el reranker semántico? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "rag-doc-2"
+      ]
+    },
+    {
+      "id": "case-167",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Qué pondera el reranker semántico? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "rag-doc-2"
+      ]
+    },
+    {
+      "id": "case-168",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Qué pondera el reranker semántico? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "rag-doc-2"
+      ]
+    },
+    {
+      "id": "case-169",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Qué flags controlan RAG? (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "rag-doc-3"
+      ]
+    },
+    {
+      "id": "case-170",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Qué flags controlan RAG? (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "rag-doc-3"
+      ]
+    },
+    {
+      "id": "case-171",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Qué flags controlan RAG? (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "rag-doc-3"
+      ]
+    },
+    {
+      "id": "case-172",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "¿Qué flags controlan RAG? (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "rag-doc-3"
+      ]
+    },
+    {
+      "id": "case-173",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "Flujo completo de recuperación en /api/ask y /api/chat (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "rag-doc-1",
+        "rag-doc-2"
+      ]
+    },
+    {
+      "id": "case-174",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "Flujo completo de recuperación en /api/ask y /api/chat (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "rag-doc-1",
+        "rag-doc-2"
+      ]
+    },
+    {
+      "id": "case-175",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "Flujo completo de recuperación en /api/ask y /api/chat (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "rag-doc-1",
+        "rag-doc-2"
+      ]
+    },
+    {
+      "id": "case-176",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "Flujo completo de recuperación en /api/ask y /api/chat (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "rag-doc-1",
+        "rag-doc-2"
+      ]
+    },
+    {
+      "id": "case-177",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "Configurar y tunear RAG con flags (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "rag-doc-2",
+        "rag-doc-3"
+      ]
+    },
+    {
+      "id": "case-178",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "Configurar y tunear RAG con flags (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "rag-doc-2",
+        "rag-doc-3"
+      ]
+    },
+    {
+      "id": "case-179",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "Configurar y tunear RAG con flags (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "rag-doc-2",
+        "rag-doc-3"
+      ]
+    },
+    {
+      "id": "case-180",
+      "project": "gold-rag",
+      "domain": "rag",
+      "query": "Configurar y tunear RAG con flags (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "rag-doc-2",
+        "rag-doc-3"
+      ]
+    },
+    {
+      "id": "case-181",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Cómo manejamos body demasiado grande? (necesito aplicarlo hoy en producción; v1; intent 1)",
+      "expectedDocIds": [
+        "security-doc-1"
+      ]
+    },
+    {
+      "id": "case-182",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Cómo manejamos body demasiado grande? (dame pasos concretos sin romper compatibilidad; v2; intent 1)",
+      "expectedDocIds": [
+        "security-doc-1"
+      ]
+    },
+    {
+      "id": "case-183",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Cómo manejamos body demasiado grande? (incluye validación y pruebas recomendadas; v3; intent 1)",
+      "expectedDocIds": [
+        "security-doc-1"
+      ]
+    },
+    {
+      "id": "case-184",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Cómo manejamos body demasiado grande? (prioriza seguridad y trazabilidad; v4; intent 1)",
+      "expectedDocIds": [
+        "security-doc-1"
+      ]
+    },
+    {
+      "id": "case-185",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Qué validaciones extra tiene JWT? (necesito aplicarlo hoy en producción; v1; intent 2)",
+      "expectedDocIds": [
+        "security-doc-2"
+      ]
+    },
+    {
+      "id": "case-186",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Qué validaciones extra tiene JWT? (dame pasos concretos sin romper compatibilidad; v2; intent 2)",
+      "expectedDocIds": [
+        "security-doc-2"
+      ]
+    },
+    {
+      "id": "case-187",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Qué validaciones extra tiene JWT? (incluye validación y pruebas recomendadas; v3; intent 2)",
+      "expectedDocIds": [
+        "security-doc-2"
+      ]
+    },
+    {
+      "id": "case-188",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Qué validaciones extra tiene JWT? (prioriza seguridad y trazabilidad; v4; intent 2)",
+      "expectedDocIds": [
+        "security-doc-2"
+      ]
+    },
+    {
+      "id": "case-189",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Cómo resiste rate limit a cardinalidad alta? (necesito aplicarlo hoy en producción; v1; intent 3)",
+      "expectedDocIds": [
+        "security-doc-3"
+      ]
+    },
+    {
+      "id": "case-190",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Cómo resiste rate limit a cardinalidad alta? (dame pasos concretos sin romper compatibilidad; v2; intent 3)",
+      "expectedDocIds": [
+        "security-doc-3"
+      ]
+    },
+    {
+      "id": "case-191",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Cómo resiste rate limit a cardinalidad alta? (incluye validación y pruebas recomendadas; v3; intent 3)",
+      "expectedDocIds": [
+        "security-doc-3"
+      ]
+    },
+    {
+      "id": "case-192",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "¿Cómo resiste rate limit a cardinalidad alta? (prioriza seguridad y trazabilidad; v4; intent 3)",
+      "expectedDocIds": [
+        "security-doc-3"
+      ]
+    },
+    {
+      "id": "case-193",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "Hardening de auth y límites de request (necesito aplicarlo hoy en producción; v1; intent 4)",
+      "expectedDocIds": [
+        "security-doc-1",
+        "security-doc-2"
+      ]
+    },
+    {
+      "id": "case-194",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "Hardening de auth y límites de request (dame pasos concretos sin romper compatibilidad; v2; intent 4)",
+      "expectedDocIds": [
+        "security-doc-1",
+        "security-doc-2"
+      ]
+    },
+    {
+      "id": "case-195",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "Hardening de auth y límites de request (incluye validación y pruebas recomendadas; v3; intent 4)",
+      "expectedDocIds": [
+        "security-doc-1",
+        "security-doc-2"
+      ]
+    },
+    {
+      "id": "case-196",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "Hardening de auth y límites de request (prioriza seguridad y trazabilidad; v4; intent 4)",
+      "expectedDocIds": [
+        "security-doc-1",
+        "security-doc-2"
+      ]
+    },
+    {
+      "id": "case-197",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "Protecciones anti-abuso en runtime API (necesito aplicarlo hoy en producción; v1; intent 5)",
+      "expectedDocIds": [
+        "security-doc-1",
+        "security-doc-3"
+      ]
+    },
+    {
+      "id": "case-198",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "Protecciones anti-abuso en runtime API (dame pasos concretos sin romper compatibilidad; v2; intent 5)",
+      "expectedDocIds": [
+        "security-doc-1",
+        "security-doc-3"
+      ]
+    },
+    {
+      "id": "case-199",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "Protecciones anti-abuso en runtime API (incluye validación y pruebas recomendadas; v3; intent 5)",
+      "expectedDocIds": [
+        "security-doc-1",
+        "security-doc-3"
+      ]
+    },
+    {
+      "id": "case-200",
+      "project": "gold-security",
+      "domain": "security",
+      "query": "Protecciones anti-abuso en runtime API (prioriza seguridad y trazabilidad; v4; intent 5)",
+      "expectedDocIds": [
+        "security-doc-1",
+        "security-doc-3"
+      ]
+    }
+  ]
+}

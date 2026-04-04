@@ -2,9 +2,11 @@
 
 import { mkdir, readFile, writeFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
+import { purgeExpiredTempMemories } from "./memory-hygiene.js";
 import { createChunkRepository } from "../storage/chunk-repository.js";
 import { buildCloseSummaryContent } from "./memory-utils.js";
-import { tokenize, slugify, compactText, truncate as truncateText, makeTimestampId } from "../utils/text-utils.js";
+import { atomicWrite } from "../integrations/fs-safe.js";
+import { rankHybridMemoryEntries } from "./memory-search-ranking.js";
 
 /**
  * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
@@ -21,14 +23,110 @@ import { tokenize, slugify, compactText, truncate as truncateText, makeTimestamp
 
 /**
  * @param {string} value
+ * @returns {string}
+ */
+function compactLine(value) {
+  return String(value).replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * @param {string} value
+ * @returns {string}
+ */
+function slugify(value) {
+  const slug = compactLine(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/(^-|-$)/gu, "");
+
+  return slug || "memory";
+}
+
+/**
+ * @param {string} value
  * @param {number} maxLength
  * @returns {string}
  */
 function truncate(value, maxLength) {
-  return truncateText(value, maxLength);
+  const compacted = compactLine(value);
+  return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 3)}...` : compacted;
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} fallbackIso
+ * @returns {string}
+ */
+function normalizeIsoTimestamp(value, fallbackIso) {
+  if (typeof value === "string" && value.trim()) {
+    const parsed = new Date(value.trim());
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+
+  return fallbackIso;
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} fallbackIso
+ * @returns {number}
+ */
+function normalizeTimestampMs(value, fallbackIso) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return Math.trunc(numeric);
+  }
+
+  const parsedFallback = Date.parse(fallbackIso);
+  return Number.isFinite(parsedFallback) ? parsedFallback : Date.now();
 }
 
 // ── TF-IDF Search Engine ─────────────────────────────────────────────
+
+/** Common stopwords filtered from search queries and documents */
+const STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "de", "del", "el", "en",
+  "es", "for", "from", "has", "he", "in", "is", "it", "its", "la", "las",
+  "lo", "los", "of", "on", "or", "que", "se", "the", "to", "un", "una",
+  "was", "were", "will", "with", "y"
+]);
+
+/**
+ * Tokenize text into normalized terms, filtering stopwords.
+ * @param {string} text
+ * @returns {string[]}
+ */
+function tokenize(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\u00e0-\u024f]+/gu, " ")
+    .split(/\s+/u)
+    .filter((t) => t.length > 1 && !STOPWORDS.has(t));
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
+function normalizeLanguageToken(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+/**
+ * @param {MemoryEntry | Record<string, unknown>} entry
+ */
+function isSecurityEntry(entry) {
+  const type = normalizeLanguageToken(String(entry.type ?? ""));
+  const riskTaxonomy = normalizeLanguageToken(String(entry.riskTaxonomy ?? ""));
+  const severity = normalizeLanguageToken(String(entry.severity ?? ""));
+  return (
+    type.includes("security") ||
+    Boolean(riskTaxonomy) ||
+    ["critical", "high", "medium", "low"].includes(severity)
+  );
+}
 
 /**
  * Compute term frequency: count of each term / total terms.
@@ -120,13 +218,24 @@ function entryToSearchText(entry) {
  * Search entries using TF-IDF ranking.
  * @param {MemoryEntry[]} entries
  * @param {string} query
- * @param {{ project?: string, scope?: string, type?: string, limit?: number }} options
+ * @param {{
+ *   project?: string,
+ *   scope?: string,
+ *   type?: string,
+ *   language?: string,
+ *   securityOnly?: boolean,
+ *   isolationMode?: "strict" | "relaxed",
+ *   limit?: number
+ * }} options
  * @returns {ScoredEntry[]}
  */
 function searchWithTFIDF(entries, query, options) {
+  const targetLanguage = normalizeLanguageToken(options.language);
+  const isolationMode = options.isolationMode ?? "strict";
+
   // Pre-filter by metadata
   const candidates = entries.filter((entry) => {
-    if (options.project && entry.project && entry.project !== options.project) {
+    if (options.project && entry.project !== options.project) {
       return false;
     }
 
@@ -136,6 +245,21 @@ function searchWithTFIDF(entries, query, options) {
 
     if (options.type && entry.type !== options.type) {
       return false;
+    }
+
+    if (options.securityOnly === true && !isSecurityEntry(entry)) {
+      return false;
+    }
+
+    if (targetLanguage) {
+      const entryLanguage = normalizeLanguageToken(entry.language);
+      if (isolationMode === "strict") {
+        if (entryLanguage !== targetLanguage) {
+          return false;
+        }
+      } else if (entryLanguage && entryLanguage !== targetLanguage) {
+        return false;
+      }
     }
 
     return true;
@@ -191,6 +315,37 @@ function searchWithTFIDF(entries, query, options) {
   return scored.slice(0, limit);
 }
 
+/**
+ * @param {MemoryEntry[]} entries
+ * @param {MemorySearchOptions} options
+ */
+function buildSecuritySearchSummary(entries, options) {
+  const riskIds = [
+    ...new Set(
+      entries
+        .map((entry) => {
+          const candidate = entry.riskTaxonomy;
+          return typeof candidate === "string" ? candidate.trim() : "";
+        })
+        .filter(Boolean)
+    )
+  ];
+  const confidenceValues = /** @type {number[]} */ (
+    entries
+      .map((entry) => entry.confidence)
+      .filter((value) => typeof value === "number" && Number.isFinite(value))
+  );
+  const confidence = confidenceValues.length
+    ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+    : 0;
+
+  return {
+    riskIds,
+    confidence: Number(confidence.toFixed(3)),
+    isolationApplied: options.isolationMode !== "relaxed"
+  };
+}
+
 // ── Persistence Layer ────────────────────────────────────────────────
 
 /**
@@ -202,8 +357,71 @@ function searchWithTFIDF(entries, query, options) {
  * @returns {string}
  */
 function projectFilePath(baseDir, project) {
-  const projectSlug = project ? slugify(project, { fallback: "_default" }) : "_default";
+  const projectSlug = project ? slugify(project) : "_default";
   return path.join(baseDir, projectSlug, "memories.jsonl");
+}
+
+/**
+ * Resolve the storage path for temporary memories.
+ * Uses per-project directories: .lcs/memory/{project}/temp-memories.jsonl
+ * Falls back to .lcs/memory/_default/temp-memories.jsonl for unscoped entries.
+ * @param {string} baseDir
+ * @param {string} [project]
+ * @returns {string}
+ */
+function tempMemoryFilePath(baseDir, project) {
+  const projectSlug = project ? slugify(project) : "_default";
+  return path.join(baseDir, projectSlug, "temp-memories.jsonl");
+}
+
+/**
+ * Read entries from a file, returning empty array if file doesn't exist.
+ * Unlike readEntries(), this silently handles ENOENT for optional files.
+ * @param {string} filePath
+ * @returns {Promise<MemoryEntry[]>}
+ */
+async function readEntriesOrEmpty(filePath) {
+  try {
+    return await readEntries(filePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/enoent/i.test(message)) return [];
+    throw error;
+  }
+}
+
+/**
+ * Read all temp entries across all project directories.
+ * Isolates errors per file so one corrupt file doesn't break the whole scan.
+ * @param {string} baseDir
+ * @returns {Promise<MemoryEntry[]>}
+ */
+async function readAllTempEntries(baseDir) {
+  const all = [];
+  try {
+    const dirs = await readdir(baseDir, { withFileTypes: true });
+    for (const dirent of dirs) {
+      if (!dirent.isDirectory()) continue;
+      const fp = path.join(baseDir, dirent.name, "temp-memories.jsonl");
+      try {
+        all.push(...await readEntries(fp));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/enoent/i.test(message)) continue;
+        throw error;
+      }
+    }
+  } catch (error) {
+    if (
+      typeof error !== "object" ||
+      !error ||
+      !("code" in error) ||
+      error.code !== "ENOENT"
+    ) {
+      throw error;
+    }
+  }
+  return all;
 }
 
 /**
@@ -230,20 +448,33 @@ async function readEntries(filePath) {
         }
 
         const candidate = /** @type {Record<string, unknown>} */ (parsed);
-        const createdAt =
-          typeof candidate.createdAt === "string" && candidate.createdAt
-            ? candidate.createdAt
-            : new Date().toISOString();
+        const fallbackIso = new Date().toISOString();
+        const createdAt = normalizeIsoTimestamp(candidate.createdAt, fallbackIso);
+        const updatedAt = normalizeIsoTimestamp(candidate.updatedAt, createdAt);
+        const createdAtMs = normalizeTimestampMs(candidate.createdAtMs, createdAt);
+        const updatedAtMs = normalizeTimestampMs(candidate.updatedAtMs, updatedAt);
 
         entries.push({
           id: typeof candidate.id === "string" ? candidate.id : slugify(createdAt),
           title: typeof candidate.title === "string" ? candidate.title : "Untitled memory",
           content: typeof candidate.content === "string" ? candidate.content : "",
           type: typeof candidate.type === "string" ? candidate.type : "learning",
+          language:
+            typeof candidate.language === "string" && candidate.language.trim()
+              ? candidate.language.trim()
+              : undefined,
           project: typeof candidate.project === "string" ? candidate.project : "",
           scope: typeof candidate.scope === "string" ? candidate.scope : "project",
           topic: typeof candidate.topic === "string" ? candidate.topic : "",
           createdAt,
+          updatedAt,
+          createdAtMs,
+          updatedAtMs,
+          freshnessNote:
+            typeof candidate.freshnessNote === "string" && candidate.freshnessNote.trim()
+              ? candidate.freshnessNote.trim()
+              : null,
+          truncated: candidate.truncated === true,
           ...extractHygieneMetadata(candidate)
         });
       } catch {
@@ -294,6 +525,10 @@ function extractHygieneMetadata(record) {
     metadata.reviewStatus = record.reviewStatus.trim();
   }
 
+  if (typeof record.language === "string" && record.language.trim()) {
+    metadata.language = record.language.trim().toLowerCase();
+  }
+
   if (typeof record.protected === "boolean") {
     metadata.protected = record.protected;
   }
@@ -320,6 +555,38 @@ function extractHygieneMetadata(record) {
     metadata.reviewReasons = [...record.reviewReasons];
   }
 
+  if (typeof record.severity === "string" && record.severity.trim()) {
+    metadata.severity = record.severity.trim().toLowerCase();
+  }
+
+  if (typeof record.confidence === "number" && Number.isFinite(record.confidence)) {
+    metadata.confidence = Math.max(0, Math.min(1, record.confidence));
+  }
+
+  if (typeof record.riskTaxonomy === "string" && record.riskTaxonomy.trim()) {
+    metadata.riskTaxonomy = record.riskTaxonomy.trim();
+  }
+
+  if (typeof record.rule === "string" && record.rule.trim()) {
+    metadata.rule = record.rule.trim();
+  }
+
+  if (typeof record.antiPattern === "string" && record.antiPattern.trim()) {
+    metadata.antiPattern = record.antiPattern.trim();
+  }
+
+  if (typeof record.fixPattern === "string" && record.fixPattern.trim()) {
+    metadata.fixPattern = record.fixPattern.trim();
+  }
+
+  if (typeof record.practicePrompt === "string" && record.practicePrompt.trim()) {
+    metadata.practicePrompt = record.practicePrompt.trim();
+  }
+
+  if (typeof record.securityCritical === "boolean") {
+    metadata.securityCritical = record.securityCritical;
+  }
+
   return metadata;
 }
 
@@ -333,7 +600,7 @@ async function writeEntries(filePath, entries) {
   const dir = path.dirname(filePath);
   await mkdir(dir, { recursive: true });
   const lines = entries.map((e) => JSON.stringify(e));
-  await writeFile(filePath, lines.join("\n") + (lines.length ? "\n" : ""), "utf8");
+  await atomicWrite(filePath, lines.join("\n") + (lines.length ? "\n" : ""), "utf8");
 }
 
 /**
@@ -344,10 +611,11 @@ function mapChunksToEntries(chunks) {
   return chunks
     .map((chunk) => {
       const metadata = asRecord(chunk.metadata);
-      const createdAt =
-        typeof metadata.createdAt === "string" && metadata.createdAt
-          ? metadata.createdAt
-          : new Date().toISOString();
+      const fallbackIso = new Date().toISOString();
+      const createdAt = normalizeIsoTimestamp(metadata.createdAt, fallbackIso);
+      const updatedAt = normalizeIsoTimestamp(metadata.updatedAt, createdAt);
+      const createdAtMs = normalizeTimestampMs(metadata.createdAtMs, createdAt);
+      const updatedAtMs = normalizeTimestampMs(metadata.updatedAtMs, updatedAt);
 
       return {
         id: chunk.id,
@@ -360,6 +628,10 @@ function mapChunksToEntries(chunks) {
           typeof metadata.type === "string" && metadata.type
             ? metadata.type
             : "learning",
+        language:
+          typeof metadata.language === "string" && metadata.language.trim()
+            ? metadata.language.trim()
+            : undefined,
         project:
           typeof metadata.project === "string" ? metadata.project : "",
         scope:
@@ -369,6 +641,14 @@ function mapChunksToEntries(chunks) {
         topic:
           typeof metadata.topic === "string" ? metadata.topic : "",
         createdAt,
+        updatedAt,
+        createdAtMs,
+        updatedAtMs,
+        freshnessNote:
+          typeof metadata.freshnessNote === "string" && metadata.freshnessNote.trim()
+            ? metadata.freshnessNote.trim()
+            : null,
+        truncated: metadata.truncated === true,
         ...extractHygieneMetadata(metadata)
       };
     })
@@ -488,7 +768,9 @@ function toSearchStdout(entries) {
   entries.forEach((entry, index) => {
     lines.push(`[${index + 1}] #${entry.id} (${entry.type}) - ${entry.title}`);
     lines.push(`    ${truncate(entry.content, 220)}`);
-    lines.push(`    ${entry.createdAt} | project: ${entry.project || "local"} | scope: ${entry.scope}`);
+    lines.push(
+      `    ${entry.createdAt} | project: ${entry.project || "local"} | scope: ${entry.scope}${entry.language ? ` | language: ${entry.language}` : ""}`
+    );
     lines.push("");
   });
 
@@ -511,7 +793,7 @@ function toContextStdout(entries, project) {
     lines.push(
       `${index + 1}. [${entry.type}] ${entry.title} (${entry.createdAt})${
         entry.project ? ` | project: ${entry.project}` : ""
-      }`
+      }${entry.language ? ` | language: ${entry.language}` : ""}`
     );
   });
 
@@ -567,21 +849,45 @@ export function createLocalMemoryStore(options = {}) {
   async function search(query, searchOptions = {}) {
     await ensureMigration();
     const project = searchOptions.project;
+
+    // Purge expired temp memories before searching
+    await purgeExpiredTempMemories(baseDir, project);
+
     const entries = project
       ? await readEntries(projectFilePath(baseDir, project))
       : await readAllEntries(baseDir);
 
-    const results = searchWithTFIDF(entries, query, {
+    // Include temp memories (already purged of expired entries)
+    const tempEntries = project
+      ? await readEntriesOrEmpty(tempMemoryFilePath(baseDir, project))
+      : await readAllTempEntries(baseDir);
+
+    const allEntries = [...entries, ...tempEntries];
+    const requestedLimit = Math.max(1, Math.trunc(searchOptions.limit ?? 5));
+    const tfidfCandidates = searchWithTFIDF(allEntries, query, {
       project: searchOptions.project,
       scope: searchOptions.scope,
       type: searchOptions.type,
-      limit: searchOptions.limit
+      language: searchOptions.language,
+      isolationMode: searchOptions.isolationMode,
+      limit: Math.max(requestedLimit, requestedLimit * 4)
     });
+    const reranked = rankHybridMemoryEntries(
+      tfidfCandidates.map((item) => item.entry),
+      {
+        query,
+        options: {
+          ...searchOptions,
+          limit: requestedLimit
+        }
+      }
+    );
 
     return {
-      entries: results.map((r) => r.entry),
-      stdout: toSearchStdout(results.map((r) => r.entry)),
-      provider: "local"
+      entries: reranked,
+      stdout: toSearchStdout(reranked),
+      provider: "local",
+      security: buildSecuritySearchSummary(reranked, searchOptions)
     };
   }
 
@@ -593,10 +899,32 @@ export function createLocalMemoryStore(options = {}) {
    */
   async function save(input) {
     await ensureMigration();
-    const fp = projectFilePath(baseDir, input.project);
+    const isTemp = input.temporary === true || input.type === "temporary";
+    const fp = isTemp
+      ? tempMemoryFilePath(baseDir, input.project)
+      : projectFilePath(baseDir, input.project);
     const entries = await readEntries(fp);
     const createdAt = new Date().toISOString();
-    const id = makeTimestampId(input.title);
+    const updatedAt = createdAt;
+    const createdAtMs = Date.now();
+    const updatedAtMs = createdAtMs;
+    const id = `${createdAt.replace(/[-:.TZ]/gu, "")}-${slugify(input.title).slice(0, 20)}`;
+
+    // Calculate expiresAt for temporary memories
+    const ttlMinutes = input.ttlMinutes ?? 120;
+    const expiresAt = isTemp
+      ? new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString()
+      : undefined;
+
+    // Enforce max entries for temporary memories (FIFO eviction)
+    // +1 because we're about to push one more entry after this check
+    if (isTemp) {
+      const maxEntries = input.maxTempEntries ?? 50;
+      if (entries.length >= maxEntries) {
+        entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        entries.splice(0, entries.length - maxEntries + 1);
+      }
+    }
 
     /** @type {MemoryEntry} */
     const entry = {
@@ -604,10 +932,18 @@ export function createLocalMemoryStore(options = {}) {
       title: input.title,
       content: input.content,
       type: input.type ?? "learning",
+      language:
+        typeof input.language === "string" && input.language.trim()
+          ? input.language.trim().toLowerCase()
+          : undefined,
       project: input.project ?? "",
       scope: input.scope ?? "project",
       topic: input.topic ?? "",
       createdAt,
+      updatedAt,
+      createdAtMs,
+      updatedAtMs,
+      ...(isTemp ? { expiresAt, ttlMinutes, autoExpire: true } : {}),
       ...extractHygieneMetadata(asRecord(input))
     };
 
@@ -616,7 +952,7 @@ export function createLocalMemoryStore(options = {}) {
 
     return {
       id,
-      stdout: `Saved local memory #${id}`,
+      stdout: `Saved ${isTemp ? 'temporary ' : ''}local memory #${id}${isTemp ? ` (expires: ${expiresAt})` : ''}`,
       provider: "local"
     };
   }
@@ -726,7 +1062,7 @@ export function createLocalMemoryStore(options = {}) {
       : await readAllEntries(baseDir);
 
     const filtered = entries
-      .filter((entry) => !project || !entry.project || entry.project === project)
+      .filter((entry) => !project || entry.project === project)
       .slice(0, 5);
 
     return {
@@ -777,6 +1113,10 @@ export function createLocalMemoryStore(options = {}) {
       title: input.title,
       content: input.content,
       type: input.type ?? "learning",
+      language:
+        typeof input.language === "string" && input.language.trim()
+          ? input.language.trim().toLowerCase()
+          : "",
       project: input.project ?? "",
       scope: input.scope ?? "project",
       topic: input.topic ?? "",
@@ -805,6 +1145,7 @@ export function createLocalMemoryStore(options = {}) {
       title,
       content,
       type: input.type ?? "learning",
+      language: input.language,
       project: input.project,
       scope: input.scope ?? "project",
       ...extractHygieneMetadata(asRecord(input))
@@ -835,6 +1176,8 @@ export function createLocalMemoryStore(options = {}) {
     delete: deleteMemory,
     list,
     health,
+    // Temp memory management
+    purgeExpiredTempMemories: () => purgeExpiredTempMemories(baseDir),
     // Legacy compatibility
     recallContext,
     searchMemories,

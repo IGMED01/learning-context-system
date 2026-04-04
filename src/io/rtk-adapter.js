@@ -23,6 +23,7 @@
 
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
+import { buildSafeEnv } from "../core/safe-env.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -53,7 +54,12 @@ export async function isRtkAvailable() {
   }
 
   try {
-    await execFile("rtk", ["--version"], { timeout: 3000, shell: false, windowsHide: true });
+    await execFile("rtk", ["--version"], {
+      timeout: 3000,
+      shell: false,
+      windowsHide: true,
+      env: buildSafeEnv()
+    });
     _rtkAvailable = true;
   } catch {
     _rtkAvailable = false;
@@ -97,7 +103,8 @@ export async function rtkGit(args, cwd = ".") {
       cwd,
       timeout: RTK_TIMEOUT_MS,
       shell: false,
-      windowsHide: true
+      windowsHide: true,
+      env: buildSafeEnv()
     });
     const output = typeof stdout === "string" ? stdout : stdout.toString("utf8");
     return { output: output.trim(), rtkUsed: true, source: `rtk git ${args.join(" ")}` };
@@ -129,7 +136,8 @@ export async function rtkRead(filePath, opts = {}) {
       cwd: opts.cwd ?? ".",
       timeout: RTK_TIMEOUT_MS,
       shell: false,
-      windowsHide: true
+      windowsHide: true,
+      env: buildSafeEnv()
     });
     const output = typeof stdout === "string" ? stdout : stdout.toString("utf8");
     return { output: output.trim(), rtkUsed: true, source: `rtk read ${filePath}` };
@@ -156,7 +164,8 @@ export async function rtkTest(testCommand, cwd = ".") {
       cwd,
       timeout: RTK_TIMEOUT_MS * 5,
       shell: false,
-      windowsHide: true
+      windowsHide: true,
+      env: buildSafeEnv({ NODE_ENV: "test" })
     });
     const out = typeof stdout === "string" ? stdout : stdout.toString("utf8");
     const err = typeof stderr === "string" ? stderr : stderr.toString("utf8");
@@ -187,7 +196,8 @@ export async function rtkGain() {
     const { stdout } = await execFile("rtk", ["gain", "--json"], {
       timeout: 5000,
       shell: false,
-      windowsHide: true
+      windowsHide: true,
+      env: buildSafeEnv()
     });
     const raw = typeof stdout === "string" ? stdout : stdout.toString("utf8");
     try {
@@ -218,7 +228,8 @@ async function rtkFallback(command, cwd, rtkError) {
       cwd,
       timeout: RTK_TIMEOUT_MS,
       shell: false,
-      windowsHide: true
+      windowsHide: true,
+      env: buildSafeEnv()
     });
     const output = typeof stdout === "string" ? stdout : stdout.toString("utf8");
     return { output: output.trim(), rtkUsed: false, source: command.join(" ") };

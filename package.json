@@ -1,6 +1,6 @@
 {
   "name": "learning-context-system",
-  "version": "0.2.1",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -8,14 +8,13 @@
   },
   "scripts": {
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
-    "build": "npm run clean && tsc --project tsconfig.build.json && npm run build:assets",
-    "build:assets": "node --input-type=module -e \"import { mkdirSync, copyFileSync } from 'node:fs'; mkdirSync('dist/interface', { recursive: true }); copyFileSync('src/interface/nexus-demo-page.html', 'dist/interface/nexus-demo-page.html');\"",
+    "build": "npm run clean && tsc --project tsconfig.build.json",
     "build:smoke": "node dist/cli.js doctor --format json",
     "pack:check": "node scripts/check-npm-pack.js",
     "release:check": "node scripts/check-release-discipline.js",
     "northstar:check": "node scripts/check-north-star.js",
     "dev:cli": "node src/cli.js",
-    "dev:api": "node src/api/start.js --port 3100",
+    "dev:api": "node --env-file=.env src/api/start.js --port 3100",
     "dev:shell": "node src/cli.js shell --workspace .",
     "skills:auto": "node scripts/auto-generate-skills.js --history .lcs/shell-history --telemetry .lcs/shell-telemetry.jsonl --output-dir skills/generated --min-repetitions 3 --top 5",
     "skills:auto:dry": "node scripts/auto-generate-skills.js --dry-run --history .lcs/shell-history --telemetry .lcs/shell-telemetry.jsonl --output-dir skills/generated --min-repetitions 3 --top 5",
@@ -39,9 +38,20 @@
     "agents:list": "node -e \"import('./src/orchestration/agent-synthesizer.js').then(async m => { const a = await m.listAgents({ dataDir: '.' }); a.forEach(x => console.log('[' + x.id + '] ' + x.domain + ' v' + x.version + ' maturity=' + (x.maturityScore*100).toFixed(0) + '%')); })\"",
     "benchmark:foundations": "node benchmark/run-foundations-stress.js",
     "benchmark:recall": "node benchmark/run-recall-benchmark.js",
+    "benchmark:conversation-noise": "node benchmark/run-conversation-noise-benchmark.js",
+    "benchmark:retrieval-gate": "node benchmark/run-retrieval-first-gate.js",
+    "benchmark:golden-set:generate": "node scripts/generate-rag-golden-set.js",
+    "benchmark:golden-set": "node benchmark/run-rag-golden-set.js",
+    "benchmark:memory-poisoning": "node benchmark/run-memory-poisoning-gate.js",
     "benchmark:vertical": "node benchmark/run-vertical-benchmark.js",
     "benchmark:tune": "node benchmark/run-weight-tuning.js",
     "eval:domains": "node benchmark/run-domain-evals.js",
+    "ft:readiness": "node scripts/check-ft-readiness.js",
+    "benchmark:ft1-format": "node benchmark/run-ft1-format-gate.js",
+    "benchmark:ft2-intent": "node benchmark/run-ft2-intent-gate.js",
+    "benchmark:ft3-risk": "node benchmark/run-ft3-risk-gate.js",
+    "benchmark:ft4-query-rewrite": "node benchmark/run-ft4-query-rewrite-gate.js",
+    "ft:labels:versioned": "node scripts/run-versioned-label-pipeline.js --input benchmark/ft-readiness-dataset.json --name lcs-ft --output-dir benchmark/labels",
     "openapi:export": "node scripts/export-openapi.js",
     "e2e:nexus": "node scripts/run-nexus-e2e.js",
     "doctor": "node src/cli.js doctor --format text",
@@ -78,9 +88,12 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "pdf-parse": "^2.4.5"
-  },
-  "optionalDependencies": {
-    "ruflo": "^3.5.48"
+    "async-mutex": "^0.5.0",
+    "graceful-fs": "^4.2.11",
+    "gray-matter": "^4.0.3",
+    "jsonwebtoken": "^9.0.3",
+    "p-queue": "^9.1.1",
+    "pdf-parse": "^2.4.5",
+    "proper-lockfile": "^4.1.2"
   }
 }

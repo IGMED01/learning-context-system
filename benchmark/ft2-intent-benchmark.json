@@ -1,0 +1,97 @@
+{
+  "suite": "ft2-intent-pilot-v1",
+  "thresholds": {
+    "minCandidateAccuracy": 0.9,
+    "minCandidateMacroF1": 0.88,
+    "minAccuracyLift": 0.2,
+    "minMacroF1Lift": 0.2,
+    "maxUnknownRate": 0.05
+  },
+  "cases": [
+    {
+      "id": "ft2-001",
+      "input": "Explícame el hardening del middleware de auth en formato corto.",
+      "expectedIntent": "formatting",
+      "baselineIntent": "teaching",
+      "candidateIntent": "formatting"
+    },
+    {
+      "id": "ft2-002",
+      "input": "¿Qué endpoint conviene para Q&A con memoria?",
+      "expectedIntent": "routing",
+      "baselineIntent": "formatting",
+      "candidateIntent": "routing"
+    },
+    {
+      "id": "ft2-003",
+      "input": "Necesito bloquear suitePath traversal y validar 400.",
+      "expectedIntent": "safety",
+      "baselineIntent": "routing",
+      "candidateIntent": "safety"
+    },
+    {
+      "id": "ft2-004",
+      "input": "Enséñame por qué usar summary incremental en conversación.",
+      "expectedIntent": "teaching",
+      "baselineIntent": "teaching",
+      "candidateIntent": "teaching"
+    },
+    {
+      "id": "ft2-005",
+      "input": "Clasifica el riesgo de exponer logs con PII.",
+      "expectedIntent": "risk-classification",
+      "baselineIntent": "safety",
+      "candidateIntent": "risk-classification"
+    },
+    {
+      "id": "ft2-006",
+      "input": "Dame salida Change/Reason/Concepts/Practice para esta mejora.",
+      "expectedIntent": "formatting",
+      "baselineIntent": "formatting",
+      "candidateIntent": "formatting"
+    },
+    {
+      "id": "ft2-007",
+      "input": "¿Uso /api/ask o /api/chat para runbook interno?",
+      "expectedIntent": "routing",
+      "baselineIntent": "teaching",
+      "candidateIntent": "routing"
+    },
+    {
+      "id": "ft2-008",
+      "input": "¿Cómo validamos body gigante para evitar abuso?",
+      "expectedIntent": "safety",
+      "baselineIntent": "safety",
+      "candidateIntent": "safety"
+    },
+    {
+      "id": "ft2-009",
+      "input": "Necesito practicar con un ejercicio guiado del cambio.",
+      "expectedIntent": "teaching",
+      "baselineIntent": "formatting",
+      "candidateIntent": "teaching"
+    },
+    {
+      "id": "ft2-010",
+      "input": "Evalúa riesgo de permitir tokens sin verificación de issuer.",
+      "expectedIntent": "risk-classification",
+      "baselineIntent": "routing",
+      "candidateIntent": "risk-classification"
+    },
+    {
+      "id": "ft2-011",
+      "input": "Dime cómo estructurar la respuesta para revisión técnica rápida.",
+      "expectedIntent": "formatting",
+      "baselineIntent": "formatting",
+      "candidateIntent": "formatting"
+    },
+    {
+      "id": "ft2-012",
+      "input": "¿Cómo enrutar una consulta que pide documentación interna y citas?",
+      "expectedIntent": "routing",
+      "baselineIntent": "routing",
+      "candidateIntent": "routing"
+    }
+  ]
+}
+

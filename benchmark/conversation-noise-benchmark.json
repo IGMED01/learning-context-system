@@ -1,0 +1,29 @@
+{
+  "suite": "nexus-conversation-noise-v1",
+  "turns": 100,
+  "contextWindowTurns": 100,
+  "measureAfterTurn": 40,
+  "anchors": [
+    { "turn": 12, "label": "ANCHOR:AUTH-BOUNDARY" },
+    { "turn": 44, "label": "ANCHOR:RUNBOOK-INCIDENT" },
+    { "turn": 76, "label": "ANCHOR:SESSION-REVOCATION-2026" }
+  ],
+  "thresholds": {
+    "minTokenReduction": 0.25,
+    "minOptimizedAnchorHitRate": 0.9,
+    "maxAnchorHitRateDrop": 0.05,
+    "minRedundancyRatio": 0.6
+  },
+  "baseline": {
+    "summaryEvery": 0,
+    "summaryKeepTurns": 8,
+    "maxTurns": 240,
+    "contextMaxChars": 20000
+  },
+  "optimized": {
+    "summaryEvery": 6,
+    "summaryKeepTurns": 8,
+    "maxTurns": 120,
+    "contextMaxChars": 20000
+  }
+}

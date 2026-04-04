@@ -31,11 +31,14 @@
  *   limit: number,
  *   scope: string,
  *   type: string,
- *   backend: "resilient" | "local-only",
+ *   backend: "resilient" | "local-only" | "parallel",
+ *   isolation: "strict" | "relaxed",
  *   strictRecall: boolean,
  *   degradedRecall: boolean,
  *   autoRecall: boolean,
- *   autoRemember: boolean
+ *   autoRemember: boolean,
+ *   tempTtlMinutes: number,
+ *   tempMaxEntries: number
  * }} ProjectMemoryConfig
  */
 
@@ -48,23 +51,71 @@
 
 /**
  * @typedef {{
+ *   enabled: boolean,
+ *   sources: string[],
+ *   enforcement: "warn-block-critical" | "warn-only" | "off",
+ *   minConfidence: number,
+ *   strictIsolation: boolean,
+ *   defaultFocus: "auto" | "on" | "off"
+ * }} ProjectSecurityLearningConfig
+ */
+
+/**
+ * @typedef {{
  *   ignoreSensitiveFiles: boolean,
  *   redactSensitiveContent: boolean,
  *   ignoreGeneratedFiles: boolean,
  *   allowSensitivePaths: string[],
- *   extraSensitivePathFragments: string[]
+ *   extraSensitivePathFragments: string[],
+ *   learning: ProjectSecurityLearningConfig
  * }} ProjectSecurityConfig
  */
 
 /**
  * @typedef {{
- *   ignoreDirs: string[]
+ *   enabled: boolean,
+ *   binaryPath: string,
+ *   arguments: string[],
+ *   timeoutMs: number
+ * }} ProjectFastScannerConfig
+ */
+
+/**
+ * @typedef {{
+ *   ignoreDirs: string[],
+ *   fastScanner: ProjectFastScannerConfig
  * }} ProjectScanConfig
  */
 
 /**
  * @typedef {{
+ *   maxAttempts: number,
+ *   backoffMs: number,
+ *   maxBackoffMs: number
+ * }} ProjectSyncRetryPolicy
+ */
+
+/**
+ * @typedef {{
+ *   enabled: boolean,
+ *   path: string,
+ *   ttlDays: number
+ * }} ProjectSyncDlqConfig
+ */
+
+/**
+ * @typedef {{
+ *   knowledgeBackend: "notion" | "obsidian" | "local-only",
+ *   retryPolicy: ProjectSyncRetryPolicy,
+ *   dlq: ProjectSyncDlqConfig
+ * }} ProjectSyncConfig
+ */
+
+/**
+ * @typedef {{
  *   requirePlanForWrite: boolean,
+ *   requireExecuteApprovalForWrite: boolean,
+ *   requireStructuredPostTaskForWrite: boolean,
  *   allowedScopePaths: string[],
  *   maxTokenBudget: number,
  *   requireExplicitFocusForWorkspaceScan: boolean,
@@ -97,6 +148,7 @@
  *   engram: ProjectEngramConfig,
  *   security: ProjectSecurityConfig,
  *   scan: ProjectScanConfig,
+ *   sync: ProjectSyncConfig,
  *   safety: ProjectSafetyConfig,
  *   llm: ProjectLlmConfig,
  *   models: { proposal: string, codegen: string, review: string, security: string, repair: string },
@@ -235,10 +287,13 @@ export function defaultProjectConfig() {
       scope: "project",
       type: "",
       backend: "resilient",
+      isolation: "strict",
       strictRecall: false,
       degradedRecall: true,
       autoRecall: true,
-      autoRemember: false
+      autoRemember: false,
+      tempTtlMinutes: 120,
+      tempMaxEntries: 50
     },
     engram: {
       binaryPath: process.platform === "win32" ? "tools/engram/engram.exe" : "tools/engram/engram",
@@ -249,13 +304,42 @@ export function defaultProjectConfig() {
       redactSensitiveContent: true,
       ignoreGeneratedFiles: true,
       allowSensitivePaths: [],
-      extraSensitivePathFragments: []
+      extraSensitivePathFragments: [],
+      learning: {
+        enabled: true,
+        sources: ["local", "ci"],
+        enforcement: "warn-block-critical",
+        minConfidence: 0.72,
+        strictIsolation: true,
+        defaultFocus: "auto"
+      }
     },
     scan: {
-      ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
+      ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs", ".claude", ".atl", ".engram"],
+      fastScanner: {
+        enabled: false,
+        binaryPath: "tools/fastscan/lcs-fastscan",
+        arguments: [],
+        timeoutMs: 8000
+      }
+    },
+    sync: {
+      knowledgeBackend: "local-only",
+      retryPolicy: {
+        maxAttempts: 3,
+        backoffMs: 1000,
+        maxBackoffMs: 30000
+      },
+      dlq: {
+        enabled: true,
+        path: ".lcs/dlq",
+        ttlDays: 7
+      }
     },
     safety: {
       requirePlanForWrite: false,
+      requireExecuteApprovalForWrite: false,
+      requireStructuredPostTaskForWrite: false,
       allowedScopePaths: [],
       maxTokenBudget: 700,
       requireExplicitFocusForWorkspaceScan: true,
@@ -312,12 +396,25 @@ export function validateProjectConfig(value) {
     assertObject(config.security, "Project config.security");
   }
 
+  if (
+    config.security &&
+    typeof config.security === "object" &&
+    !Array.isArray(config.security) &&
+    config.security.learning !== undefined
+  ) {
+    assertObject(config.security.learning, "Project config.security.learning");
+  }
+
   if (config.scan !== undefined) {
     assertObject(config.scan, "Project config.scan");
   }
 
   if (config.safety !== undefined) {
     assertObject(config.safety, "Project config.safety");
+  }
+
+  if (config.sync !== undefined) {
+    assertObject(config.sync, "Project config.sync");
   }
 
   if (config.llm !== undefined) {
@@ -329,7 +426,12 @@ export function validateProjectConfig(value) {
   const memory = /** @type {Record<string, unknown> | undefined} */ (config.memory);
   const engram = /** @type {Record<string, unknown> | undefined} */ (config.engram);
   const security = /** @type {Record<string, unknown> | undefined} */ (config.security);
+  const securityLearning =
+    security && typeof security.learning === "object" && security.learning && !Array.isArray(security.learning)
+      ? /** @type {Record<string, unknown>} */ (security.learning)
+      : undefined;
   const scan = /** @type {Record<string, unknown> | undefined} */ (config.scan);
+  const sync = /** @type {Record<string, unknown> | undefined} */ (config.sync);
   const safety = /** @type {Record<string, unknown> | undefined} */ (config.safety);
   const llm = /** @type {Record<string, unknown> | undefined} */ (config.llm);
   const models = /** @type {Record<string, unknown> | undefined} */ (config.models);
@@ -350,13 +452,79 @@ export function validateProjectConfig(value) {
     memoryBackend !== undefined &&
     memoryBackend !== "resilient" &&
     memoryBackend !== "engram-only" &&
-    memoryBackend !== "local-only"
+    memoryBackend !== "local-only" &&
+    memoryBackend !== "parallel"
   ) {
-    fail("Project config.memory.backend must be 'resilient' or 'local-only' (legacy alias: 'engram-only').");
+    fail("Project config.memory.backend must be 'resilient', 'parallel', or 'local-only' (legacy alias: 'engram-only').");
+  }
+
+  const memoryIsolation = optionalString(memory?.isolation, "Project config.memory.isolation");
+  if (
+    memoryIsolation !== undefined &&
+    memoryIsolation !== "strict" &&
+    memoryIsolation !== "relaxed"
+  ) {
+    fail("Project config.memory.isolation must be 'strict' or 'relaxed'.");
   }
 
   const normalizedMemoryBackend =
     memoryBackend === "engram-only" ? "resilient" : memoryBackend;
+
+  const knowledgeBackend = optionalString(
+    sync?.knowledgeBackend,
+    "Project config.sync.knowledgeBackend"
+  );
+
+  const securityEnforcement = optionalString(
+    securityLearning?.enforcement,
+    "Project config.security.learning.enforcement"
+  );
+  if (
+    securityEnforcement !== undefined &&
+    securityEnforcement !== "warn-block-critical" &&
+    securityEnforcement !== "warn-only" &&
+    securityEnforcement !== "off"
+  ) {
+    fail(
+      "Project config.security.learning.enforcement must be 'warn-block-critical', 'warn-only', or 'off'."
+    );
+  }
+
+  const securityDefaultFocus = optionalString(
+    securityLearning?.defaultFocus,
+    "Project config.security.learning.defaultFocus"
+  );
+  if (
+    securityDefaultFocus !== undefined &&
+    securityDefaultFocus !== "auto" &&
+    securityDefaultFocus !== "on" &&
+    securityDefaultFocus !== "off"
+  ) {
+    fail("Project config.security.learning.defaultFocus must be 'auto', 'on', or 'off'.");
+  }
+
+  if (
+    knowledgeBackend !== undefined &&
+    knowledgeBackend !== "notion" &&
+    knowledgeBackend !== "obsidian" &&
+    knowledgeBackend !== "local-only"
+  ) {
+    fail("Project config.sync.knowledgeBackend must be 'notion', 'obsidian', or 'local-only'.");
+  }
+
+  const fastScanner =
+    scan && typeof scan.fastScanner === "object" && scan.fastScanner && !Array.isArray(scan.fastScanner)
+      ? /** @type {Record<string, unknown>} */ (scan.fastScanner)
+      : undefined;
+
+  const syncRetryPolicy =
+    sync && typeof sync.retryPolicy === "object" && sync.retryPolicy && !Array.isArray(sync.retryPolicy)
+      ? /** @type {Record<string, unknown>} */ (sync.retryPolicy)
+      : undefined;
+  const syncDlq =
+    sync && typeof sync.dlq === "object" && sync.dlq && !Array.isArray(sync.dlq)
+      ? /** @type {Record<string, unknown>} */ (sync.dlq)
+      : undefined;
 
   return {
     schemaVersion:
@@ -411,6 +579,7 @@ export function validateProjectConfig(value) {
         optionalString(memory?.type, "Project config.memory.type") ??
         defaults.memory.type,
       backend: normalizedMemoryBackend ?? defaults.memory.backend,
+      isolation: memoryIsolation ?? defaults.memory.isolation,
       strictRecall:
         optionalBoolean(memory?.strictRecall, "Project config.memory.strictRecall") ??
         defaults.memory.strictRecall,
@@ -422,7 +591,19 @@ export function validateProjectConfig(value) {
         defaults.memory.autoRecall,
       autoRemember:
         optionalBoolean(memory?.autoRemember, "Project config.memory.autoRemember") ??
-        defaults.memory.autoRemember
+        defaults.memory.autoRemember,
+      tempTtlMinutes:
+        optionalNumber(memory?.tempTtlMinutes, "Project config.memory.tempTtlMinutes", {
+          min: 1,
+          max: 10080,
+          integer: true
+        }) ?? defaults.memory.tempTtlMinutes,
+      tempMaxEntries:
+        optionalNumber(memory?.tempMaxEntries, "Project config.memory.tempMaxEntries", {
+          min: 10,
+          max: 500,
+          integer: true
+        }) ?? defaults.memory.tempMaxEntries
     },
     engram: {
       binaryPath:
@@ -457,12 +638,112 @@ export function validateProjectConfig(value) {
         optionalStringArray(
           security?.extraSensitivePathFragments,
           "Project config.security.extraSensitivePathFragments"
-        ) ?? defaults.security.extraSensitivePathFragments
+        ) ?? defaults.security.extraSensitivePathFragments,
+      learning: {
+        enabled:
+          optionalBoolean(
+            securityLearning?.enabled,
+            "Project config.security.learning.enabled"
+          ) ?? defaults.security.learning.enabled,
+        sources:
+          optionalStringArray(
+            securityLearning?.sources,
+            "Project config.security.learning.sources"
+          ) ?? defaults.security.learning.sources,
+        enforcement: securityEnforcement ?? defaults.security.learning.enforcement,
+        minConfidence:
+          optionalNumber(
+            securityLearning?.minConfidence,
+            "Project config.security.learning.minConfidence",
+            { min: 0, max: 1 }
+          ) ?? defaults.security.learning.minConfidence,
+        strictIsolation:
+          optionalBoolean(
+            securityLearning?.strictIsolation,
+            "Project config.security.learning.strictIsolation"
+          ) ?? defaults.security.learning.strictIsolation,
+        defaultFocus: securityDefaultFocus ?? defaults.security.learning.defaultFocus
+      }
     },
     scan: {
       ignoreDirs:
         optionalStringArray(scan?.ignoreDirs, "Project config.scan.ignoreDirs") ??
-        defaults.scan.ignoreDirs
+        defaults.scan.ignoreDirs,
+      fastScanner: {
+        enabled:
+          optionalBoolean(
+            fastScanner?.enabled,
+            "Project config.scan.fastScanner.enabled"
+          ) ?? defaults.scan.fastScanner.enabled,
+        binaryPath:
+          optionalString(
+            fastScanner?.binaryPath,
+            "Project config.scan.fastScanner.binaryPath"
+          ) ?? defaults.scan.fastScanner.binaryPath,
+        arguments:
+          optionalStringArray(
+            fastScanner?.arguments,
+            "Project config.scan.fastScanner.arguments"
+          ) ?? defaults.scan.fastScanner.arguments,
+        timeoutMs:
+          optionalNumber(
+            fastScanner?.timeoutMs,
+            "Project config.scan.fastScanner.timeoutMs",
+            {
+              min: 200,
+              integer: true
+            }
+          ) ?? defaults.scan.fastScanner.timeoutMs
+      }
+    },
+    sync: {
+      knowledgeBackend: knowledgeBackend ?? defaults.sync.knowledgeBackend,
+      retryPolicy: {
+        maxAttempts:
+          optionalNumber(
+            syncRetryPolicy?.maxAttempts,
+            "Project config.sync.retryPolicy.maxAttempts",
+            {
+              min: 1,
+              max: 12,
+              integer: true
+            }
+          ) ?? defaults.sync.retryPolicy.maxAttempts,
+        backoffMs:
+          optionalNumber(
+            syncRetryPolicy?.backoffMs,
+            "Project config.sync.retryPolicy.backoffMs",
+            {
+              min: 100,
+              max: 120000,
+              integer: true
+            }
+          ) ?? defaults.sync.retryPolicy.backoffMs,
+        maxBackoffMs:
+          optionalNumber(
+            syncRetryPolicy?.maxBackoffMs,
+            "Project config.sync.retryPolicy.maxBackoffMs",
+            {
+              min: 100,
+              max: 600000,
+              integer: true
+            }
+          ) ?? defaults.sync.retryPolicy.maxBackoffMs
+      },
+      dlq: {
+        enabled:
+          optionalBoolean(syncDlq?.enabled, "Project config.sync.dlq.enabled") ??
+          defaults.sync.dlq.enabled,
+        path:
+          optionalString(syncDlq?.path, "Project config.sync.dlq.path") ??
+          defaults.sync.dlq.path,
+        ttlDays:
+          optionalNumber(syncDlq?.ttlDays, "Project config.sync.dlq.ttlDays", {
+            min: 1,
+            max: 365,
+            integer: true
+          }) ?? defaults.sync.dlq.ttlDays
+      }
     },
     safety: {
       requirePlanForWrite:
@@ -470,6 +751,16 @@ export function validateProjectConfig(value) {
           safety?.requirePlanForWrite,
           "Project config.safety.requirePlanForWrite"
         ) ?? defaults.safety.requirePlanForWrite,
+      requireExecuteApprovalForWrite:
+        optionalBoolean(
+          safety?.requireExecuteApprovalForWrite,
+          "Project config.safety.requireExecuteApprovalForWrite"
+        ) ?? defaults.safety.requireExecuteApprovalForWrite,
+      requireStructuredPostTaskForWrite:
+        optionalBoolean(
+          safety?.requireStructuredPostTaskForWrite,
+          "Project config.safety.requireStructuredPostTaskForWrite"
+        ) ?? defaults.safety.requireStructuredPostTaskForWrite,
       allowedScopePaths:
         optionalStringArray(
           safety?.allowedScopePaths,

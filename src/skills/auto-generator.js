@@ -700,6 +700,63 @@ function toYamlSafeInline(value) {
 }
 
 /**
+ * @param {string} command
+ * @returns {string[]}
+ */
+function buildCommandWorkflowSteps(command) {
+  switch (command) {
+    case "recall":
+      return [
+        "1. Define the recall query with specific keywords (avoid generic terms).",
+        "2. Choose the right scope: `project` for focused results, `global` for cross-project.",
+        "3. Adjust `--limit` and `--min-score` if results are too noisy or too sparse.",
+        "4. Cross-check recalled chunks against current code — memory can be stale.",
+        "5. Summarize what was recalled and why it was relevant."
+      ];
+    case "teach":
+      return [
+        "1. Set `--objective` to describe what the LLM should learn, not what you did.",
+        "2. Pass `--changed-files` for every file touched — this drives codeFocus selection.",
+        "3. Use `--recall-query` to inject relevant historical memory as context.",
+        "4. Review the `teachingChecklist` in the output and follow it in order.",
+        "5. Confirm the packet reached the token budget with useful chunks (not noise)."
+      ];
+    case "remember":
+      return [
+        "1. Provide a concise, factual note — avoid opinions or time-relative phrases.",
+        "2. Tag with a project name for scoped recall later.",
+        "3. Verify the chunk was stored with `recall --query <topic>`.",
+        "4. Avoid storing secrets, paths, or environment-specific values.",
+        "5. Review stored chunks periodically and prune stale entries."
+      ];
+    case "doctor":
+      return [
+        "1. Run `npm run doctor:json` and check each health key.",
+        "2. Focus on `unhealthy` or `degraded` checks first — `ok` entries are fine.",
+        "3. For `tls: degraded`, verify cert files exist at the configured paths.",
+        "4. For `llmProviders: unavailable`, add the provider API key to `.env`.",
+        "5. Re-run doctor after fixing to confirm the check turns green."
+      ];
+    case "select":
+      return [
+        "1. Start with the `--focus` query that best describes the current task.",
+        "2. Use `--min-score` to filter noise (0.25 is a safe baseline).",
+        "3. If results are empty, widen the query or lower `--min-score`.",
+        "4. Inspect suppressed chunks with `--debug` to understand what was filtered.",
+        "5. Pass the selected context directly to `teach` or the LLM prompt."
+      ];
+    default:
+      return [
+        "1. Confirm objective and scope before running.",
+        "2. Run the minimum command path that reproduces the task.",
+        "3. Apply the smallest safe change.",
+        "4. Validate with typecheck/tests/doctor when relevant.",
+        "5. Summarize Change, Reason, Concepts, and Practice."
+      ];
+  }
+}
+
+/**
  * @param {{
  *   skillName: string,
  *   task: RepeatedTask,
@@ -713,6 +770,8 @@ export function buildGeneratedSkillMarkdown(input) {
   const sourceHistoryPath = input.sourceHistoryPath ?? ".lcs/shell-history";
   const taskLabel = toYamlSafeInline(input.task.key);
   const taskSample = toYamlSafeInline(input.task.sample);
+  const command = inferTaskCommand(input.task.key);
+  const workflowSteps = buildCommandWorkflowSteps(command);
 
   return [
     "---",
@@ -720,6 +779,7 @@ export function buildGeneratedSkillMarkdown(input) {
     `description: Auto-generated draft for repeated task '${taskLabel}' (${input.task.occurrences} occurrences).`,
     "status: draft",
     "source: nexus-skill-auto-generator",
+    `command: ${command}`,
     "---",
     "",
     `# ${input.skillName}`,
@@ -732,16 +792,13 @@ export function buildGeneratedSkillMarkdown(input) {
     "",
     `- detected repetitions: **${input.task.occurrences}**`,
     `- latest sample: \`${taskSample}\``,
+    `- inferred command: \`${command}\``,
     `- source history: \`${sourceHistoryPath}\``,
     `- generated at: \`${generatedAt}\``,
     "",
     "## Suggested workflow",
     "",
-    "1. Confirm objective and scope before editing.",
-    "2. Run the minimum command path that reproduces the task.",
-    "3. Apply the smallest safe change.",
-    "4. Validate with typecheck/tests/doctor when relevant.",
-    "5. Summarize Change, Reason, Concepts, and Practice.",
+    ...workflowSteps,
     "",
     "## Validation checklist",
     "",
@@ -752,7 +809,8 @@ export function buildGeneratedSkillMarkdown(input) {
     "## Promotion checklist",
     "",
     "- [ ] Human-reviewed wording and command safety",
-    "- [ ] Demonstrated token/time/error improvement",
+    "- [ ] Error rate improvement > 5% or error rate stayed at 0%",
+    "- [ ] Duration median at or below baseline",
     "- [ ] Moved from `draft` to `experimental` in registry",
     "- [ ] Promoted to `stable` after repeated successful use",
     ""

@@ -122,7 +122,7 @@ Leer la checklist del usuario: `cat .lcs/CHECKLIST-TU.md`
 ```
 .lcs/CHECKLIST.md              → checklist técnica detallada (mi trabajo)
 .lcs/CHECKLIST-TU.md           → checklist del usuario (conocimiento + visión)
-.lcs/ESTRATEGIA-RUFLO-PRIVADO.md → plan de salida de Ruflo (4 fases)
+.lcs/ESTRATEGIA-AGENTES-PRIVADO.md → estrategia de runtime de agentes (4 fases)
 .lcs/agents/routing.json       → registro de agentes (crear cuando sea necesario)
 .lcs/agents/axioms-*.md        → axiomas por categoría
 .lcs/decisions/                → decisiones documentadas del proyecto
@@ -132,8 +132,8 @@ Leer la checklist del usuario: `cat .lcs/CHECKLIST-TU.md`
 
 ## Reglas de operación
 
-- **Engram es batería externa** — no se borra; es fallback nivel 3. Si Ruflo no responde, Engram entra.
-- **Ruflo es temporal** — runtime de agentes mientras NEXUS sintetiza los propios.
+- **Engram es batería externa** — no se borra; es fallback nivel 3. Si el runtime principal no responde, Engram entra.
+- **Runtime de agentes propio** — priorizar runtime local/orquestador NEXUS y evitar dependencias externas en la ruta crítica.
 - **Axiomas son el activo real** — sin axiomas, Mitosis no puede sintetizar.
 - **Tests verdes antes de borrar** — nunca eliminar legacy hasta que 178/178 pase sin él.
 - **Un bloque, un commit** — no mezclar deuda técnica con feature en el mismo PR.

@@ -1,6 +1,6 @@
 # LCS — Context Intelligence Layer: Scope Freeze
 
-_Frozen: 2026-03-22 · v0.2.1 · Phase 0 deliverable_
+_Frozen: 2026-04-02 · v0.3.0 · Phase 0 deliverable_
 
 ## What LCS Is
 

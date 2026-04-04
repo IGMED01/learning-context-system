@@ -1,18 +1,32 @@
 # NEXUS
 
-[![CI](https://img.shields.io/github/actions/workflow/status/IGMED01/NEXUS/ci.yml?branch=main&label=CI)](https://github.com/IGMED01/NEXUS/actions/workflows/ci.yml)
-[![CodeQL](https://img.shields.io/github/actions/workflow/status/IGMED01/NEXUS/codeql.yml?branch=main&label=CodeQL)](https://github.com/IGMED01/NEXUS/actions/workflows/codeql.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems/ci.yml?branch=main&label=CI)](https://github.com/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems/codeql.yml?branch=main&label=CodeQL)](https://github.com/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems/actions/workflows/codeql.yml)
 ![Node 20+](https://img.shields.io/badge/node-20%2B-339933?logo=nodedotjs&logoColor=white)
 ![NEXUS](https://img.shields.io/badge/platform-NEXUS-2563eb)
 
 NEXUS es una plataforma CLI-first para **seleccionar contexto, enseñar desde cambios de código y persistir memoria durable** en un solo flujo.
 
+## Qué es NEXUS (hoy)
+
+NEXUS es una plataforma de ingeniería asistida por IA con enfoque pedagógico:
+
+- selecciona contexto de alta señal y reduce ruido;
+- entrega salida didáctica (`Change / Reason / Concepts / Practice`);
+- guarda memoria durable con enfoque local-first y backends externos opcionales;
+- expone endpoints operativos (`/api/health`, `/api/axioms`, `/api/costs/:sessionId`, `/api/agent/stream`).
+
+**Estado actual (2 de abril de 2026):**
+- plan de implementación/hardening completado;
+- checklists críticos cerrados;
+- gates de CI activos (retrieval-first, anti-ruido y readiness de FT).
+
 ## Qué hace NEXUS hoy
 
 - Selecciona contexto de alta señal y suprime ruido (`select`).
 - Genera paquetes de enseñanza ligados a código y tests reales (`teach`).
-- Recupera/guarda memoria durable con Engram + fallback resiliente (`recall`, `remember`, `close`).
-- Expone API HTTP + SDK + OpenAPI + demo visual para uso operativo.
+- Recupera/guarda memoria durable con almacenamiento local-first y backend externo opcional (`recall`, `remember`, `close`).
+- Expone API HTTP + SDK + OpenAPI (el endpoint `/api/demo` sirve una página inline mínima).
 - Aplica seguridad, observabilidad, versionado y quality gates en CI.
 
 ## Convención de nombres
@@ -26,8 +40,8 @@ NEXUS es una plataforma CLI-first para **seleccionar contexto, enseñar desde ca
 ## Instalación
 
 ```bash
-git clone https://github.com/IGMED01/NEXUS.git
-cd NEXUS
+git clone https://github.com/IGMED01/Nexus-Context-Orchestration-Engine-for-LLM-Systems.git
+cd Nexus-Context-Orchestration-Engine-for-LLM-Systems
 npm ci --ignore-scripts
 npm run doctor:json
 ```
@@ -36,7 +50,7 @@ Requisitos mínimos:
 
 - Node.js 20+
 - Git
-- Binario de Engram solo si quieres memoria durable sin modo fallback local
+- Backend externo opcional (el modo local-first funciona sin binarios adicionales)
 
 ---
 
@@ -129,11 +143,14 @@ Estrategia actual: modularizar primero dentro de un repo; extraer a multi-repo s
 ## Documentación
 
 - Índice de docs: [`docs/README.md`](docs/README.md)
-- Plan NEXUS: [`docs/planning/nexus-plan.md`](docs/planning/nexus-plan.md)
+- Estado actual del proyecto: [`docs/status-actual.md`](docs/status-actual.md)
+- Roadmap público: [`docs/planning/roadmap.md`](docs/planning/roadmap.md)
+- Guía de knowledge backends: [`docs/knowledge-backends.md`](docs/knowledge-backends.md)
 - Guía API NEXUS: [`docs/nexus-api.md`](docs/nexus-api.md)
 - Guía de integración: [`docs/integration.md`](docs/integration.md)
 - Evidencia de valor: [`docs/evidence-of-value.md`](docs/evidence-of-value.md)
-- Checklist de release: [`docs/release-checklist.md`](docs/release-checklist.md)
+
+Los checklists y planes de implementación pasan a ser **artefactos solo locales** y no se publican en GitHub.
 
 ---
 

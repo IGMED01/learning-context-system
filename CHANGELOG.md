@@ -7,6 +7,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-02
+
+### Added
+- Added parallel memory runtime with dual-provider support (`local + obsidian`) through `src/memory/parallel-memory-client.js`.
+- Added Obsidian memory provider adapter (`src/memory/obsidian-memory-provider.js`) with project-scoped read/write compatibility for `remember`/`close`/`recall`/`teach`.
+- Added shared advanced memory ranking module (`src/memory/memory-search-ranking.js`) for metadata gating, hybrid lexical ranking, recency weighting, path affinity scoring, and cross-provider deduplication.
+- Added strict memory isolation controls (`memory.isolation`, `--memory-isolation`) and language-aware filters (`--memory-language`) across recall and teach flows.
+
+### Changed
+- Extended memory backend strategy with `parallel` mode (`--memory-backend parallel`) while keeping `resilient` and `local-only` compatibility.
+- Teach auto-recall and auto-remember now propagate language/isolation context to reduce cross-language drift (for example Go knowledge surfacing during JavaScript tasks).
+- Obsidian vault export/sync now uses project-first sectorization (`skills`, `tools`, `projects`, `learning-packets`, fallback `memories`) while preserving type metadata.
+- Recall output now exposes isolation and provider-chain diagnostics in both text and JSON observability payloads.
+- Updated doctor diagnostics for parallel mode to report Obsidian second-memory readiness.
+- Marked local vault path `NEXUS/learning-context-system/` as gitignored local-only knowledge.
+
+### Contracts
+- CLI/config contracts extended additively for:
+  - `memory.backend = parallel`
+  - `memory.isolation = strict|relaxed`
+  - language-aware memory filters/options in recall/teach/remember/close
+- No breaking JSON contract change.
+
+## [0.3.0] - 2026-04-02
+
 ### Added
 - Added `docs/planning/nexus-plan.md` to track the full 11-layer execution checklist by phase (`FASE 1..4`) with dependencies, priorities, and completion status.
 - Added NEXUS runtime layers and modules:
@@ -27,6 +52,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added `docs/repo-split-5-repos.md` to explain the real split strategy: modularize first, extract later.
 - Updated `README.md`, `README.es.md`, `docs/planning/roadmap.md`, and `docs/status-actual.md` so GitHub explains exactly what the ecosystem is and how mature each area is.
 - Updated `docs/usage.md` with the active NEXUS API surface and auth model.
+- Moved implementation plans/checklists to **local-only** artifacts (removed from GitHub tracking and public docs links).
 
 ### Performance
 - Cached `focusTokens` once per `selectContextWindow` call instead of re-tokenizing per chunk, eliminating O(n) redundant tokenizations.
@@ -63,6 +89,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Domain eval suite now supports coverage policy (`qualityPolicy.requiredDomains`, `qualityPolicy.minCasesPerDomain`) and can run through API/SDK with `POST /api/evals/domain-suite`.
 - API errors now use a consistent contract (`errorCode`, `requestId`, `details`) and `x-request-id` response header; pipeline execution now exposes extended traceability (`runId`, timing summary, and per-step `attemptTrace`).
 - Installation policy is now standardized on `npm ci --ignore-scripts` (README/docs/CI), and `doctor` now reports an explicit `npm install scripts policy` check so environments can verify `ignore-scripts` safety.
+- Bumped package release metadata to `v0.3.0`.
 
 ### Contracts
 - Added v1 compatibility fixtures/tests for all JSON CLI commands (`version`, `doctor`, `init`, `sync-knowledge`, `ingest-security`, `select`, `teach`, `readme`, `recall`, `remember`, `close`).

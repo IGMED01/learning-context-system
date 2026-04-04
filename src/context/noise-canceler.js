@@ -10,7 +10,7 @@
 
 /**
  * @typedef {Chunk & {
- *   origin: "memory" | "workspace",
+ *   origin: "memory" | "workspace" | "chat",
  *   tokenCount: number,
  *   tokens: string[],
  *   retrievalScore?: number,
@@ -24,6 +24,8 @@
  *   detail: ChunkDiagnostics
  * }} ScoreChunkResult
  */
+
+/** @typedef {"memory" | "workspace" | "chat"} SourceBudgetName */
 
 const DEFAULT_STOPWORDS = new Set([
   "a",
@@ -333,11 +335,18 @@ function normalizeSource(source = "") {
 }
 
 /**
- * @param {string} [source]
- * @returns {"memory" | "workspace"}
+ * @param {Chunk} chunk
+ * @returns {"memory" | "workspace" | "chat"}
  */
-function chunkOrigin(source = "") {
-  return /^(engram|memory):\/\//u.test(normalizeSource(source)) ? "memory" : "workspace";
+function chunkOrigin(chunk) {
+  const kind = String(chunk.kind ?? "").toLowerCase();
+  const source = normalizeSource(String(chunk.source ?? ""));
+
+  if (kind === "chat" || /^chat:\/\//u.test(source)) {
+    return "chat";
+  }
+
+  return /^(engram|memory):\/\//u.test(source) ? "memory" : "workspace";
 }
 
 /**
@@ -350,6 +359,65 @@ function chunkOrigin(source = "") {
  */
 function recallBoost(source = "") {
   return /^(engram|memory):\/\//u.test(normalizeSource(source)) ? 0.12 : 0;
+}
+
+/**
+ * @param {SelectionOptions["sourceBudgets"]} value
+ */
+function normalizeSourceBudgetConfig(value) {
+  if (!value || typeof value !== "object") {
+    return {
+      enabled: false,
+      ratios: /** @type {Partial<Record<SourceBudgetName, number>>} */ ({})
+    };
+  }
+
+  const input = /** @type {Record<string, unknown>} */ (value);
+  /** @type {Partial<Record<SourceBudgetName, number>>} */
+  const ratios = {};
+
+  for (const key of /** @type {SourceBudgetName[]} */ (["workspace", "memory", "chat"])) {
+    const raw = input[key];
+    if (typeof raw !== "number" || !Number.isFinite(raw)) {
+      continue;
+    }
+
+    const clamped = clamp(raw, 0, 1);
+    if (clamped > 0) {
+      ratios[key] = clamped;
+    } else {
+      ratios[key] = 0;
+    }
+  }
+
+  const keys = Object.keys(ratios);
+  if (!keys.length) {
+    return {
+      enabled: false,
+      ratios
+    };
+  }
+
+  const total = keys.reduce((sum, key) => sum + asNumber(ratios[/** @type {SourceBudgetName} */ (key)]), 0);
+
+  if (total <= 0) {
+    return {
+      enabled: true,
+      ratios
+    };
+  }
+
+  if (total > 1) {
+    for (const key of keys) {
+      const typedKey = /** @type {SourceBudgetName} */ (key);
+      ratios[typedKey] = asNumber(ratios[typedKey]) / total;
+    }
+  }
+
+  return {
+    enabled: true,
+    ratios
+  };
 }
 
 /**
@@ -801,7 +869,7 @@ export function selectContextWindow(chunks, options = {}) {
     const tokens = tokenize(compressedContent);
     return {
       ...chunk,
-      origin: chunkOrigin(chunk.source),
+      origin: chunkOrigin(chunk),
       content: compressedContent,
       tokenCount: approximateTokenCount(compressedContent),
       tokens
@@ -828,6 +896,32 @@ export function selectContextWindow(chunks, options = {}) {
     }))
     .sort((left, right) => right.score - left.score);
   const preparedById = new Map(prepared.map((chunk) => [chunk.id, chunk]));
+  const sourceBudgetConfig = normalizeSourceBudgetConfig(options.sourceBudgets);
+  /** @type {Partial<Record<SourceBudgetName, number>>} */
+  const sourceTokenCaps = {};
+  /** @type {Record<SourceBudgetName, number>} */
+  const usedOriginTokens = {
+    workspace: 0,
+    memory: 0,
+    chat: 0
+  };
+
+  if (sourceBudgetConfig.enabled) {
+    for (const key of /** @type {SourceBudgetName[]} */ (["workspace", "memory", "chat"])) {
+      const ratio = sourceBudgetConfig.ratios[key];
+      if (typeof ratio !== "number" || !Number.isFinite(ratio)) {
+        continue;
+      }
+
+      if (ratio <= 0) {
+        sourceTokenCaps[key] = 0;
+        continue;
+      }
+
+      const cap = Math.max(1, Math.floor(tokenBudget * ratio));
+      sourceTokenCaps[key] = cap;
+    }
+  }
 
   const normalizedRecallReserveRatio = clamp(recallReserveRatio, 0, 0.5);
   const recallRanked = ranked.filter((entry) => entry.chunk.origin === "memory");
@@ -917,10 +1011,26 @@ export function selectContextWindow(chunks, options = {}) {
     if (
       phase === "recall" &&
       chunk.origin === "memory" &&
+      !sourceBudgetConfig.enabled &&
       recallTokenBudget > 0 &&
       usedRecallTokens + chunk.tokenCount > recallTokenBudget
     ) {
       return;
+    }
+
+    if (sourceBudgetConfig.enabled) {
+      const originCap = sourceTokenCaps[chunk.origin];
+      if (typeof originCap === "number") {
+        if (originCap <= 0) {
+          suppressChunk(chunk, "origin-budget-exceeded");
+          return;
+        }
+
+        if (usedOriginTokens[chunk.origin] + chunk.tokenCount > originCap) {
+          suppressChunk(chunk, "origin-budget-exceeded");
+          return;
+        }
+      }
     }
 
     if (usedTokens + chunk.tokenCount > tokenBudget) {
@@ -936,6 +1046,7 @@ export function selectContextWindow(chunks, options = {}) {
     processed.add(chunk.id);
     selected.push(chunk);
     usedTokens += chunk.tokenCount;
+    usedOriginTokens[chunk.origin] += chunk.tokenCount;
 
     if (phase === "recall" && chunk.origin === "memory") {
       usedRecallTokens += chunk.tokenCount;
@@ -955,7 +1066,7 @@ export function selectContextWindow(chunks, options = {}) {
   }
 
   let rebalanceIterations = 0;
-  while (rebalanceIterations < maxChunks) {
+  while (!sourceBudgetConfig.enabled && rebalanceIterations < maxChunks) {
     rebalanceIterations++;
     const selectedRecall = selected
       .map((chunk, index) => ({ chunk, index }))
@@ -1060,7 +1171,17 @@ export function selectContextWindow(chunks, options = {}) {
       selectedCount: selected.length,
       suppressedCount: suppressed.length,
       selectedOrigins: summarizeBy(selected, (chunk) => chunk.origin),
-      suppressedOrigins: summarizeBy(suppressed, (chunk) => chunk.origin ?? chunkOrigin(chunk.source)),
+      suppressedOrigins: summarizeBy(
+        suppressed,
+        (chunk) =>
+          chunk.origin ??
+          chunkOrigin({
+            id: chunk.id,
+            source: chunk.source,
+            kind: chunk.kind ?? "doc",
+            content: ""
+          })
+      ),
       suppressionReasons: summarizeBy(suppressed, (chunk) => chunk.reason)
     }
   };

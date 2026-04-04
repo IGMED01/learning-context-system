@@ -1,15 +1,12 @@
 /**
  * API Route Handlers — maps HTTP endpoints to CLI core logic.
  *
- * ARCHITECTURE NOTE: This module is one of two server entry points:
- *   1. handlers.ts (this file) — thin CLI-adapter routes registered via
- *      `registerRoute()`, loaded by `start.js` and `server.ts`.
- *   2. server.js — legacy HTTP server with direct executor calls,
- *      kept for backward compatibility with existing integrations.
+ * Each handler extracts parameters from the JSON request body,
+ * delegates to the existing CLI pipeline via `runCli()`, and
+ * returns a structured JSON response.
  *
- * Routes defined here delegate all business logic to the CLI pipeline
- * via `runCli()`. Routes in server.js call executors directly.
- * They are NOT duplicates — they serve different consumers.
+ * This is a thin adapter layer — all business logic lives in
+ * the CLI commands. The API just provides HTTP access to them.
  *
  * Endpoint mapping:
  *   POST /api/recall     → lcs recall --query <q> --project <p>
@@ -28,43 +25,42 @@ import type { GuardConfig, GuardInput } from "../types/core-contracts.d.ts";
 import { runCli } from "../cli/app.js";
 import { evaluateGuard, formatGuardResultAsText } from "../guard/guard-engine.js";
 import { registerRoute, jsonResponse, errorResponse, getRegisteredRoutes } from "./router.js";
+import { getAllCommands as getRegisteredCommands } from "../core/command-registry.js";
 import { getMetricsSnapshot, registerAlertRule, listAlertRules } from "../observability/live-metrics.js";
+import { getObservabilityReport } from "../observability/metrics-store.js";
 import { runEvalSuite, loadEvalSuite } from "../eval/eval-runner.js";
 import { executeWorkflow } from "../orchestration/workflow-engine.js";
 import { savePromptVersion, getCurrentPrompt, getPromptHistory, rollbackPrompt, listPrompts } from "../versioning/prompt-versioning.js";
 import { loadSnapshots, getScoreTrend } from "../versioning/context-snapshot.js";
 import { getCurrentModelConfig, updateModelConfig, getModelConfigHistory } from "../versioning/model-config.js";
 import { checkAndRollback } from "../versioning/rollback-engine.js";
-import { createSession, getSession, addTurn, buildConversationContext, listSessions } from "../orchestration/conversation-manager.js";
+import {
+  createSession,
+  getSession,
+  addTurn,
+  buildConversationContext,
+  buildConversationRecallQuery,
+  getConversationNoiseTelemetry,
+  listSessions
+} from "../orchestration/conversation-manager.js";
 import { runCodeGate, getGateErrors, formatGateErrors } from "../guard/code-gate.js";
 import { runRepairLoop, formatRepairTrace } from "../orchestration/repair-loop.js";
 import { loadArchitectureRules, runArchitectureGate, formatArchitectureResult } from "../guard/architecture-gate.js";
 import { runDeprecationGate, formatDeprecationResult } from "../guard/deprecation-gate.js";
 import { createAxiomInjector } from "../memory/axiom-injector.js";
+import { spawnNexusAgent, formatNexusAgentSummary } from "../orchestration/nexus-agent-bridge.js";
 import { rtkGain, rtkDoctorCheck, isRtkAvailable } from "../io/rtk-adapter.js";
 import { runMitosisPipeline, formatMitosisReport, listAgents, routeToAgent } from "../orchestration/agent-synthesizer.js";
-import { runJarvisCommand } from "../cli/jarvis-command.js";
+import { resolveEndpointContextProfile, selectEndpointContext } from "../context/context-mode.js";
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { loadApiAxioms, formatApiAxiomsMarkdown } from "./axioms-loader.js";
 import { chatCompletion } from "../llm/openrouter-provider.js";
+import { parseLlmResponse } from "../llm/response-parser.js";
+import { recordCommandMetric } from "../observability/metrics-store.js";
+import path from "node:path";
+import "./commands/tasks.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
-
-/**
- * Clamp a user-supplied directory path to a trusted root.
- * Prevents path-traversal attacks on routes that accept `dataDir` from
- * request headers or body.  If the resolved path escapes `root`, returns `root`.
- *
- * @param input - Raw value from request header / body field
- * @param root  - Trusted base directory (defaults to process.cwd())
- */
-function resolveDataDir(input: unknown, root: string = process.cwd()): string {
-  if (typeof input !== "string" || !input.trim()) return root;
-  const resolved = path.resolve(root, input.trim());
-  // Reject paths that escape the trusted root
-  return resolved.startsWith(root + path.sep) || resolved === root ? resolved : root;
-}
 
 function requireField(body: Record<string, unknown>, field: string): string {
   const value = body[field];
@@ -104,6 +100,26 @@ function optionalNumber(body: Record<string, unknown>, field: string): number | 
   return value;
 }
 
+const API_WORKSPACE_ROOT = path.resolve(process.cwd());
+
+/**
+ * @param {string | undefined} candidate
+ * @param {string} label
+ */
+function resolveSafePathWithinWorkspace(candidate: string | undefined, label: string): string {
+  if (!candidate || candidate.trim() === "" || candidate.trim() === ".") {
+    return API_WORKSPACE_ROOT;
+  }
+
+  const resolved = path.resolve(API_WORKSPACE_ROOT, candidate);
+
+  if (resolved === API_WORKSPACE_ROOT || resolved.startsWith(`${API_WORKSPACE_ROOT}${path.sep}`)) {
+    return resolved;
+  }
+
+  throw new Error(`${label} must stay inside workspace root: ${API_WORKSPACE_ROOT}`);
+}
+
 /**
  * @param {string | undefined} value
  * @returns {boolean}
@@ -128,6 +144,118 @@ function buildArgv(command: string, opts: Record<string, string | undefined>): s
   return argv;
 }
 
+const CLI_ERROR_TOP_LEVEL_ALLOWLIST = new Set([
+  "action",
+  "blocked",
+  "blockedBy",
+  "code",
+  "compliance",
+  "degraded",
+  "details",
+  "error",
+  "errorCode",
+  "errors",
+  "failureKind",
+  "fixHint",
+  "guard",
+  "memoryStatus",
+  "mode",
+  "project",
+  "provider",
+  "query",
+  "reason",
+  "reviewStatus",
+  "scope",
+  "status",
+  "type",
+  "violations",
+  "warning",
+  "warnings"
+]);
+
+const CLI_ERROR_REDACTED_KEYS = new Set([
+  "stdout",
+  "stderr",
+  "stack",
+  "trace",
+  "cwd",
+  "config",
+  "meta",
+  "observability"
+]);
+
+function sanitizeCliErrorValue(value: unknown, depth = 0): unknown {
+  if (depth > 4 || value === undefined) {
+    return undefined;
+  }
+
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeCliErrorValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+  }
+
+  if (typeof value === "object") {
+    const sanitized: Record<string, unknown> = {};
+
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (CLI_ERROR_REDACTED_KEYS.has(key)) {
+        continue;
+      }
+
+      const normalized = sanitizeCliErrorValue(entry, depth + 1);
+      if (normalized !== undefined) {
+        sanitized[key] = normalized;
+      }
+    }
+
+    return sanitized;
+  }
+
+  return undefined;
+}
+
+export function createSanitizedCliErrorPayload(
+  errorBody: Record<string, unknown> | null,
+  exitCode: number
+): { message: string; details?: Record<string, unknown> } {
+  const details: Record<string, unknown> = {};
+
+  if (errorBody) {
+    for (const [key, value] of Object.entries(errorBody)) {
+      if (key === "message" || !CLI_ERROR_TOP_LEVEL_ALLOWLIST.has(key)) {
+        continue;
+      }
+
+      const normalized = sanitizeCliErrorValue(value);
+      if (normalized !== undefined) {
+        details[key] = normalized;
+      }
+    }
+  }
+
+  const message =
+    typeof errorBody?.message === "string" && errorBody.message.trim()
+      ? errorBody.message.trim()
+      : exitCode === 1
+        ? "Command validation failed."
+        : "Command execution failed.";
+
+  return {
+    message,
+    details: Object.keys(details).length > 0 ? details : undefined
+  };
+}
+
 /**
  * Runs a CLI command and returns the result as an API response.
  */
@@ -136,11 +264,12 @@ async function runCliCommand(argv: string[]): Promise<ApiResponse> {
 
   if (result.exitCode !== 0) {
     const errorBody = tryParseJson(result.stderr || result.stdout || "");
+    const sanitizedError = createSanitizedCliErrorPayload(errorBody, result.exitCode);
 
     return errorResponse(
       result.exitCode === 1 ? 400 : 500,
-      errorBody?.message ?? result.stderr ?? "Command failed",
-      errorBody ?? { stdout: result.stdout, stderr: result.stderr }
+      sanitizedError.message,
+      sanitizedError.details
     );
   }
 
@@ -156,6 +285,81 @@ function tryParseJson(raw: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function buildSddMetricSummary(sdd: unknown) {
+  const record = asRecord(sdd);
+  if (record.enabled !== true) {
+    return undefined;
+  }
+
+  const requiredKinds = Array.isArray(record.requiredKinds)
+    ? record.requiredKinds.filter((entry): entry is string => typeof entry === "string" && entry.trim()).length
+    : 0;
+  const coverage = asRecord(record.coverage);
+  const coveredKinds = Object.entries(coverage).filter(([, covered]) => covered === true).length;
+  const injectedKinds = Array.isArray(record.injectedKinds)
+    ? record.injectedKinds.filter((entry): entry is string => typeof entry === "string" && entry.trim()).length
+    : 0;
+  const skippedReasons = Array.isArray(record.skippedKinds)
+    ? record.skippedKinds
+        .map((entry) => asRecord(entry))
+        .map((entry) => (typeof entry.reason === "string" ? entry.reason.trim() : ""))
+        .filter(Boolean)
+    : [];
+
+  return {
+    enabled: true,
+    requiredKinds,
+    coveredKinds,
+    injectedKinds,
+    skippedReasons
+  };
+}
+
+function buildTeachingMetricSummary(parsed: unknown) {
+  const record = asRecord(parsed);
+  const concepts = Array.isArray(record.concepts)
+    ? record.concepts.filter((entry): entry is string => typeof entry === "string" && entry.trim()).length
+    : 0;
+  const hasChange = typeof record.change === "string" && record.change.trim().length > 0;
+  const hasReason = typeof record.reason === "string" && record.reason.trim().length > 0;
+  const hasPractice = typeof record.practice === "string" && record.practice.trim().length > 0;
+  const sectionsPresent =
+    (hasChange ? 1 : 0) +
+    (hasReason ? 1 : 0) +
+    (concepts > 0 ? 1 : 0) +
+    (hasPractice ? 1 : 0);
+
+  return {
+    enabled: true,
+    sectionsExpected: 4,
+    sectionsPresent,
+    hasPractice
+  };
+}
+
+async function recordApiMetric(
+  command: string,
+  startedAt: number,
+  metric: Parameters<typeof recordCommandMetric>[0] = { command, durationMs: 0 }
+) {
+  await recordCommandMetric(
+    {
+      ...metric,
+      command,
+      durationMs: Math.max(0, Date.now() - startedAt)
+    },
+    {
+      filePath: process.env.LCS_OBSERVABILITY_FILE
+    }
+  );
 }
 
 // ── POST /api/recall ─────────────────────────────────────────────────
@@ -261,10 +465,17 @@ registerRoute("POST", "/api/ingest", async (req: ApiRequest): Promise<ApiRespons
   const sourcePath = requireField(req.body, "path");
   const project = optionalField(req.body, "project");
   const dryRun = req.body.dryRun === true;
+  let safeSourcePath = "";
+
+  try {
+    safeSourcePath = resolveSafePathWithinWorkspace(sourcePath, "path");
+  } catch (error) {
+    return errorResponse(400, error instanceof Error ? error.message : String(error));
+  }
 
   const opts: Record<string, string | undefined> = {
     source,
-    path: sourcePath,
+    path: safeSourcePath,
     project
   };
 
@@ -336,13 +547,21 @@ registerRoute("GET", "/api/health", async (_req: ApiRequest): Promise<ApiRespons
 // ── GET /api/routes ──────────────────────────────────────────────────
 
 registerRoute("GET", "/api/routes", async (_req: ApiRequest): Promise<ApiResponse> => {
-  const routes = getRegisteredRoutes();
+  const registered = getRegisteredRoutes();
+  const commands = getRegisteredCommands();
+  const routes = [
+    ...registered.map((route) => ({
+      method: route.method,
+      path: route.path
+    })),
+    ...commands.map((command) => ({
+      method: command.method,
+      path: command.path
+    }))
+  ];
 
   return jsonResponse(200, {
-    routes: routes.map((r) => ({
-      method: r.method,
-      path: r.path
-    }))
+    routes
   });
 });
 
@@ -350,7 +569,58 @@ registerRoute("GET", "/api/routes", async (_req: ApiRequest): Promise<ApiRespons
 
 registerRoute("GET", "/api/metrics", async (_req: ApiRequest): Promise<ApiResponse> => {
   const snapshot = getMetricsSnapshot();
-  return jsonResponse(200, snapshot as unknown as Record<string, unknown>);
+  let learning = {
+    teachingPackets: 0,
+    sddCoverageRate: 0,
+    recallHitRate: 0,
+    averageSelectedChunks: 0,
+    averageSuppressedChunks: 0
+  };
+  let observability: Record<string, unknown> | null = null;
+
+  try {
+    const report = await getObservabilityReport();
+    const teachStats = Array.isArray(report.commands)
+      ? report.commands.find((item) => item.command === "teach")
+      : undefined;
+
+    learning = {
+      teachingPackets: teachStats?.runs ?? 0,
+      sddCoverageRate: report.sdd?.coverageRate ?? 0,
+      recallHitRate: report.recall?.hitRate ?? 0,
+      averageSelectedChunks: report.selection?.averageSelected ?? 0,
+      averageSuppressedChunks: report.selection?.averageSuppressed ?? 0
+    };
+
+    observability = {
+      updatedAt: report.updatedAt,
+      totals: report.totals,
+      recall: {
+        attempts: report.recall?.attempts ?? 0,
+        hits: report.recall?.hits ?? 0,
+        hitRate: report.recall?.hitRate ?? 0
+      },
+      sdd: {
+        samples: report.sdd?.samples ?? 0,
+        coverageRate: report.sdd?.coverageRate ?? 0,
+        requiredKindsTotal: report.sdd?.requiredKindsTotal ?? 0,
+        coveredKindsTotal: report.sdd?.coveredKindsTotal ?? 0
+      },
+      selection: {
+        samples: report.selection?.samples ?? 0,
+        averageSelected: report.selection?.averageSelected ?? 0,
+        averageSuppressed: report.selection?.averageSuppressed ?? 0
+      }
+    };
+  } catch {
+    // observability fallback is optional for API metrics
+  }
+
+  return jsonResponse(200, {
+    ...(snapshot as unknown as Record<string, unknown>),
+    learning,
+    ...(observability ? { observability } : {})
+  });
 });
 
 // ── POST /api/alerts (S6) ────────────────────────────────────────────
@@ -400,8 +670,14 @@ registerRoute("POST", "/api/eval", async (req: ApiRequest): Promise<ApiResponse>
   let suite: EvalSuite;
 
   if (suitePath) {
-    const { resolve } = await import("node:path");
-    suite = await loadEvalSuite(resolve(suitePath));
+    let safeSuitePath = "";
+    try {
+      safeSuitePath = resolveSafePathWithinWorkspace(suitePath, "suitePath");
+    } catch (error) {
+      return errorResponse(400, error instanceof Error ? error.message : String(error));
+    }
+
+    suite = await loadEvalSuite(safeSuitePath);
   } else if (req.body.suite && typeof req.body.suite === "object") {
     suite = req.body.suite as EvalSuite;
   } else {
@@ -471,10 +747,11 @@ registerRoute("POST", "/api/conversation/turn", async (req: ApiRequest): Promise
   addTurn(sessionId, "user", content);
 
   const conversationContext = buildConversationContext(sessionId);
+  const recallQuery = buildConversationRecallQuery(content, conversationContext);
 
   const recallResult = await runCli([
     "recall",
-    "--query", content,
+    "--query", recallQuery,
     ...(project || session.project ? ["--project", project || session.project] : []),
     "--format", "json"
   ]);
@@ -489,7 +766,8 @@ registerRoute("POST", "/api/conversation/turn", async (req: ApiRequest): Promise
     sessionId,
     turnCount: session.turns.length,
     response: systemContent,
-    conversationContext: conversationContext.slice(-2000)
+    conversationContext: conversationContext.slice(-2000),
+    noiseTelemetry: getConversationNoiseTelemetry(sessionId)
   });
 });
 
@@ -583,8 +861,14 @@ registerRoute("POST", "/api/rollback-check", async (req: ApiRequest): Promise<Ap
   let evalSuite: import("../types/core-contracts.d.ts").EvalSuite;
 
   if (suitePath) {
-    const { resolve } = await import("node:path");
-    evalSuite = await loadEvalSuite(resolve(suitePath));
+    let safeSuitePath = "";
+    try {
+      safeSuitePath = resolveSafePathWithinWorkspace(suitePath, "suitePath");
+    } catch (error) {
+      return errorResponse(400, error instanceof Error ? error.message : String(error));
+    }
+
+    evalSuite = await loadEvalSuite(safeSuitePath);
   } else if (req.body.suite && typeof req.body.suite === "object") {
     evalSuite = req.body.suite as import("../types/core-contracts.d.ts").EvalSuite;
   } else {
@@ -639,6 +923,7 @@ registerRoute("POST", "/api/repair", async (req: ApiRequest): Promise<ApiRespons
   const result = await runRepairLoop({
     code: body.code as string,
     cwd: typeof body.cwd === "string" ? body.cwd : process.cwd(),
+    targetPath: typeof body.targetPath === "string" ? body.targetPath : undefined,
     tools,
     maxIterations: typeof body.maxIterations === "number" ? body.maxIterations : 3,
     context: typeof body.context === "string" ? body.context : undefined
@@ -710,7 +995,7 @@ registerRoute("POST", "/api/axioms", async (req: ApiRequest): Promise<ApiRespons
   }
 
   const result = await injector.save({
-    type: body.type as import("../types/core-contracts.d.ts").AxiomType,
+    type: body.type as any,
     title: body.title as string,
     body: body.body as string,
     language: typeof body.language === "string" ? body.language : "*",
@@ -766,7 +1051,10 @@ registerRoute("GET", "/api/axioms", async (req: ApiRequest): Promise<ApiResponse
     typeof req.query.format === "string" && req.query.format.trim()
       ? req.query.format.trim().toLowerCase()
       : "json";
-  const dataDir = resolveDataDir(req.headers["x-data-dir"]);
+  const dataDir =
+    typeof req.headers["x-data-dir"] === "string" && req.headers["x-data-dir"].trim()
+      ? req.headers["x-data-dir"].trim()
+      : process.cwd();
 
   const payload = await loadApiAxioms({ project, dataDir, domain, protectedOnly });
 
@@ -780,7 +1068,7 @@ registerRoute("GET", "/api/axioms", async (req: ApiRequest): Promise<ApiResponse
   return jsonResponse(200, payload);
 });
 
-// ── NEXUS Agent routing (NEXUS:5 Orchestration) ─────────────────────────
+// ── NEXUS Agent bridge (NEXUS:5) ────────────────────────────────────────
 
 registerRoute("POST", "/api/agent", async (req: ApiRequest): Promise<ApiResponse> => {
   const body = req.body as Record<string, unknown>;
@@ -789,18 +1077,45 @@ registerRoute("POST", "/api/agent", async (req: ApiRequest): Promise<ApiResponse
     return errorResponse(400, "Missing required field: task");
   }
 
-  const language = typeof body.language === "string" ? body.language : undefined;
-  const framework = typeof body.framework === "string" ? body.framework : undefined;
+  const task = body.task.trim();
+  const objective = typeof body.objective === "string" ? body.objective : "";
+  const changedFiles = Array.isArray(body.changedFiles)
+    ? body.changedFiles.filter((f): f is string => typeof f === "string")
+    : [];
+  const contextProfile = resolveEndpointContextProfile("agent", {
+    tokenBudget: typeof body.tokenBudget === "number" ? body.tokenBudget : undefined,
+    maxChunks: typeof body.maxChunks === "number" ? body.maxChunks : undefined
+  }, {
+    query: `${task} ${objective}`.trim(),
+    changedFilesCount: changedFiles.length,
+    chunkCount: changedFiles.length
+  });
 
-  const profile = await routeToAgent({ language, framework, dataDir: "." });
+  const result = await spawnNexusAgent({
+    task,
+    objective,
+    workspace: typeof body.workspace === "string" ? body.workspace : ".",
+    changedFiles,
+    focus: typeof body.focus === "string" ? body.focus : undefined,
+    project: typeof body.project === "string" ? body.project : "default",
+    agentType: (["coder", "reviewer", "tester", "analyst", "security"].includes(String(body.agentType))
+      ? body.agentType
+      : "coder") as any,
+    tokenBudget: contextProfile.tokenBudget,
+    maxChunks: contextProfile.maxChunks,
+    runGate: body.runGate === true,
+    language: typeof body.language === "string" ? body.language : undefined,
+    framework: typeof body.framework === "string" ? body.framework : undefined,
+    useSwarm: body.useSwarm === true,
+    swarmAgents: typeof body.swarmAgents === "number" ? body.swarmAgents : 3,
+    scoringProfile: contextProfile.scoringProfile
+  });
 
-  return jsonResponse(200, {
-    success: true,
-    task: body.task,
-    agent: profile ?? null,
-    message: profile
-      ? `Routed to NEXUS agent: ${profile.id} (${profile.domain})`
-      : "No specialist agent matched. Use /api/mitosis to synthesize domain agents."
+  return jsonResponse(result.success ? 200 : 422, {
+    ...result,
+    summary: formatNexusAgentSummary(result),
+    contextMode: contextProfile.mode,
+    contextSdd: result.nexusContext?.sddCoverage ?? {}
   });
 });
 
@@ -824,7 +1139,7 @@ registerRoute("POST", "/api/mitosis", async (req: ApiRequest): Promise<ApiRespon
   const project = typeof body.project === "string" && body.project.trim()
     ? body.project.trim()
     : "default";
-  const dataDir = resolveDataDir(body.dataDir);
+  const dataDir = typeof body.dataDir === "string" ? body.dataDir : ".";
   const minAxioms = typeof body.minAxioms === "number" ? body.minAxioms : 5;
   const minMaturityScore = typeof body.minMaturityScore === "number" ? body.minMaturityScore : 0.4;
   const dryRun = body.dryRun === true;
@@ -839,7 +1154,7 @@ registerRoute("POST", "/api/mitosis", async (req: ApiRequest): Promise<ApiRespon
 });
 
 registerRoute("GET", "/api/agents", async (req: ApiRequest): Promise<ApiResponse> => {
-  const dataDir = resolveDataDir(req.headers["x-data-dir"]);
+  const dataDir = typeof req.headers["x-data-dir"] === "string" ? req.headers["x-data-dir"] : ".";
   const agents = await listAgents({ dataDir });
   return jsonResponse(200, { agents, count: agents.length });
 });
@@ -848,7 +1163,7 @@ registerRoute("POST", "/api/agents/route", async (req: ApiRequest): Promise<ApiR
   const body = req.body as Record<string, unknown>;
   const language = typeof body.language === "string" ? body.language : undefined;
   const framework = typeof body.framework === "string" ? body.framework : undefined;
-  const dataDir = resolveDataDir(body.dataDir);
+  const dataDir = typeof body.dataDir === "string" ? body.dataDir : ".";
 
   if (!language && !framework) {
     return errorResponse(400, "Provide at least one of 'language' or 'framework' to route.");
@@ -905,7 +1220,7 @@ registerRoute("GET", "/api/impact", async (_req: ApiRequest): Promise<ApiRespons
   }
 });
 
-// ── P7: Shadow mode — NEXUS context quality benchmarking ─────────────────
+// ── P7: Shadow mode — NEXUS vs baseline comparison ─────────────────────
 
 registerRoute("POST", "/api/shadow", async (req: ApiRequest): Promise<ApiResponse> => {
   const body = req.body as Record<string, unknown>;
@@ -915,16 +1230,25 @@ registerRoute("POST", "/api/shadow", async (req: ApiRequest): Promise<ApiRespons
     return errorResponse(400, "Missing required field: query");
   }
 
+  // Shadow mode: compares NEXUS local BM25 vs baseline semantic recall
+  // In production, both run in parallel; results compared by:
+  // - hit rate (how many NEXUS results appear in baseline top-k)
+  // - latency (local BM25 is typically 2-10x faster)
+  // - quality pass (do results satisfy the axiom coverage contract?)
+  // The replacement gate fires when:
+  //   nexusQuality >= baselineQuality AND nexusLatency <= 2000ms AND degradedRate <= 0.05
+
   return jsonResponse(200, {
     query,
     contract: {
-      qualityGates: {
+      nexusReplaceBaselineWhen: {
+        qualityGte: "baseline_quality",
         latencyMs: 2000,
         degradedRateLte: 0.05
       }
     },
     status: "shadow-mode-stub",
-    message: "Shadow mode active. Wire live NEXUS providers to /api/shadow for real benchmarking."
+    message: "Shadow mode is active. Wire live baseline providers to /api/shadow for real comparison."
   });
 });
 
@@ -937,10 +1261,13 @@ registerRoute("GET", "/api/shadow/contract", async (_req: ApiRequest): Promise<A
         saveInterface: "save(input: MemorySaveInput) => Promise<Record<string,unknown>>"
       },
       qualityGates: {
+        topKOverlapWithBaseline: ">= 0.7",
         latencyP95Ms: "<= 2000",
         degradedRate: "<= 0.05",
         qualityPassRate: ">= 0.9"
       },
+      baselineStatus: "local-first",
+      replacementTrigger: "nexus_wins_by_metrics",
       targetPhase: "P7"
     }
   });
@@ -948,48 +1275,139 @@ registerRoute("GET", "/api/shadow/contract", async (_req: ApiRequest): Promise<A
 
 // ── POST /api/chat — LLM chat with optional NEXUS context ─────────────
 
-// ── NEXUS JARVIS — standalone orchestration pipeline ─────────────────
-
-registerRoute("POST", "/api/jarvis", async (req: ApiRequest): Promise<ApiResponse> => {
-  const body = req.body as Record<string, unknown>;
-  const task = typeof body.task === "string" ? body.task.trim() : "";
-
-  if (!task) {
-    return errorResponse(400, "Missing required field: task");
-  }
-
-  const result = await runJarvisCommand({
-    task,
-    chunks: Array.isArray(body.chunks) ? body.chunks as import("../types/core-contracts.d.ts").Chunk[] : [],
-    project: typeof body.project === "string" ? body.project : "nexus",
-    tokenBudget: typeof body.tokenBudget === "number" ? body.tokenBudget : 350,
-    maxChunks: typeof body.maxChunks === "number" ? body.maxChunks : 6,
-    maxOutputTokens: typeof body.maxOutputTokens === "number" ? body.maxOutputTokens : 2000,
-    saveMemory: body.saveMemory !== false
-  });
-
-  return jsonResponse(result.status === "blocked" ? 422 : 200, result);
-});
-
-// ── LLM chat ──────────────────────────────────────────────────────────
-
 registerRoute("POST", "/api/chat", async (req: ApiRequest): Promise<ApiResponse> => {
+  const requestStartedAt = Date.now();
   const body = req.body as Record<string, unknown>;
   const query = typeof body.query === "string" ? body.query.trim() : "";
 
   if (!query) {
+    await recordApiMetric("api.chat", requestStartedAt, {
+      command: "api.chat",
+      durationMs: 0,
+      degraded: true,
+      safety: {
+        blocked: true,
+        reason: "missing-query"
+      }
+    });
     return errorResponse(400, "Missing required field: query");
+  }
+  if (query.length > 4000) {
+    await recordApiMetric("api.chat", requestStartedAt, {
+      command: "api.chat",
+      durationMs: 0,
+      degraded: true,
+      safety: {
+        blocked: true,
+        reason: "query-too-long"
+      }
+    });
+    return errorResponse(400, "Field 'query' exceeds max length (4000 chars).");
   }
 
   const withContext = body.withContext !== false;
-  const chunks = Array.isArray(body.chunks) ? body.chunks as Array<Record<string, unknown>> : [];
+  const rawChunks = Array.isArray(body.chunks) ? body.chunks : [];
+  const chunks = rawChunks.slice(0, 100);
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    const isObjectChunk = Boolean(chunk) && typeof chunk === "object" && !Array.isArray(chunk);
+    const isStringChunk = typeof chunk === "string";
+
+    if (!isObjectChunk && !isStringChunk) {
+      await recordApiMetric("api.chat", requestStartedAt, {
+        command: "api.chat",
+        durationMs: 0,
+        degraded: true,
+        safety: {
+          blocked: true,
+          reason: "invalid-chunk-shape"
+        }
+      });
+      return errorResponse(400, `Invalid chunk at index ${index}. Expected string or object.`);
+    }
+
+    if (isObjectChunk) {
+      const record = chunk as Record<string, unknown>;
+      if (record.source !== undefined && typeof record.source !== "string") {
+        await recordApiMetric("api.chat", requestStartedAt, {
+          command: "api.chat",
+          durationMs: 0,
+          degraded: true,
+          safety: {
+            blocked: true,
+            reason: "invalid-chunk-source"
+          }
+        });
+        return errorResponse(400, `Invalid chunk at index ${index}. Field 'source' must be a string.`);
+      }
+      if (record.id !== undefined && typeof record.id !== "string") {
+        await recordApiMetric("api.chat", requestStartedAt, {
+          command: "api.chat",
+          durationMs: 0,
+          degraded: true,
+          safety: {
+            blocked: true,
+            reason: "invalid-chunk-id"
+          }
+        });
+        return errorResponse(400, `Invalid chunk at index ${index}. Field 'id' must be a string.`);
+      }
+      if (record.content !== undefined && typeof record.content !== "string") {
+        await recordApiMetric("api.chat", requestStartedAt, {
+          command: "api.chat",
+          durationMs: 0,
+          degraded: true,
+          safety: {
+            blocked: true,
+            reason: "invalid-chunk-content"
+          }
+        });
+        return errorResponse(400, `Invalid chunk at index ${index}. Field 'content' must be a string.`);
+      }
+      if (record.priority !== undefined && typeof record.priority !== "number") {
+        await recordApiMetric("api.chat", requestStartedAt, {
+          command: "api.chat",
+          durationMs: 0,
+          degraded: true,
+          safety: {
+            blocked: true,
+            reason: "invalid-chunk-priority"
+          }
+        });
+        return errorResponse(400, `Invalid chunk at index ${index}. Field 'priority' must be a number.`);
+      }
+      if (record.score !== undefined && typeof record.score !== "number") {
+        await recordApiMetric("api.chat", requestStartedAt, {
+          command: "api.chat",
+          durationMs: 0,
+          degraded: true,
+          safety: {
+            blocked: true,
+            reason: "invalid-chunk-score"
+          }
+        });
+        return errorResponse(400, `Invalid chunk at index ${index}. Field 'score' must be a number.`);
+      }
+    }
+  }
+
+  const contextSelection = selectEndpointContext({
+    endpoint: "chat",
+    query,
+    chunks: withContext ? chunks : [],
+    profileOverrides: {
+      tokenBudget: typeof body.tokenBudget === "number" ? body.tokenBudget : undefined,
+      maxChunks: typeof body.maxChunks === "number" ? body.maxChunks : undefined
+    }
+  });
 
   // Build context string from selected chunks
-  const contextStr = withContext && chunks.length > 0
-    ? chunks
-        .map(c => {
-          const source = typeof c.source === "string" ? c.source : "";
-          const content = typeof c.content === "string" ? c.content : "";
+  const contextStr = withContext && contextSelection.selectedChunks.length > 0
+    ? contextSelection.selectedChunks
+        .map(chunk => {
+          const source = typeof chunk.source === "string" ? chunk.source : "";
+          const content = typeof chunk.content === "string" ? chunk.content : "";
           return source ? `[${source}]\n${content}` : content;
         })
         .filter(Boolean)
@@ -997,38 +1415,58 @@ registerRoute("POST", "/api/chat", async (req: ApiRequest): Promise<ApiResponse>
         .slice(0, 8000)
     : "";
 
-  const totalChunkTokens = chunks.reduce((sum, c) => {
-    const content = typeof c.content === "string" ? c.content : "";
-    return sum + Math.ceil(content.length / 4);
-  }, 0);
-
   const result = await chatCompletion({
     query,
     context: contextStr || undefined
   });
+  const parsed = parseLlmResponse(String(result.response ?? ""));
 
   // Estimate prompt stats
   const contextTokens = Math.ceil(contextStr.length / 4);
-  const suppressedChunks = withContext ? 0 : chunks.length;
-  const suppressedTokens = withContext ? 0 : totalChunkTokens;
+  const suppressedChunks = Math.max(
+    0,
+    contextSelection.rawChunks - contextSelection.selectedChunks.length
+  );
+  const suppressedTokens = Math.max(
+    0,
+    contextSelection.rawTokens - contextTokens
+  );
+
+  await recordApiMetric("api.chat", requestStartedAt, {
+    command: "api.chat",
+    durationMs: 0,
+    degraded: result.ok !== true,
+    selection: {
+      selectedCount: withContext ? contextSelection.selectedChunks.length : 0,
+      suppressedCount: suppressedChunks
+    },
+    sdd: buildSddMetricSummary(contextSelection.sdd),
+    teaching: buildTeachingMetricSummary(parsed),
+    safety: {
+      blocked: false,
+      reason: result.ok === true ? "" : "llm-provider-unavailable"
+    }
+  });
 
   return jsonResponse(200, {
     response: result.response,
     provider: result.provider,
     model: result.model,
     ok: result.ok,
+    contextMode: contextSelection.mode,
+    contextSdd: contextSelection.sdd,
     promptStats: {
-      includedChunks: withContext ? chunks.length : 0,
+      includedChunks: withContext ? contextSelection.selectedChunks.length : 0,
       usedTokens: contextTokens + Math.ceil(query.length / 4),
       suppressedChunks
     },
     impact: {
       withoutNexus: {
-        chunks: chunks.length,
-        tokens: totalChunkTokens
+        chunks: contextSelection.rawChunks,
+        tokens: contextSelection.rawTokens
       },
       withNexus: {
-        chunks: withContext ? chunks.length : 0,
+        chunks: withContext ? contextSelection.selectedChunks.length : 0,
         tokens: withContext ? contextTokens : 0
       },
       suppressed: {
@@ -1037,8 +1475,8 @@ registerRoute("POST", "/api/chat", async (req: ApiRequest): Promise<ApiResponse>
       },
       savings: {
         tokens: suppressedTokens,
-        percent: totalChunkTokens > 0
-          ? Math.round((suppressedTokens / totalChunkTokens) * 100)
+        percent: contextSelection.rawTokens > 0
+          ? Math.round((suppressedTokens / contextSelection.rawTokens) * 100)
           : 0
       }
     }

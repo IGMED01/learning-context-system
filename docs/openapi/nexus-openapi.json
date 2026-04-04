@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://127.0.0.1:8787"
+      "url": "http://127.0.0.1:3100"
     }
   ],
   "security": [
@@ -451,7 +451,6 @@
     "/api/openapi.json": {
       "get": {
         "summary": "OpenAPI specification",
-        "security": [],
         "responses": {
           "200": {
             "description": "Current API spec"
@@ -462,7 +461,6 @@
     "/api/demo": {
       "get": {
         "summary": "Interactive demo UI",
-        "security": [],
         "responses": {
           "200": {
             "description": "HTML dashboard + API playground"
@@ -473,7 +471,6 @@
     "/api/routes": {
       "get": {
         "summary": "List API routes exposed by server",
-        "security": [],
         "responses": {
           "200": {
             "description": "Route list"
@@ -484,7 +481,6 @@
     "/api/metrics": {
       "get": {
         "summary": "Get observability metrics report",
-        "security": [],
         "responses": {
           "200": {
             "description": "Metrics payload"
@@ -702,7 +698,6 @@
     "/api/guard/policies": {
       "get": {
         "summary": "List available guard policy profiles",
-        "security": [],
         "responses": {
           "200": {
             "description": "Guard profiles list"

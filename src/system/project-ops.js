@@ -1,9 +1,8 @@
 // @ts-check
-// DUAL-FILE NOTE: project-ops.ts is the TypeScript canonical implementation.
-// This .js file mirrors .ts for environments that run Node.js without transpilation.
-// When making changes, apply them to BOTH files to keep them in sync.
 
+import { createRequire } from "node:module";
 import { access, readFile } from "node:fs/promises";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -12,6 +11,7 @@ import { defaultProjectConfig, parseProjectConfig } from "../contracts/config-co
 import { writeTextFile } from "../io/text-file.js";
 
 const execFile = promisify(execFileCallback);
+const require = createRequire(import.meta.url);
 
 /** @typedef {import("../types/core-contracts.d.ts").DoctorCheck} DoctorCheck */
 /** @typedef {import("../types/core-contracts.d.ts").DoctorResult} DoctorResult */
@@ -96,18 +96,6 @@ async function detectStableProjectId(cwd) {
 }
 
 /**
- * Normalize execFile stdout/stderr to a plain string.
- * Handles both string and Uint8Array responses (Node.js version variance).
- * @param {unknown} value
- * @returns {string}
- */
-function normalizeOutput(value) {
-  if (typeof value === "string") return value.trim();
-  if (value instanceof Uint8Array) return Buffer.from(value).toString("utf8").trim();
-  return "";
-}
-
-/**
  * @param {string} command
  * @param {string[]} args
  */
@@ -126,8 +114,8 @@ async function tryExec(command, args) {
 
       return {
         ok: true,
-        stdout: normalizeOutput(result.stdout),
-        stderr: normalizeOutput(result.stderr)
+        stdout: result.stdout?.trim() ?? "",
+        stderr: result.stderr?.trim() ?? ""
       };
     } catch (error) {
       if (candidate !== candidates[candidates.length - 1]) {
@@ -145,6 +133,53 @@ async function tryExec(command, args) {
   return { ok: false, stdout: "", stderr: `Unable to execute ${command}` };
 }
 
+async function resolveNpmCliPath() {
+  /** @type {string[]} */
+  const candidates = [];
+  const npmExecPath =
+    typeof process.env.npm_execpath === "string" ? process.env.npm_execpath.trim() : "";
+
+  if (npmExecPath) {
+    candidates.push(npmExecPath);
+  }
+
+  try {
+    candidates.push(require.resolve("npm/bin/npm-cli.js"));
+  } catch {}
+
+  const nodeDir = path.dirname(process.execPath);
+  candidates.push(path.join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"));
+  candidates.push(path.join(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"));
+
+  /** @type {Set<string>} */
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const normalized = path.resolve(candidate);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    if (await pathExists(normalized)) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * @param {string[]} args
+ */
+async function tryExecNpm(args) {
+  const npmCliPath = await resolveNpmCliPath();
+
+  if (npmCliPath) {
+    return tryExec(process.execPath, [npmCliPath, ...args]);
+  }
+
+  return tryExec("npm", args);
+}
+
 /**
  * @param {{ ok: boolean }} npmAvailability
  * @returns {Promise<{ known: boolean, enabled: boolean, detail: string }>}
@@ -158,10 +193,7 @@ async function readNpmIgnoreScriptsPolicy(npmAvailability) {
     };
   }
 
-  const configResult =
-    process.platform === "win32"
-      ? await tryExec("cmd.exe", ["/c", "npm.cmd", "config", "get", "ignore-scripts"])
-      : await tryExec("npm", ["config", "get", "ignore-scripts"]);
+  const configResult = await tryExecNpm(["config", "get", "ignore-scripts"]);
 
   if (!configResult.ok) {
     return {
@@ -221,10 +253,7 @@ export async function runProjectDoctor(input) {
     fix: nodeMajor >= 20 ? "" : "Install Node.js 20 or newer."
   });
 
-  const npmResult =
-    process.platform === "win32"
-      ? await tryExec("cmd.exe", ["/c", "npm.cmd", "--version"])
-      : await tryExec("npm", ["--version"]);
+  const npmResult = await tryExecNpm(["--version"]);
   checks.push({
     id: "npm",
     label: "npm availability",
@@ -351,18 +380,22 @@ export async function runProjectDoctor(input) {
   });
 
   const memoryBackend = configInfo.config.memory.backend || "resilient";
+  const memoryIsolation = configInfo.config.memory.isolation || "strict";
+  const resilientLikeBackend = memoryBackend === "resilient" || memoryBackend === "parallel";
   checks.push({
     id: "memory-backend",
     label: "Memory backend mode",
-    status: memoryBackend === "resilient" ? "pass" : "warn",
+    status: resilientLikeBackend ? "pass" : "warn",
     detail:
-      memoryBackend === "resilient"
-        ? "resilient (NEXUS primary + local JSONL fallback)."
-        : "local-only (resilient backend disabled by config).",
+      memoryBackend === "parallel"
+        ? `parallel (local JSONL + Obsidian in parallel, isolation=${memoryIsolation}).`
+        : memoryBackend === "resilient"
+          ? `resilient (local JSONL primary + optional external battery contingency, isolation=${memoryIsolation}).`
+          : `local-only (only the local JSONL store is active, isolation=${memoryIsolation}).`,
     fix:
-      memoryBackend === "resilient"
+      resilientLikeBackend
         ? ""
-        : "Prefer memory.backend='resilient' for semantic recall with NEXUS resilient client plus local fallback."
+        : "Prefer memory.backend='parallel' (or resilient) when you want stronger recall coverage with explicit isolation controls."
   });
 
   const localMemoryDir = path.resolve(cwd, ".lcs/memory");
@@ -377,23 +410,8 @@ export async function runProjectDoctor(input) {
     fix: ""
   });
 
-  const defaultEngramBin = process.platform === "win32" ? "tools/engram/engram.exe" : "tools/engram/engram";
-  const engramBatteryPath = path.resolve(cwd, configInfo.config.engram.binaryPath || defaultEngramBin);
+  const engramBatteryPath = path.resolve(cwd, configInfo.config.engram.binaryPath || "tools/engram/engram.exe");
   const engramBatteryExists = await pathExists(engramBatteryPath);
-  const engramDbPath = path.resolve(cwd, configInfo.config.engram.dataDir || ".engram");
-  const engramDbExists = await pathExists(engramDbPath);
-
-  // Auto-bootstrap: ensure the engram directory exists so the binary can write its DB
-  if (memoryBackend !== "local-only" && engramBatteryExists && !engramDbExists) {
-    const engramDbDir = path.dirname(engramDbPath);
-    try {
-      const { mkdir } = await import("node:fs/promises");
-      await mkdir(engramDbDir, { recursive: true });
-    } catch {
-      // Best-effort — will show as warn below
-    }
-  }
-
   checks.push({
     id: "engram-battery",
     label: "Engram external battery",
@@ -412,50 +430,61 @@ export async function runProjectDoctor(input) {
     fix:
       memoryBackend === "local-only" || engramBatteryExists
         ? ""
-        : "Install or place the Engram binary only if you want third-tier contingency memory. NEXUS remains canonical on resilient + local."
+              : "Install or place the Engram binary only if you want third-tier contingency memory. NEXUS remains canonical on local JSONL + optional external battery."
   });
 
-  checks.push({
-    id: "engram-db",
-    label: "Engram database",
-    status:
-      memoryBackend === "local-only" || !engramBatteryExists
-        ? "pass"
-        : engramDbExists
-          ? "pass"
-          : "warn",
-    detail:
-      memoryBackend === "local-only" || !engramBatteryExists
-        ? "Skipped (Engram binary not in use)."
-        : engramDbExists
-          ? `Database exists: ${engramDbPath}`
-          : `Auto-bootstrapped directory. Run Engram once to initialize: ${engramDbPath}`,
-    fix:
-      memoryBackend === "local-only" || !engramBatteryExists || engramDbExists
+  if (memoryBackend === "parallel") {
+    const obsidianVaultPath = path.resolve(cwd, ".lcs/obsidian-vault");
+    const obsidianVaultExists = await pathExists(obsidianVaultPath);
+    checks.push({
+      id: "obsidian-memory",
+      label: "Obsidian second-brain memory",
+      status: obsidianVaultExists ? "pass" : "warn",
+      detail: obsidianVaultExists
+        ? `Obsidian vault detected: ${obsidianVaultPath}`
+        : `Obsidian vault not found yet: ${obsidianVaultPath}`,
+      fix: obsidianVaultExists
         ? ""
-        : `Run: ${engramBatteryPath} init --db ${engramDbPath}`
-  });
-
-  // ── TTL purge: expire stale container entries ──────────────────────
-  let ttlPurged = 0;
-  try {
-    const { createMemoryContainerRegistry } = await import("../memory/memory-container.js");
-    const registry = createMemoryContainerRegistry({ cwd });
-    const purgeResult = await registry.purgeAllExpired();
-    ttlPurged = purgeResult.totalPurged;
-  } catch {
-    // TTL purge is best-effort — never block doctor
+        : "Run at least one remember/close command with memory.backend='parallel' to initialize and sync the vault."
+    });
   }
 
-  checks.push({
-    id: "memory-ttl-purge",
-    label: "Memory TTL purge",
-    status: "pass",
-    detail: ttlPurged > 0
-      ? `Purged ${ttlPurged} expired entr${ttlPurged === 1 ? "y" : "ies"} from memory containers.`
-      : "No expired memory entries found.",
-    fix: ""
-  });
+  // Memory sectorization check — verifies per-project buckets exist
+  const memoryDir = path.resolve(cwd, ".lcs/memory");
+  const memoryDirExists = await pathExists(memoryDir);
+  if (memoryDirExists) {
+    try {
+      const projectBuckets = readdirSync(memoryDir, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== "_default")
+        .map(d => d.name);
+
+      checks.push({
+        id: "memory-sectorization",
+        label: "Memory sectorization by project",
+        status: projectBuckets.length > 0 ? "pass" : "warn",
+        detail: projectBuckets.length > 0
+          ? `Active project buckets: ${projectBuckets.join(", ")}`
+          : "No project-specific memory buckets found. All memories go to _default. Use --project flag when saving.",
+        fix: projectBuckets.length > 0 ? "" : "Use --project flag when saving memories to create project-specific buckets."
+      });
+    } catch {
+      checks.push({
+        id: "memory-sectorization",
+        label: "Memory sectorization by project",
+        status: "warn",
+        detail: "Could not read memory directory.",
+        fix: ""
+      });
+    }
+  } else {
+    checks.push({
+      id: "memory-sectorization",
+      label: "Memory sectorization by project",
+      status: "warn",
+      detail: "Memory directory not yet created. Will appear on first memory write.",
+      fix: ""
+    });
+  }
 
   const summary = checks.reduce(
     (accumulator, check) => {
@@ -475,68 +504,6 @@ export async function runProjectDoctor(input) {
 /**
  * @param {{ cwd?: string, configPath?: string, force?: boolean }} input
  */
-/**
- * Auto-detect project stack from filesystem markers.
- * @param {string} cwd
- * @returns {Promise<{ stack: string, framework: string, language: string, extraIgnoreDirs: string[] }>}
- */
-async function detectProjectStack(cwd) {
-  const markers = [
-    { file: "tsconfig.json", language: "typescript", stack: "node" },
-    { file: "package.json",  language: "javascript", stack: "node" },
-    { file: "go.mod",        language: "go",         stack: "go" },
-    { file: "Cargo.toml",    language: "rust",       stack: "rust" },
-    { file: "pyproject.toml",language: "python",     stack: "python" },
-    { file: "requirements.txt", language: "python",  stack: "python" },
-    { file: "pom.xml",       language: "java",       stack: "java" },
-    { file: "build.gradle",  language: "java",       stack: "java" }
-  ];
-
-  const frameworkMarkers = [
-    { file: "next.config.js",    framework: "nextjs" },
-    { file: "next.config.mjs",   framework: "nextjs" },
-    { file: "next.config.ts",    framework: "nextjs" },
-    { file: "angular.json",      framework: "angular" },
-    { file: "nuxt.config.ts",    framework: "nuxt" },
-    { file: "vite.config.ts",    framework: "vite" },
-    { file: "astro.config.mjs",  framework: "astro" },
-    { file: "remix.config.js",   framework: "remix" }
-  ];
-
-  const ignoreMap = {
-    nextjs:  [".next", "out"],
-    angular: [".angular"],
-    nuxt:    [".nuxt", ".output"],
-    vite:    ["dist"],
-    astro:   ["dist", ".astro"],
-    remix:   ["build", "public/build"]
-  };
-
-  let language = "javascript";
-  let stack = "node";
-  let framework = "";
-  const extraIgnoreDirs = [];
-
-  for (const m of markers) {
-    if (await pathExists(path.join(cwd, m.file))) {
-      language = m.language;
-      stack = m.stack;
-      break;
-    }
-  }
-
-  for (const m of frameworkMarkers) {
-    if (await pathExists(path.join(cwd, m.file))) {
-      framework = m.framework;
-      const extra = ignoreMap[framework] ?? [];
-      extraIgnoreDirs.push(...extra);
-      break;
-    }
-  }
-
-  return { stack, framework, language, extraIgnoreDirs };
-}
-
 export async function initProjectConfig(input = {}) {
   const cwd = path.resolve(input.cwd ?? process.cwd());
   const targetPath = path.resolve(cwd, input.configPath ?? "learning-context.config.json");
@@ -556,16 +523,6 @@ export async function initProjectConfig(input = {}) {
   config.project = await detectStableProjectId(cwd);
   config.workspace = ".";
 
-  // Auto-detect stack and apply smart defaults
-  const detected = await detectProjectStack(cwd);
-  if (detected.extraIgnoreDirs.length > 0) {
-    const existing = new Set(config.scan.ignoreDirs);
-    for (const dir of detected.extraIgnoreDirs) {
-      existing.add(dir);
-    }
-    config.scan.ignoreDirs = [...existing];
-  }
-
   await writeTextFile(targetPath, `${JSON.stringify(config, null, 2)}\n`);
 
   return {
@@ -574,9 +531,6 @@ export async function initProjectConfig(input = {}) {
     created: true,
     path: targetPath,
     project: config.project,
-    detected,
-    message: exists
-      ? "Config overwritten."
-      : `Config created. Detected: ${detected.language}${detected.framework ? ` (${detected.framework})` : ""}.`
+    message: exists ? "Config overwritten." : "Config created."
   };
 }

@@ -22,7 +22,7 @@ export function buildNexusOpenApiSpec(options = {}) {
   const description =
     asNonEmptyString(options.description) ||
     "NEXUS interface for sync, guard, orchestration, ask, observability, and prompt versioning.";
-  const serverUrl = asNonEmptyString(options.serverUrl) || "http://127.0.0.1:8787";
+  const serverUrl = asNonEmptyString(options.serverUrl) || "http://127.0.0.1:3100";
 
   return {
     openapi: "3.1.0",
@@ -313,7 +313,6 @@ export function buildNexusOpenApiSpec(options = {}) {
       "/api/openapi.json": {
         get: {
           summary: "OpenAPI specification",
-          security: [],
           responses: {
             "200": {
               description: "Current API spec"
@@ -324,7 +323,6 @@ export function buildNexusOpenApiSpec(options = {}) {
       "/api/demo": {
         get: {
           summary: "Interactive demo UI",
-          security: [],
           responses: {
             "200": {
               description: "HTML dashboard + API playground"
@@ -335,7 +333,6 @@ export function buildNexusOpenApiSpec(options = {}) {
       "/api/routes": {
         get: {
           summary: "List API routes exposed by server",
-          security: [],
           responses: {
             "200": { description: "Route list" }
           }
@@ -344,7 +341,6 @@ export function buildNexusOpenApiSpec(options = {}) {
       "/api/metrics": {
         get: {
           summary: "Get observability metrics report",
-          security: [],
           responses: {
             "200": { description: "Metrics payload" }
           }
@@ -522,7 +518,6 @@ export function buildNexusOpenApiSpec(options = {}) {
       "/api/guard/policies": {
         get: {
           summary: "List available guard policy profiles",
-          security: [],
           responses: {
             "200": { description: "Guard profiles list" }
           }

@@ -3,6 +3,11 @@
 import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { buildSafeEnv } from "../core/safe-env.js";
+import {
+  memoryFreshnessText,
+  truncateMemoryContent
+} from "./memory-staleness.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk */
 /** @typedef {import("../types/core-contracts.d.ts").EngramResolvedConfig} EngramResolvedConfig */
@@ -31,32 +36,24 @@ const execFile = promisify(execFileCallback);
  */
 
 /**
- * Resolve the platform-specific default path for the Engram binary.
- * On Windows: tools/engram/engram.exe
- * On other platforms: tools/engram/engram
- * Override with ENGRAM_BIN environment variable.
- *
- * @returns {string}
- */
-function defaultEngramBinaryName() {
-  return process.env.ENGRAM_BIN ?? (
-    process.platform === "win32"
-      ? "tools/engram/engram.exe"
-      : "tools/engram/engram"
-  );
-}
-
-/**
  * @param {{ cwd?: string, binaryPath?: string, dataDir?: string }} [options]
  * @returns {EngramResolvedConfig}
  */
 export function resolveEngramConfig(options = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
+  const windowsAbsolutePattern = /^[a-zA-Z]:[\\/]/u;
+  const binaryInput = options.binaryPath ?? process.env.ENGRAM_BIN ?? "tools/engram/engram.exe";
+  const dataDirInput = options.dataDir ?? process.env.ENGRAM_DATA_DIR ?? ".engram";
   const binaryPath = path.resolve(
-    cwd,
-    options.binaryPath ?? defaultEngramBinaryName()
+    path.isAbsolute(binaryInput) || windowsAbsolutePattern.test(binaryInput)
+      ? binaryInput
+      : path.join(cwd, binaryInput)
   );
-  const dataDir = path.resolve(cwd, options.dataDir ?? process.env.ENGRAM_DATA_DIR ?? ".engram");
+  const dataDir = path.resolve(
+    path.isAbsolute(dataDirInput) || windowsAbsolutePattern.test(dataDirInput)
+      ? dataDirInput
+      : path.join(cwd, dataDirInput)
+  );
 
   return {
     cwd,
@@ -109,25 +106,6 @@ function isSpawnPermissionError(error) {
     /spawn\s+(EPERM|EACCES)/i.test(message) ||
     /operation not permitted/i.test(message)
   );
-}
-
-/**
- * @param {string} value
- */
-function quoteForCmd(value) {
-  return `"${String(value).replace(/"/g, '""')}"`;
-}
-
-/**
- * @param {string} binaryPath
- * @param {string[]} args
- * @param {import("node:child_process").ExecFileOptions} options
- */
-async function runThroughCmd(binaryPath, args, options) {
-  const cmdPath = process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe";
-  const command = [binaryPath, ...args].map(quoteForCmd).join(" ");
-
-  return defaultExec(cmdPath, ["/d", "/s", "/c", command], options);
 }
 
 /**
@@ -187,21 +165,29 @@ function memoryTypeProfile(type) {
 
 /**
  * @param {string} metadataLine
+ * @returns {number}
  */
-function recencyFromMetadata(metadataLine) {
+function parseMetadataTimestampMs(metadataLine) {
   const timestampText = metadataLine.split("|")[0]?.trim();
 
   if (!timestampText) {
-    return 0.72;
+    return Date.now();
   }
 
   const parsed = new Date(timestampText.replace(" ", "T"));
-
   if (Number.isNaN(parsed.getTime())) {
-    return 0.72;
+    return Date.now();
   }
 
-  const ageDays = Math.max(0, (Date.now() - parsed.getTime()) / (1000 * 60 * 60 * 24));
+  return parsed.getTime();
+}
+
+/**
+ * @param {string} metadataLine
+ */
+function recencyFromMetadata(metadataLine) {
+  const timestampMs = parseMetadataTimestampMs(metadataLine);
+  const ageDays = Math.max(0, (Date.now() - timestampMs) / (1000 * 60 * 60 * 24));
   return clamp(1 - ageDays / 30, 0.45, 1);
 }
 
@@ -250,12 +236,17 @@ export function searchOutputToChunks(raw, options = {}) {
     const metadataLine = trimmedDetails[trimmedDetails.length - 1] ?? "";
     const bodyLines =
       metadataLine && metadataLine.includes("|") ? trimmedDetails.slice(0, -1) : trimmedDetails;
-    const body = bodyLines.join(" ").trim();
+    const body = bodyLines.join("\n").trim();
+    const { content: truncatedBody, wasLineTruncated, wasByteTruncated } = truncateMemoryContent(body);
+    const flattenedBody = truncatedBody.replace(/\s+/gu, " ").trim();
     const projectMatch = metadataLine.match(/project:\s*([^|]+)/i);
     const scopeMatch = metadataLine.match(/scope:\s*([^|]+)/i);
     const project = projectMatch?.[1]?.trim() ?? options.project ?? "global";
     const scope = scopeMatch?.[1]?.trim() ?? "project";
     const profile = memoryTypeProfile(type);
+    const createdAtMs = parseMetadataTimestampMs(metadataLine);
+    const freshnessNote = memoryFreshnessText(createdAtMs);
+    const truncated = wasLineTruncated || wasByteTruncated;
 
     return {
       id: `engram-memory-${observationId}`,
@@ -263,7 +254,8 @@ export function searchOutputToChunks(raw, options = {}) {
       kind: "memory",
       content: [
         title,
-        body,
+        flattenedBody,
+        freshnessNote || "",
         metadataLine ? `Metadata: ${metadataLine}` : "",
         options.query ? `Recall query: ${options.query}` : "",
         `Memory type: ${type}`,
@@ -274,7 +266,17 @@ export function searchOutputToChunks(raw, options = {}) {
       certainty: profile.certainty,
       recency: recencyFromMetadata(metadataLine),
       teachingValue: profile.teachingValue,
-      priority: clamp(profile.priority + (Number(rank) === 1 ? 0.04 : 0))
+      priority: clamp(profile.priority + (Number(rank) === 1 ? 0.04 : 0)),
+      tags: {
+        memoryType: type,
+        memoryScope: scope,
+        createdAtMs,
+        updatedAtMs: createdAtMs,
+        freshnessNote: freshnessNote || null,
+        truncated,
+        truncatedByLine: wasLineTruncated,
+        truncatedByBytes: wasByteTruncated
+      }
     };
   });
 }
@@ -284,12 +286,14 @@ export function searchOutputToChunks(raw, options = {}) {
  *   cwd?: string,
  *   binaryPath?: string,
  *   dataDir?: string,
- *   exec?: ExecFunction
+ *   exec?: ExecFunction,
+ *   platform?: NodeJS.Platform
  * }} [options]
  */
 export function createEngramClient(options = {}) {
   const config = resolveEngramConfig(options);
   const runCommand = options.exec ?? defaultExec;
+  const runtimePlatform = options.platform ?? process.platform;
 
   /**
    * @param {string[]} args
@@ -299,21 +303,27 @@ export function createEngramClient(options = {}) {
     try {
       const executionOptions = {
         cwd: config.cwd,
-        env: {
-          ...process.env,
+        env: buildSafeEnv({
           ENGRAM_DATA_DIR: config.dataDir
-        }
+        })
       };
       let result;
 
       try {
         result = await runCommand(config.binaryPath, args, executionOptions);
       } catch (error) {
-        if (process.platform !== "win32" || !isSpawnPermissionError(error)) {
+        if (runtimePlatform !== "win32" || !isSpawnPermissionError(error)) {
           throw error;
         }
-
-        result = await runThroughCmd(config.binaryPath, args, executionOptions);
+        const permissionError = new Error(
+          [
+            `Engram binary execution blocked: ${config.binaryPath}`,
+            "Windows denied direct execution for the external battery binary.",
+            "Unblock or reauthorize the binary instead of falling back through cmd.exe."
+          ].join("\n")
+        );
+        permissionError.cause = error;
+        throw permissionError;
       }
 
       return {
@@ -326,6 +336,7 @@ export function createEngramClient(options = {}) {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error && typeof error.stack === "string" ? error.stack : "";
       const stdout =
         typeof error === "object" &&
         error &&
@@ -338,17 +349,25 @@ export function createEngramClient(options = {}) {
         "stderr" in error
           ? normalizeExecText(error.stderr)
           : "";
-
-      throw new Error(
+      const permissionFix =
+        runtimePlatform === "win32" && isSpawnPermissionError(error)
+          ? "Fix: unblock or reauthorize the Engram battery binary; NEXUS no longer falls back through cmd.exe."
+          : "";
+      const failure = new Error(
         [
           `Engram command failed: ${config.binaryPath} ${args.join(" ")}`,
           stderr,
           stdout,
-          message
+          message,
+          permissionFix,
+          stack
         ]
           .filter(Boolean)
           .join("\n")
       );
+      failure.cause = error;
+
+      throw failure;
     }
   }
 
@@ -503,16 +522,47 @@ export function createEngramClient(options = {}) {
     const chunks = searchOutputToChunks(result.stdout, { query, project: searchOpts.project });
 
     /** @type {MemoryEntry[]} */
-    const entries = chunks.map((chunk) => ({
-      id: chunk.id,
-      title: chunk.content.split(".")[0] ?? chunk.id,
-      content: chunk.content,
-      type: "memory",
-      project: searchOpts.project ?? "",
-      scope: searchOpts.scope ?? "project",
-      topic: "",
-      createdAt: new Date().toISOString()
-    }));
+    const entries = chunks.map((chunk) => {
+      const metadata =
+        chunk.tags && typeof chunk.tags === "object" && !Array.isArray(chunk.tags)
+          ? /** @type {Record<string, unknown>} */ (chunk.tags)
+          : {};
+      const createdAtMs =
+        typeof metadata.createdAtMs === "number" && Number.isFinite(metadata.createdAtMs)
+          ? metadata.createdAtMs
+          : Date.now();
+      const updatedAtMs =
+        typeof metadata.updatedAtMs === "number" && Number.isFinite(metadata.updatedAtMs)
+          ? metadata.updatedAtMs
+          : createdAtMs;
+      const freshnessNote =
+        typeof metadata.freshnessNote === "string" && metadata.freshnessNote.trim()
+          ? metadata.freshnessNote.trim()
+          : null;
+      const truncated = metadata.truncated === true;
+
+      return {
+        id: chunk.id,
+        title: chunk.content.split(".")[0] ?? chunk.id,
+        content: chunk.content,
+        type:
+          typeof metadata.memoryType === "string" && metadata.memoryType.trim()
+            ? metadata.memoryType.trim()
+            : "memory",
+        project: searchOpts.project ?? "",
+        scope:
+          typeof metadata.memoryScope === "string" && metadata.memoryScope.trim()
+            ? metadata.memoryScope.trim()
+            : searchOpts.scope ?? "project",
+        topic: "",
+        createdAt: new Date(createdAtMs).toISOString(),
+        updatedAt: new Date(updatedAtMs).toISOString(),
+        createdAtMs,
+        updatedAtMs,
+        freshnessNote,
+        truncated
+      };
+    });
 
     return {
       entries,
@@ -555,16 +605,46 @@ export function createEngramClient(options = {}) {
     const chunks = searchOutputToChunks(result.stdout, { project: listOpts.project });
     const limit = listOpts.limit ?? 50;
 
-    return chunks.slice(0, limit).map((chunk) => ({
-      id: chunk.id,
-      title: chunk.content.split(".")[0] ?? chunk.id,
-      content: chunk.content,
-      type: "memory",
-      project: listOpts.project ?? "",
-      scope: "project",
-      topic: "",
-      createdAt: new Date().toISOString()
-    }));
+    return chunks.slice(0, limit).map((chunk) => {
+      const metadata =
+        chunk.tags && typeof chunk.tags === "object" && !Array.isArray(chunk.tags)
+          ? /** @type {Record<string, unknown>} */ (chunk.tags)
+          : {};
+      const createdAtMs =
+        typeof metadata.createdAtMs === "number" && Number.isFinite(metadata.createdAtMs)
+          ? metadata.createdAtMs
+          : Date.now();
+      const updatedAtMs =
+        typeof metadata.updatedAtMs === "number" && Number.isFinite(metadata.updatedAtMs)
+          ? metadata.updatedAtMs
+          : createdAtMs;
+      const freshnessNote =
+        typeof metadata.freshnessNote === "string" && metadata.freshnessNote.trim()
+          ? metadata.freshnessNote.trim()
+          : null;
+
+      return {
+        id: chunk.id,
+        title: chunk.content.split(".")[0] ?? chunk.id,
+        content: chunk.content,
+        type:
+          typeof metadata.memoryType === "string" && metadata.memoryType.trim()
+            ? metadata.memoryType.trim()
+            : "memory",
+        project: listOpts.project ?? "",
+        scope:
+          typeof metadata.memoryScope === "string" && metadata.memoryScope.trim()
+            ? metadata.memoryScope.trim()
+            : "project",
+        topic: "",
+        createdAt: new Date(createdAtMs).toISOString(),
+        updatedAt: new Date(updatedAtMs).toISOString(),
+        createdAtMs,
+        updatedAtMs,
+        freshnessNote,
+        truncated: metadata.truncated === true
+      };
+    });
   }
 
   /**

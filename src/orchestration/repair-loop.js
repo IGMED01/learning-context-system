@@ -9,7 +9,7 @@
  *   - Max iterations: configurable (default 3)
  *   - Loop guard: stops on same-error fingerprint (avoids infinite loops)
  *   - Trace: saves each attempt with gate result and repair prompt
- *   - Repair: inline heuristic fixes + LLM-guided correction
+ *   - Repair: delegates to runtime coder agent or inline heuristic fix
  *
  * DoD Sprint 4:
  *   ✓ First repair loop stable
@@ -17,11 +17,87 @@
  *   ✓ Output traceable and measurable
  */
 
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { runCodeGate, getGateErrors, formatGateErrors } from "../guard/code-gate.js";
-import { createClaudeProvider } from "../llm/claude-provider.js";
+import { spawnAgent, isAgentRuntimeAvailable } from "./nexus-agent-runtime.js";
+import {
+  TASK_STATUS,
+  TASK_TYPES,
+  createTask,
+  isTerminal,
+  updateTaskStatus
+} from "../core/task.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").CodeGateResult} CodeGateResult */
 /** @typedef {import("../types/core-contracts.d.ts").CodeGateError} CodeGateError */
+
+/**
+ * @param {string} cwd
+ * @param {string} targetPath
+ * @returns {string}
+ */
+function resolveRepairTargetPath(cwd, targetPath) {
+  const workspaceRoot = path.resolve(cwd);
+  const resolved = path.resolve(workspaceRoot, targetPath);
+
+  if (resolved !== workspaceRoot && !resolved.startsWith(`${workspaceRoot}${path.sep}`)) {
+    throw new Error(`targetPath must stay within the workspace root: ${targetPath}`);
+  }
+
+  return resolved;
+}
+
+/**
+ * Validates the candidate code by temporarily overlaying it onto the target file,
+ * then restoring the original workspace contents after the gate run.
+ *
+ * @param {{
+ *   cwd: string,
+ *   tools: Array<"lint" | "typecheck" | "build" | "test">,
+ *   code: string,
+ *   targetPath?: string,
+ *   gateRunner?: (input: { cwd: string, tools: Array<"lint" | "typecheck" | "build" | "test"> }) => Promise<CodeGateResult>
+ * }} input
+ * @returns {Promise<CodeGateResult>}
+ */
+async function runGateAgainstCandidate(input) {
+  if (!input.targetPath) {
+    return input.gateRunner
+      ? input.gateRunner({ cwd: input.cwd, tools: input.tools })
+      : runCodeGate({ cwd: input.cwd, tools: input.tools });
+  }
+
+  const resolvedTargetPath = resolveRepairTargetPath(input.cwd, input.targetPath);
+  const targetDir = path.dirname(resolvedTargetPath);
+  let originalCode = "";
+  let existed = true;
+
+  try {
+    originalCode = await readFile(resolvedTargetPath, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") {
+      existed = false;
+    } else {
+      throw error;
+    }
+  }
+
+  await mkdir(targetDir, { recursive: true });
+  await writeFile(resolvedTargetPath, input.code, "utf8");
+
+  try {
+    return input.gateRunner
+      ? await input.gateRunner({ cwd: input.cwd, tools: input.tools })
+      : await runCodeGate({ cwd: input.cwd, tools: input.tools });
+  } finally {
+    if (existed) {
+      await writeFile(resolvedTargetPath, originalCode, "utf8");
+    } else {
+      await rm(resolvedTargetPath, { force: true });
+    }
+  }
+}
 
 /**
  * @typedef {{
@@ -41,9 +117,10 @@ import { createClaudeProvider } from "../llm/claude-provider.js";
  *   finalCode: string,
  *   attempts: RepairAttempt[],
  *   totalAttempts: number,
- *   reason: "pass" | "max-iterations" | "no-progress" | "error",
+ *   reason: "pass" | "max-iterations" | "no-progress" | "error" | "cancelled",
  *   finalGateResult: CodeGateResult | null,
- *   durationMs: number
+ *   durationMs: number,
+ *   taskId?: string
  * }} RepairLoopResult
  */
 
@@ -92,6 +169,33 @@ function buildRepairPrompt(code, errors, context = "") {
 }
 
 /**
+ * Attempt a repair using the runtime coder agent.
+ *
+ * @param {string} code
+ * @param {CodeGateError[]} errors
+ * @param {string} [context]
+ * @returns {Promise<string | null>}
+ */
+async function repairWithRuntimeAgent(code, errors, context) {
+  const prompt = buildRepairPrompt(code, errors, context);
+
+  const result = await spawnAgent({
+    agentType: "coder",
+    name: `nexus-repair-${Date.now()}`,
+    task: "Fix compilation errors in the provided code",
+    context: prompt
+  });
+
+  if (!result.success || !result.output) {
+    return null;
+  }
+
+  // Extract code block from agent output if wrapped in markdown fences
+  const codeMatch = result.output.match(/```(?:\w+)?\n([\s\S]+?)```/);
+  return codeMatch ? codeMatch[1].trim() : result.output.trim() || null;
+}
+
+/**
  * Attempt an inline repair (no external agent — simple heuristic fixes).
  *
  * @param {string} code
@@ -105,7 +209,8 @@ function repairInline(code, errors) {
   for (const error of errors) {
     // TS2304: Cannot find name 'X' — often a missing type import
     if (error.code === "TS2304" || error.code === "TS2552") {
-      if (/Cannot find name '\w+'/.test(error.message)) {
+      const nameMatch = error.message.match(/Cannot find name '(\w+)'/);
+      if (nameMatch) {
         // Add a // @ts-ignore as a minimal fix to unblock the loop
         const lines = patched.split("\n");
         const lineIndex = (error.line ?? 1) - 1;
@@ -129,46 +234,19 @@ function repairInline(code, errors) {
 }
 
 /**
- * Attempt an LLM-guided repair using the Claude provider.
- *
- * @param {string} code
- * @param {CodeGateError[]} errors
- * @param {{ apiKey?: string, model?: string, context?: string, prompt?: string }} opts
- * @returns {Promise<string | null>}
- */
-async function repairWithLlm(code, errors, opts = {}) {
-  const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
-
-  const provider = createClaudeProvider({ apiKey, model: opts.model });
-  // Use pre-built prompt if provided, otherwise build it (avoids redundant computation)
-  const prompt = opts.prompt ?? buildRepairPrompt(code, errors, opts.context);
-
-  try {
-    const result = await provider.generate(prompt, { maxTokens: 4096, temperature: 0 });
-    const text = typeof result.text === "string" ? result.text.trim() : "";
-    if (!text || text.length < 10) return null;
-
-    // Strip markdown fences if the LLM wrapped the response
-    const cleaned = text.replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "");
-    return cleaned || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Run the repair loop.
  *
  * @param {{
  *   code: string,
  *   cwd?: string,
+ *   targetPath?: string,
  *   tools?: Array<"lint" | "typecheck" | "build" | "test">,
  *   maxIterations?: number,
  *   context?: string,
- *   apiKey?: string,
- *   model?: string,
- *   onAttempt?: (attempt: RepairAttempt) => void
+ *   useRuntimeAgent?: boolean,
+ *   gateRunner?: (input: { cwd: string, tools: Array<"lint" | "typecheck" | "build" | "test"> }) => Promise<CodeGateResult>,
+ *   onAttempt?: (attempt: RepairAttempt) => void,
+ *   signal?: AbortSignal
  * }} opts
  * @returns {Promise<RepairLoopResult>}
  */
@@ -176,15 +254,71 @@ export async function runRepairLoop(opts) {
   const {
     code: initialCode,
     cwd = process.cwd(),
+    targetPath,
     tools = ["typecheck", "lint"],
     maxIterations = 3,
     context,
-    apiKey,
-    model,
-    onAttempt
+    useRuntimeAgent,
+    gateRunner,
+    onAttempt,
+    signal
   } = opts;
 
   const start = Date.now();
+  const task = createTask(TASK_TYPES.REPAIR, "repair-loop", {
+    cwd,
+    targetPath: targetPath ?? "",
+    tools,
+    maxIterations
+  });
+  updateTaskStatus(task.id, TASK_STATUS.RUNNING);
+
+  const cancelTask = (reason = "cancelled") => {
+    if (!isTerminal(task.status)) {
+      updateTaskStatus(task.id, TASK_STATUS.CANCELLED, reason);
+    }
+  };
+
+  const failTask = (error) => {
+    if (!isTerminal(task.status)) {
+      updateTaskStatus(task.id, TASK_STATUS.FAILED, error);
+    }
+  };
+
+  const completeTask = () => {
+    if (!isTerminal(task.status)) {
+      updateTaskStatus(task.id, TASK_STATUS.COMPLETED);
+    }
+  };
+
+  const isCancelled = () => signal?.aborted || task.abortController.signal.aborted;
+
+  if (signal) {
+    signal.addEventListener("abort", () => {
+      task.abortController.abort();
+      cancelTask("cancelled");
+    }, { once: true });
+  }
+
+  const buildCancelledResult = (finalCode, attempts) => {
+    cancelTask("cancelled");
+    return {
+      success: false,
+      finalCode,
+      attempts,
+      totalAttempts: attempts.length,
+      reason: "cancelled",
+      finalGateResult: null,
+      durationMs: Date.now() - start,
+      taskId: task.id
+    };
+  };
+
+  if (isCancelled()) {
+    return buildCancelledResult(initialCode, []);
+  }
+
+  const runtimeAvailable = useRuntimeAgent !== false && (await isAgentRuntimeAvailable());
 
   /** @type {RepairAttempt[]} */
   const attempts = [];
@@ -192,10 +326,20 @@ export async function runRepairLoop(opts) {
   const seenFingerprints = new Set();
 
   for (let i = 0; i < maxIterations; i++) {
+    if (isCancelled()) {
+      return buildCancelledResult(currentCode, attempts);
+    }
+
     const attemptStart = Date.now();
 
-    // Run the gate
-    const gateResult = await runCodeGate({ cwd, tools });
+    // Run the gate against the current candidate code
+    const gateResult = await runGateAgainstCandidate({
+      cwd,
+      tools,
+      code: currentCode,
+      targetPath,
+      gateRunner
+    });
     const errors = getGateErrors(gateResult);
 
     const attempt = /** @type {RepairAttempt} */ ({
@@ -209,6 +353,7 @@ export async function runRepairLoop(opts) {
     if (gateResult.passed) {
       attempts.push(attempt);
       onAttempt?.(attempt);
+      completeTask();
 
       return {
         success: true,
@@ -217,7 +362,8 @@ export async function runRepairLoop(opts) {
         totalAttempts: attempts.length,
         reason: "pass",
         finalGateResult: gateResult,
-        durationMs: Date.now() - start
+        durationMs: Date.now() - start,
+        taskId: task.id
       };
     }
 
@@ -226,6 +372,7 @@ export async function runRepairLoop(opts) {
     if (seenFingerprints.has(fingerprint)) {
       attempts.push(attempt);
       onAttempt?.(attempt);
+      failTask("Repair loop no progress");
 
       return {
         success: false,
@@ -234,17 +381,21 @@ export async function runRepairLoop(opts) {
         totalAttempts: attempts.length,
         reason: "no-progress",
         finalGateResult: gateResult,
-        durationMs: Date.now() - start
+        durationMs: Date.now() - start,
+        taskId: task.id
       };
     }
 
     seenFingerprints.add(fingerprint);
 
-    // Attempt repair — LLM first, inline heuristic fallback
+    // Attempt repair
     let repairedCode = null;
-    const repairPrompt = buildRepairPrompt(currentCode, errors, context);
+    let repairPrompt = buildRepairPrompt(currentCode, errors, context);
 
-    repairedCode = await repairWithLlm(currentCode, errors, { apiKey, model, context, prompt: repairPrompt });
+    if (runtimeAvailable) {
+      repairedCode = await repairWithRuntimeAgent(currentCode, errors, context);
+    }
+
     if (!repairedCode) {
       repairedCode = repairInline(currentCode, errors);
     }
@@ -257,6 +408,7 @@ export async function runRepairLoop(opts) {
     onAttempt?.(attempt);
 
     if (!repairedCode) {
+      failTask("No repair output");
       // Can't repair — stop loop
       break;
     }
@@ -265,7 +417,27 @@ export async function runRepairLoop(opts) {
   }
 
   // Final gate check after all iterations
-  const finalGate = await runCodeGate({ cwd, tools });
+  const finalGate = await runGateAgainstCandidate({
+    cwd,
+    tools,
+    code: currentCode,
+    targetPath,
+    gateRunner
+  });
+
+  if (isCancelled()) {
+    return buildCancelledResult(currentCode, attempts);
+  }
+
+  if (finalGate.passed) {
+    completeTask();
+  } else {
+    failTask(
+      attempts.length >= maxIterations
+        ? "Max repair iterations reached"
+        : "Final gate failed"
+    );
+  }
 
   return {
     success: finalGate.passed,
@@ -274,7 +446,8 @@ export async function runRepairLoop(opts) {
     totalAttempts: attempts.length,
     reason: finalGate.passed ? "pass" : attempts.length >= maxIterations ? "max-iterations" : "error",
     finalGateResult: finalGate,
-    durationMs: Date.now() - start
+    durationMs: Date.now() - start,
+    taskId: task.id
   };
 }
 

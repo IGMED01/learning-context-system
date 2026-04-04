@@ -15,16 +15,16 @@ The repository already has:
 - TypeScript backend vertical
 - `doctor`, `init`, stable JSON contracts, and incremental typecheck
 
-See `NEXUS-PLAN.md` for phase/capa checklist with dependencies and priorities.
+Detailed execution checklists and implementation plans are now maintained as local-only artifacts (not versioned on GitHub).
 
 ## Roadmaps by section
 
-- [Core TypeScript](./docs/roadmaps/core-typescript.md)
-- [Memory and Engram](./docs/roadmaps/memory-and-engram.md)
-- [CLI and Operability](./docs/roadmaps/cli-and-operability.md)
-- [Privacy and Security](./docs/roadmaps/privacy-and-security.md)
-- [Quality and Benchmarks](./docs/roadmaps/quality-and-benchmarks.md)
-- [Open Source Adoption](./docs/roadmaps/open-source-adoption.md)
+- [Core TypeScript](../roadmaps/core-typescript.md)
+- [Memory and Engram](../roadmaps/memory-and-engram.md)
+- [CLI and Operability](../roadmaps/cli-and-operability.md)
+- [Privacy and Security](../roadmaps/privacy-and-security.md)
+- [Quality and Benchmarks](../roadmaps/quality-and-benchmarks.md)
+- [Open Source Adoption](../roadmaps/open-source-adoption.md)
 
 ## Current next focus
 

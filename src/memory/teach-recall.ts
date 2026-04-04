@@ -1,7 +1,9 @@
 import { buildTeachRecallQueries } from "./recall-queries.js";
+import { findRelevantMemories } from "./find-relevant-memories.js";
 import { memoryEntriesToChunks } from "./memory-utils.js";
 import type {
   Chunk,
+  MemoryEntry,
   MemoryRecallState,
   MemorySearchOptions,
   MemorySearchResult,
@@ -10,6 +12,8 @@ import type {
 
 const DEFAULT_RECALL_RETRY_ATTEMPTS = 2;
 const DEFAULT_RECALL_RETRY_BACKOFF_MS = 40;
+const DEFAULT_SIDE_QUERY_CANDIDATE_MULTIPLIER = 3;
+const DEFAULT_SIDE_QUERY_MAX_QUERIES = 3;
 
 interface SearchWithRetryRuntime {
   search: (query: string, options?: MemorySearchOptions) => Promise<MemorySearchResult>;
@@ -27,9 +31,15 @@ export interface ResolveTeachRecallInput {
   limit?: number;
   scope?: string;
   type?: string;
+  language?: string;
+  isolationMode?: "strict" | "relaxed";
   strictRecall?: boolean;
   retryAttempts?: number;
   retryBackoffMs?: number;
+  alreadySurfacedMemoryIds?: string[];
+  usedTools?: string[];
+  sideQueryCandidateMultiplier?: number;
+  sideQueryMaxQueries?: number;
   baseChunks?: Chunk[];
   search: (
     query: string,
@@ -162,7 +172,7 @@ export async function resolveTeachRecall(
     };
   }
 
-  const uniqueChunks = new Map<string, Chunk>();
+  const candidateEntries = new Map<string, MemoryEntry>();
   const queriesTried: string[] = [];
   const matchedQueries: string[] = [];
   let firstMatchIndex = -1;
@@ -175,6 +185,16 @@ export async function resolveTeachRecall(
     0,
     Math.trunc(input.retryBackoffMs ?? DEFAULT_RECALL_RETRY_BACKOFF_MS)
   );
+  const sideQueryCandidateMultiplier = Math.max(
+    1,
+    Math.trunc(input.sideQueryCandidateMultiplier ?? DEFAULT_SIDE_QUERY_CANDIDATE_MULTIPLIER)
+  );
+  const sideQueryMaxQueries = Math.max(
+    1,
+    Math.trunc(input.sideQueryMaxQueries ?? DEFAULT_SIDE_QUERY_MAX_QUERIES)
+  );
+  const candidateLimit = Math.max(limit, limit * sideQueryCandidateMultiplier);
+  const queryLimit = Math.min(queryCandidates.length, sideQueryMaxQueries);
   let providerHadSuccess = false;
   let lastProviderError = "";
   let providerFallbackWarning = "";
@@ -183,7 +203,7 @@ export async function resolveTeachRecall(
   let fallbackProvider = "";
 
   try {
-    for (const query of queryCandidates) {
+    for (const query of queryCandidates.slice(0, queryLimit)) {
       queriesTried.push(query);
 
       let memoryResult: MemorySearchResult;
@@ -195,7 +215,10 @@ export async function resolveTeachRecall(
             project: input.project,
             scope: input.scope ?? "project",
             type: input.type,
-            limit
+            language: input.language,
+            isolationMode: input.isolationMode,
+            changedFiles,
+            limit: candidateLimit
           },
           {
             search: input.search,
@@ -227,25 +250,45 @@ export async function resolveTeachRecall(
         continue;
       }
 
-      const memoryChunks = memoryEntriesToChunks(memoryResult.entries ?? [], { query, project });
-
-      if (memoryChunks.length) {
+      const entries = Array.isArray(memoryResult.entries) ? memoryResult.entries : [];
+      if (entries.length) {
         matchedQueries.push(query);
 
         if (firstMatchIndex === -1) {
           firstMatchIndex = queriesTried.length - 1;
         }
 
-        for (const chunk of memoryChunks) {
-          uniqueChunks.set(chunk.id, chunk);
+        for (const entry of entries) {
+          const id = String(entry.id ?? "").trim();
+          const key = id || `${query}:${entry.title}:${entry.createdAt}`;
+          if (!candidateEntries.has(key)) {
+            candidateEntries.set(key, entry);
+          }
         }
+      }
 
+      if (candidateEntries.size >= candidateLimit) {
         break;
       }
     }
 
-    const memoryChunks = [...uniqueChunks.values()].slice(0, limit);
+    const rankedMemories = findRelevantMemories({
+      entries: [...candidateEntries.values()],
+      limit,
+      task: input.task,
+      objective: input.objective,
+      focus: input.focus,
+      changedFiles,
+      alreadySurfacedMemoryIds: input.alreadySurfacedMemoryIds,
+      usedTools: input.usedTools
+    });
+    const memoryChunks = memoryEntriesToChunks(rankedMemories.selected, {
+      query: matchedQueries[0] ?? queryCandidates[0] ?? "",
+      project
+    });
     const winningQuery = matchedQueries[0] ?? queryCandidates[0] ?? "";
+    const filteredByAlreadySurfaced = rankedMemories.alreadySurfacedFiltered;
+    const resurfacedChunks = rankedMemories.resurfacedCount;
 
     if (!providerHadSuccess && lastProviderError) {
       return {
@@ -271,23 +314,31 @@ export async function resolveTeachRecall(
 
     return {
       chunks: [...baseChunks, ...memoryChunks],
-      memoryRecall: {
-        enabled: true,
-        status: memoryChunks.length ? "recalled" : "empty",
-        degraded: Boolean(providerFallbackWarning),
-        reason: providerFallbackWarning ? "fallback-local" : "",
-        ...(providerName ? { provider: providerName } : {}),
-        ...(providerChain.length ? { providerChain } : {}),
-        ...(fallbackProvider ? { fallbackProvider } : {}),
+        memoryRecall: {
+          enabled: true,
+          status: memoryChunks.length ? "recalled" : "empty",
+          degraded: Boolean(providerFallbackWarning),
+          reason: providerFallbackWarning
+            ? "fallback-local"
+            : filteredByAlreadySurfaced > 0 && memoryChunks.length === 0
+              ? "already-surfaced"
+              : "",
+          ...(providerName ? { provider: providerName } : {}),
+          ...(providerChain.length ? { providerChain } : {}),
+          ...(fallbackProvider ? { fallbackProvider } : {}),
         query: winningQuery,
         queriesTried,
         matchedQueries,
-        project,
-        recoveredChunks: memoryChunks.length,
-        recoveredMemoryIds: memoryChunks.map((chunk) => chunk.id),
-        firstMatchIndex,
-        selectedChunks: 0,
-        suppressedChunks: 0,
+          project,
+          recoveredChunks: memoryChunks.length,
+          recoveredMemoryIds: memoryChunks.map((chunk) => chunk.id),
+          candidateChunks: rankedMemories.candidateCount,
+          alreadySurfacedFiltered: filteredByAlreadySurfaced,
+          resurfacedChunks,
+          sideQueryUsed: queriesTried.length > 1,
+          firstMatchIndex,
+          selectedChunks: 0,
+          suppressedChunks: 0,
         error: providerFallbackWarning
       }
     };

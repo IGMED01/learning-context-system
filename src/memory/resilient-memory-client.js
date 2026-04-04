@@ -11,7 +11,13 @@
  * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
  */
 
-import { toErrorMessage } from "../utils/text-utils.js";
+/**
+ * @param {unknown} error
+ * @returns {string}
+ */
+function toErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * @param {unknown} error
@@ -40,15 +46,15 @@ export function classifyMemoryFailure(error) {
  */
 export function memoryFailureFixHint(failureKind) {
   if (failureKind === "binary-missing") {
-    return "Verify the external memory runtime (Engram) is available, or use --memory-backend local-only to skip the primary tier.";
+    return "Verify the configured memory provider is available, or run with --memory-backend local-only and --external-battery false.";
   }
 
   if (failureKind === "timeout") {
-    return "Retry recall, reduce query scope, or bypass the external memory tier with --memory-backend local-only.";
+    return "Retry recall, reduce query scope, or bypass contingency tiers with --memory-backend local-only and --external-battery false.";
   }
 
   if (failureKind === "malformed-output") {
-    return "Run doctor and validate the external memory provider output before enabling semantic recall.";
+    return "Run doctor and validate the active memory provider output before enabling contingency recall tiers.";
   }
 
   return "Run doctor and verify the configured memory backend and local fallback settings.";

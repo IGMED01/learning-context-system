@@ -55,7 +55,7 @@
       }
     },
     {
-      "name": "vertical memory-backed flow can recover memory but suppress it under tight chunk limits",
+      "name": "vertical memory-backed flow keeps recovered memory when still inside tight chunk limits",
       "input": {
         "workspace": "examples/typescript-backend",
         "task": "Harden auth middleware",
@@ -83,8 +83,8 @@
         "relatedTest": "test/auth/middleware.test.ts",
         "excludedSources": ["logs/server.log", "chat/history.md"],
         "memoryRecallStatus": "recalled",
-        "selectedMemoryChunks": 0,
-        "suppressedMemoryChunks": 1
+        "selectedMemoryChunks": 1,
+        "suppressedMemoryChunks": 0
       }
     }
   ]

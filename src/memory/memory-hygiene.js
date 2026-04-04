@@ -2,7 +2,7 @@
 
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { slugify, compactText, toErrorMessage } from "../utils/text-utils.js";
+import { log } from "../core/logger.js";
 
 /**
  * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
@@ -40,14 +40,31 @@ const GENERIC_MEMORY_PATTERNS = [
 ];
 const PATH_NOISE_PATTERNS = [/[/\\]test[/\\]/u, /[/\\]fixtures?[/\\]/u, /\.spec\./u, /\.test\./u];
 
+/**
+ * @param {string} value
+ * @returns {string}
+ */
+function compactText(value) {
+  return String(value ?? "").replace(/\s+/gu, " ").trim();
+}
 
 /**
- * Tokenize a file-path-aware string (preserves /._- chars for path tokens).
- * Distinct from text-utils tokenize which is stopword-filtered for search.
+ * @param {string} value
+ * @returns {string}
+ */
+function slugify(value) {
+  const slug = compactText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/(^-|-$)/gu, "");
+  return slug || "memory";
+}
+
+/**
  * @param {string} value
  * @returns {string[]}
  */
-function tokenizePathAware(value) {
+function tokenize(value) {
   return compactText(value)
     .toLowerCase()
     .replace(/[^a-z0-9\u00e0-\u024f/_.-]+/gu, " ")
@@ -72,6 +89,46 @@ function projectFilePath(baseDir, project) {
 }
 
 /**
+ * Resolve the storage path for temporary memories.
+ * @param {string} baseDir
+ * @param {string | undefined} project
+ */
+function tempMemoryFilePath(baseDir, project) {
+  return path.join(baseDir, slugify(project || "_default"), "temp-memories.jsonl");
+}
+
+/**
+ * Purge expired temporary memories from a project's temp file.
+ * @param {string} baseDir
+ * @param {string | undefined} [project]
+ * @returns {Promise<{ purged: number, remaining: number }>}
+ */
+export async function purgeExpiredTempMemories(baseDir, project = undefined) {
+  const tempPath = tempMemoryFilePath(baseDir, project);
+  try {
+    const raw = await readFile(tempPath, "utf8");
+    const lines = raw.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+    if (!lines.length) return { purged: 0, remaining: 0 };
+
+    const entries = lines.map((line) => JSON.parse(line)).filter((e) => e && typeof e === "object");
+    const now = new Date();
+    const valid = entries.filter(e => !e.expiresAt || new Date(e.expiresAt) > now);
+    const purged = entries.length - valid.length;
+
+    if (purged > 0) {
+      const payload = valid.map((entry) => JSON.stringify(entry)).join("\n");
+      await writeFile(tempPath, payload ? `${payload}\n` : "", "utf8");
+    }
+
+    return { purged, remaining: valid.length };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/enoent/i.test(message)) return { purged: 0, remaining: 0 };
+    throw error;
+  }
+}
+
+/**
  * @param {string} cwd
  * @param {string | undefined} quarantineDir
  */
@@ -86,19 +143,53 @@ function resolveQuarantineBaseDir(cwd = process.cwd(), quarantineDir) {
 async function readEntries(filePath) {
   try {
     const raw = await readFile(filePath, "utf8");
-    return raw
+    const lines = raw
       .split(/\r?\n/u)
       .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter((entry) => entry && typeof entry === "object");
+      .filter(Boolean);
+    /** @type {MemoryEntry[]} */
+    const parsed = [];
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      try {
+        const entry = JSON.parse(line);
+        if (entry && typeof entry === "object") {
+          parsed.push(/** @type {MemoryEntry} */ (entry));
+        }
+      } catch (error) {
+        log("warn", "memory hygiene skipped corrupted JSONL line", {
+          filePath,
+          lineNumber: index + 1,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    return parsed;
   } catch (error) {
-    const message = toErrorMessage(error);
+    const message = error instanceof Error ? error.message : String(error);
 
     if (/enoent/i.test(message)) {
       return [];
     }
 
+    throw error;
+  }
+}
+
+/**
+ * Read entries from a file, returning empty array if file doesn't exist.
+ * Unlike readEntries(), this silently handles ENOENT for optional files.
+ * @param {string} filePath
+ * @returns {Promise<MemoryEntry[]>}
+ */
+async function readEntriesOrEmpty(filePath) {
+  try {
+    return await readEntries(filePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/enoent/i.test(message)) return [];
     throw error;
   }
 }
@@ -121,7 +212,13 @@ async function writeEntries(filePath, entries) {
 async function readScopedMemoryFiles(baseDir, project) {
   if (project) {
     const filePath = projectFilePath(baseDir, project);
-    return [{ project, filePath, entries: await readEntries(filePath) }];
+    const tempFilePath = tempMemoryFilePath(baseDir, project);
+    const entries = await readEntries(filePath);
+    const tempEntries = await readEntriesOrEmpty(tempFilePath);
+    // Filter expired temp entries
+    const now = new Date();
+    const activeTemp = tempEntries.filter(e => !e.expiresAt || new Date(e.expiresAt) > now);
+    return [{ project, filePath, entries: [...entries, ...activeTemp] }];
   }
 
   try {
@@ -136,16 +233,22 @@ async function readScopedMemoryFiles(baseDir, project) {
 
       const projectId = dirent.name === "_default" ? "" : dirent.name;
       const filePath = path.join(baseDir, dirent.name, "memories.jsonl");
+      const tempFilePath = path.join(baseDir, dirent.name, "temp-memories.jsonl");
+      const entries = await readEntries(filePath);
+      const tempEntries = await readEntriesOrEmpty(tempFilePath);
+      // Filter expired temp entries
+      const now = new Date();
+      const activeTemp = tempEntries.filter(e => !e.expiresAt || new Date(e.expiresAt) > now);
       scoped.push({
         project: projectId,
         filePath,
-        entries: await readEntries(filePath)
+        entries: [...entries, ...activeTemp]
       });
     }
 
     return scoped;
   } catch (error) {
-    const message = toErrorMessage(error);
+    const message = error instanceof Error ? error.message : String(error);
 
     if (/enoent/i.test(message)) {
       return [];
@@ -159,7 +262,7 @@ async function readScopedMemoryFiles(baseDir, project) {
  * @param {MemoryEntry | MemorySaveInput | Record<string, unknown>} entry
  */
 function inferSourceKind(entry) {
-  const record = /** @type {Record<string, unknown>} */ (entry);
+  const record = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (entry));
   const sourceKind =
     typeof record.sourceKind === "string" && record.sourceKind.trim() ? record.sourceKind.trim() : "";
 
@@ -304,7 +407,7 @@ function buildTopicKey(entry) {
  * @param {MemoryEntry | MemorySaveInput | Record<string, unknown>} entry
  */
 function scoreHealth(signalScore, durabilityScore, duplicateScore, testNoise, genericContent, entry) {
-  const record = /** @type {Record<string, unknown>} */ (entry);
+  const record = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (entry));
   const createdAt = typeof record.createdAt === "string" ? new Date(record.createdAt) : null;
   const recencyScore =
     createdAt && !Number.isNaN(createdAt.getTime())
@@ -312,7 +415,7 @@ function scoreHealth(signalScore, durabilityScore, duplicateScore, testNoise, ge
       : 0.55;
   const specificityScore = Math.min(
     1,
-    tokenizePathAware([entry.title, entry.content, entry.topic].filter(Boolean).join(" ")).length / 18
+    tokenize([entry.title, entry.content, entry.topic].filter(Boolean).join(" ")).length / 18
   );
   const health =
     signalScore * 0.35 +
@@ -331,7 +434,7 @@ function scoreHealth(signalScore, durabilityScore, duplicateScore, testNoise, ge
  * @param {{ fingerprintCounts: Map<string, number>, topicCounts: Map<string, number> }} indexes
  */
 function evaluateEntry(entry, indexes) {
-  const record = /** @type {Record<string, unknown>} */ (entry);
+  const record = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (entry));
   const signalScore = scoreSignal(entry);
   const durabilityScore = scoreDurability(entry);
   const testNoise = hasTestNoise(entry);
@@ -388,7 +491,8 @@ function evaluateEntry(entry, indexes) {
     healthScore,
     quarantineCandidate,
     reasons,
-    createdAt: typeof record.createdAt === "string" ? record.createdAt : ""
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
+    expiresAt: typeof record.expiresAt === "string" ? record.expiresAt : ""
   };
 }
 
@@ -773,6 +877,36 @@ export async function runMemoryDoctor(options = {}) {
     lowSignal: entries.filter((entry) => entry.reasons.includes("low-signal")).length,
     quarantineCandidates: entries.filter((entry) => entry.quarantineCandidate).length
   };
+  const securitySourceEntries = flatEntries.filter((entry) => {
+    const type = String(entry.type ?? "").toLowerCase();
+    const topic = String(entry.topic ?? "").toLowerCase();
+    const sourceKind = String(entry.sourceKind ?? "").toLowerCase();
+    const riskTaxonomy = String(entry.riskTaxonomy ?? "").toLowerCase();
+    return (
+      type.includes("security") ||
+      topic.startsWith("security/") ||
+      sourceKind === "learn-security" ||
+      Boolean(riskTaxonomy)
+    );
+  });
+  const securityConfidenceValues = /** @type {number[]} */ (
+    securitySourceEntries
+      .map((entry) => entry.confidence)
+      .filter((value) => typeof value === "number" && Number.isFinite(value))
+  );
+  const securityCriticalCount = securitySourceEntries.filter((entry) => {
+    const severity = String(entry.severity ?? "").toLowerCase();
+    const criticalFlag = entry.securityCritical;
+    return criticalFlag === true || severity === "critical";
+  }).length;
+  const securityQuarantineCandidates = entries.filter((entry) => {
+    const type = String(entry.type ?? "").toLowerCase();
+    const topic = String(entry.topic ?? "").toLowerCase();
+    return entry.quarantineCandidate && (type.includes("security") || topic.startsWith("security/"));
+  }).length;
+  const securityAverageConfidence = securityConfidenceValues.length
+    ? securityConfidenceValues.reduce((sum, value) => sum + value, 0) / securityConfidenceValues.length
+    : 0;
 
   return {
     action: "audit",
@@ -785,6 +919,12 @@ export async function runMemoryDoctor(options = {}) {
       entries: scope.entries.length
     })),
     summary,
+    security: {
+      totalRules: securitySourceEntries.length,
+      criticalRules: securityCriticalCount,
+      quarantineCandidates: securityQuarantineCandidates,
+      averageConfidence: Number(securityAverageConfidence.toFixed(3))
+    },
     entries
   };
 }
@@ -943,7 +1083,12 @@ export async function runMemoryStats(options = {}) {
       noiseRate: Number((doctor.summary.testNoise / total).toFixed(3)),
       duplicateRate: Number((doctor.summary.duplicates / total).toFixed(3)),
       healthyRate: Number((doctor.summary.healthy / total).toFixed(3)),
-      quarantineRate: Number((doctor.summary.quarantineCandidates / total).toFixed(3))
+      quarantineRate: Number((doctor.summary.quarantineCandidates / total).toFixed(3)),
+      tempMemories: {
+        total: disposableCount,
+        expired: entries.filter(e => e.expiresAt && new Date(e.expiresAt) <= new Date()).length,
+        active: entries.filter(e => !e.expiresAt || new Date(e.expiresAt) > new Date()).length
+      }
     }
   };
 }

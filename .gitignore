@@ -12,6 +12,18 @@ ESTRATEGIA-AGENTES-PRIVADO.md
 engram_*.zip
 tools/engram/
 
+# Local env vars (never commit credentials)
+.env
+.env.local
+
+# TLS certificates (never commit private keys)
+certs/
+
+# Demo UI — local only, not published to GitHub
+ui/
+src/interface/nexus-demo-page.html
+src/interface/nexus-demo-page.js
+
 # Node / build
 node_modules/
 dist/
@@ -27,3 +39,17 @@ coverage/
 .DS_Store
 Thumbs.db
 .claude/
+.atl/
+.gga
+NEXUS/.obsidian/
+NEXUS/learning-context-system/
+
+# Local-only planning/checklist docs (do not publish to GitHub)
+CheklistObsidian.md
+NEXUS-PLAN.md
+docs/api-axioms-implementation-checklist.md
+docs/implementation-plan.md
+docs/nexus-hardening-checklist.md
+docs/release-checklist.md
+docs/checklists/pr-hardening-ingest-security.md
+docs/planning/nexus-plan.md

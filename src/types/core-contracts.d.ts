@@ -72,7 +72,7 @@ export interface ChunkDiagnostics {
 }
 
 export interface SelectedChunk extends Chunk {
-  origin: "memory" | "workspace";
+  origin: "memory" | "workspace" | "chat";
   tokenCount: number;
   score: number;
   diagnostics: ChunkDiagnostics;
@@ -82,11 +82,17 @@ export interface SuppressedChunk {
   id: string;
   source: string;
   kind: ChunkKind;
-  origin?: "memory" | "workspace";
+  origin?: "memory" | "workspace" | "chat";
   tokenCount?: number;
   reason: string;
   score: number;
   diagnostics?: ChunkDiagnostics;
+}
+
+export interface SourceBudgetConfig {
+  workspace?: number;
+  memory?: number;
+  chat?: number;
 }
 
 export interface SelectionSummary {
@@ -129,6 +135,7 @@ export interface SelectionOptions {
   sentenceBudget?: number;
   changedFiles?: string[];
   recallReserveRatio?: number;
+  sourceBudgets?: SourceBudgetConfig;
   scoringProfile?: string;
   scoringWeights?: ScoringWeights;
   customScorers?: Array<(input: {
@@ -223,7 +230,7 @@ export interface PacketChunk {
   score: number;
   content: string;
   memoryType?: string;
-  origin?: "memory" | "workspace";
+  origin?: "memory" | "workspace" | "chat";
   tokenCount?: number;
   diagnostics?: ChunkDiagnostics;
 }
@@ -234,7 +241,7 @@ export interface PacketSuppressedChunk {
   score: number;
   source?: string;
   kind?: ChunkKind;
-  origin?: "memory" | "workspace";
+  origin?: "memory" | "workspace" | "chat";
   tokenCount?: number;
   diagnostics?: ChunkDiagnostics;
 }
@@ -245,6 +252,31 @@ export interface TeachingSections {
   historicalMemory: PacketChunk[];
   supportingContext: PacketChunk[];
   flow: string[];
+  relevantAxioms?: Array<{
+    type: AxiomType;
+    title: string;
+    body: string;
+    tags?: string[];
+  }>;
+}
+
+export interface SecurityTeachingBlock {
+  enabled: boolean;
+  focusMode: "auto" | "on" | "off";
+  blocked: boolean;
+  critical: boolean;
+  enforcement?: string;
+  risk?: {
+    id: string;
+    label: string;
+    severity: string;
+  };
+  rule?: string;
+  why?: string;
+  fix?: string;
+  practice?: string;
+  reasons?: string[];
+  rulesApplied?: string[];
 }
 
 export interface LearningPacketDiagnostics {
@@ -252,7 +284,33 @@ export interface LearningPacketDiagnostics {
   tokenBudget: number;
   usedTokens: number;
   summary: SelectionSummary;
+  selectorStatus?: "ok" | "degraded";
+  selectorReason?: string;
+  sdd?: {
+    enabled: boolean;
+    profile: "default" | "backend" | "frontend" | "security";
+    profileReason: string;
+    stageOrder: ChunkKind[];
+    requiredKinds: ChunkKind[];
+    availableKinds: Record<string, number>;
+    selectedKinds: Record<string, number>;
+    coverage: Record<string, boolean>;
+    injectedKinds: ChunkKind[];
+    skippedKinds: Array<{ kind: ChunkKind; reason: string }>;
+    reason?: string;
+  };
+  axiomInjection?: "injected" | "skipped" | "degraded";
+  axiomCount?: number;
+  axiomReason?: string;
 }
+
+export type AutoRememberStatus =
+  | "idle"
+  | "accepted"
+  | "quarantined"
+  | "failed"
+  | "unavailable"
+  | "degradedRecall";
 
 export interface LearningPacket {
   objective: string;
@@ -260,6 +318,7 @@ export interface LearningPacket {
   changedFiles: string[];
   teachingChecklist: string[];
   teachingSections: TeachingSections;
+  securityTeaching?: SecurityTeachingBlock;
   selectedContext: PacketChunk[];
   suppressedContext: PacketSuppressedChunk[];
   diagnostics: LearningPacketDiagnostics;
@@ -279,6 +338,10 @@ export interface MemoryRecallState {
   project: string;
   recoveredChunks: number;
   recoveredMemoryIds: string[];
+  candidateChunks?: number;
+  alreadySurfacedFiltered?: number;
+  resurfacedChunks?: number;
+  sideQueryUsed?: boolean;
   firstMatchIndex: number;
   selectedChunks: number;
   suppressedChunks: number;
@@ -303,6 +366,10 @@ export interface MemorySearchOptions {
   project?: string;
   scope?: string;
   type?: string;
+  language?: string;
+  securityOnly?: boolean;
+  isolationMode?: "strict" | "relaxed";
+  changedFiles?: string[];
   limit?: number;
 }
 
@@ -310,6 +377,7 @@ export interface MemorySaveInput {
   title: string;
   content: string;
   type?: string;
+  language?: string;
   project?: string;
   scope?: string;
   topic?: string;
@@ -323,6 +391,19 @@ export interface MemorySaveInput {
   reviewReasons?: string[];
   expiresAt?: string;
   supersedes?: string[];
+  // Temporary memory fields
+  temporary?: boolean;
+  ttlMinutes?: number;
+  maxTempEntries?: number;
+  // Security learning metadata
+  severity?: string;
+  confidence?: number;
+  riskTaxonomy?: string;
+  rule?: string;
+  antiPattern?: string;
+  fixPattern?: string;
+  practicePrompt?: string;
+  securityCritical?: boolean;
 }
 
 export interface MemoryCloseInput {
@@ -333,6 +414,7 @@ export interface MemoryCloseInput {
   project?: string;
   scope?: string;
   type?: string;
+  language?: string;
   sourceKind?: string;
   protected?: boolean;
   reviewStatus?: string;
@@ -350,10 +432,16 @@ export interface MemoryEntry {
   title: string;
   content: string;
   type: string;
+  language?: string;
   project: string;
   scope: string;
   topic: string;
   createdAt: string;
+  updatedAt?: string;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+  freshnessNote?: string | null;
+  truncated?: boolean;
   sourceKind?: string;
   protected?: boolean;
   reviewStatus?: string;
@@ -364,6 +452,18 @@ export interface MemoryEntry {
   reviewReasons?: string[];
   expiresAt?: string;
   supersedes?: string[];
+  // Temporary memory fields
+  ttlMinutes?: number;
+  autoExpire?: boolean;
+  // Security learning metadata
+  severity?: string;
+  confidence?: number;
+  riskTaxonomy?: string;
+  rule?: string;
+  antiPattern?: string;
+  fixPattern?: string;
+  practicePrompt?: string;
+  securityCritical?: boolean;
 }
 
 export interface MemorySearchResult {
@@ -377,6 +477,11 @@ export interface MemorySearchResult {
   error?: string;
   failureKind?: string;
   fixHint?: string;
+  security?: {
+    riskIds?: string[];
+    confidence?: number;
+    isolationApplied?: boolean;
+  };
 }
 
 export interface MemorySaveResult {
@@ -407,6 +512,7 @@ export interface MemoryProvider {
   delete(id: string, project?: string): Promise<{ deleted: boolean; id: string }>;
   list(options?: { project?: string; limit?: number }): Promise<MemoryEntry[]>;
   health(): Promise<MemoryHealthResult>;
+  purgeExpiredTempMemories?(project?: string): Promise<{ purged: number; remaining: number }>;
 
   /** Legacy compatibility — delegates to search/list internally */
   recallContext(project?: string): Promise<Record<string, unknown> & { stdout: string; provider: string }>;
@@ -525,6 +631,7 @@ export interface ApiRequest {
   body: Record<string, unknown>;
   headers: Record<string, string>;
   query: Record<string, string>;
+  params?: Record<string, string>;
 }
 
 export interface ApiResponse {

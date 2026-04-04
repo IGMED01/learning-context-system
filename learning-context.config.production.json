@@ -17,10 +17,13 @@
     "limit": 3,
     "scope": "project",
     "backend": "resilient",
+    "isolation": "strict",
     "autoRecall": true,
     "autoRemember": false,
     "strictRecall": false,
-    "degradedRecall": true
+    "degradedRecall": true,
+    "tempTtlMinutes": 60,
+    "tempMaxEntries": 30
   },
   "engram": {
     "binaryPath": "tools/engram/engram.exe",
@@ -31,13 +34,36 @@
     "redactSensitiveContent": true,
     "ignoreGeneratedFiles": true,
     "allowSensitivePaths": [],
-    "extraSensitivePathFragments": []
+    "extraSensitivePathFragments": [],
+    "learning": {
+      "enabled": true,
+      "sources": ["local", "ci"],
+      "enforcement": "warn-block-critical",
+      "minConfidence": 0.72,
+      "strictIsolation": true,
+      "defaultFocus": "auto"
+    }
   },
   "scan": {
     "ignoreDirs": [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
   },
+  "sync": {
+    "knowledgeBackend": "local-only",
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "backoffMs": 1000,
+      "maxBackoffMs": 30000
+    },
+    "dlq": {
+      "enabled": true,
+      "path": ".lcs/dlq",
+      "ttlDays": 7
+    }
+  },
   "safety": {
     "requirePlanForWrite": true,
+    "requireExecuteApprovalForWrite": true,
+    "requireStructuredPostTaskForWrite": true,
     "allowedScopePaths": [".", "src", "docs", "scripts", "test", "ui", "examples", "benchmark"],
     "maxTokenBudget": 700,
     "requireExplicitFocusForWorkspaceScan": true,
@@ -45,7 +71,7 @@
     "blockDebugWithoutStrongFocus": true
   },
   "guard": {
-    "enabled": false,
+    "enabled": true,
     "rules": [
       {
         "type": "input-validation",
@@ -66,14 +92,13 @@
       },
       {
         "type": "keyword-block",
-        "enabled": false,
+        "enabled": true,
         "params": {
-          "keywords": [],
-          "message": ""
+          "keywords": ["delete all", "drop table", "rm -rf", "format disk"],
+          "message": "Destructive keyword detected. Confirm before proceeding."
         }
       }
     ],
     "defaultBlockMessage": "This query is outside the scope of this project."
   }
 }
-
