@@ -150,7 +150,9 @@
  *   scan: ProjectScanConfig,
  *   sync: ProjectSyncConfig,
  *   safety: ProjectSafetyConfig,
- *   llm: ProjectLlmConfig
+ *   llm: ProjectLlmConfig,
+ *   models: { proposal: string, codegen: string, review: string, security: string, repair: string },
+ *   guard?: { enabled: boolean, rules: unknown[], defaultBlockMessage: string }
  * }} ProjectConfig
  */
 
@@ -294,7 +296,7 @@ export function defaultProjectConfig() {
       tempMaxEntries: 50
     },
     engram: {
-      binaryPath: "tools/engram/engram.exe",
+      binaryPath: process.platform === "win32" ? "tools/engram/engram.exe" : "tools/engram/engram",
       dataDir: ".engram"
     },
     security: {
@@ -353,6 +355,13 @@ export function defaultProjectConfig() {
       maxContextChunks: 8,
       requireAuth: true,
       apiKeys: []
+    },
+    models: {
+      proposal: "",
+      codegen: "",
+      review: "",
+      security: "",
+      repair: ""
     }
   };
 }
@@ -425,6 +434,7 @@ export function validateProjectConfig(value) {
   const sync = /** @type {Record<string, unknown> | undefined} */ (config.sync);
   const safety = /** @type {Record<string, unknown> | undefined} */ (config.safety);
   const llm = /** @type {Record<string, unknown> | undefined} */ (config.llm);
+  const models = /** @type {Record<string, unknown> | undefined} */ (config.models);
 
   const defaultFormat = optionalString(output?.defaultFormat, "Project config.output.defaultFormat");
 
@@ -808,7 +818,29 @@ export function validateProjectConfig(value) {
         optionalBoolean(llm?.requireAuth, "Project config.llm.requireAuth") ?? defaults.llm.requireAuth,
       apiKeys:
         optionalStringArray(llm?.apiKeys, "Project config.llm.apiKeys") ?? defaults.llm.apiKeys
-    }
+    },
+    models: {
+      proposal: optionalString(models?.proposal, "Project config.models.proposal") ?? defaults.models.proposal,
+      codegen: optionalString(models?.codegen, "Project config.models.codegen") ?? defaults.models.codegen,
+      review: optionalString(models?.review, "Project config.models.review") ?? defaults.models.review,
+      security: optionalString(models?.security, "Project config.models.security") ?? defaults.models.security,
+      repair: optionalString(models?.repair, "Project config.models.repair") ?? defaults.models.repair
+    },
+    guard: config.guard !== undefined && config.guard !== null && typeof config.guard === "object"
+      ? {
+          enabled: optionalBoolean(
+            /** @type {Record<string,unknown>} */ (config.guard).enabled,
+            "Project config.guard.enabled"
+          ) ?? defaults.guard?.enabled ?? false,
+          rules: Array.isArray(/** @type {Record<string,unknown>} */ (config.guard).rules)
+            ? /** @type {Record<string,unknown>} */ (config.guard).rules
+            : defaults.guard?.rules ?? [],
+          defaultBlockMessage: optionalString(
+            /** @type {Record<string,unknown>} */ (config.guard).defaultBlockMessage,
+            "Project config.guard.defaultBlockMessage"
+          ) ?? defaults.guard?.defaultBlockMessage ?? "Request blocked by guard policy."
+        }
+      : defaults.guard
   };
 }
 

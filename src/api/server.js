@@ -37,6 +37,7 @@ import { getObservabilityReport, recordCommandMetric } from "../observability/me
 import { createPromptVersionStore } from "../versioning/prompt-version-store.js";
 import { createRollbackPolicy } from "../versioning/rollback-policy.js";
 import { buildNexusOpenApiSpec } from "../interface/nexus-openapi.js";
+import { runJarvisCommand } from "../cli/jarvis-command.js";
 // Demo UI removed — stub to prevent build failures
 function buildNexusDemoPage() { return ""; }
 
@@ -1619,6 +1620,7 @@ export function createNexusApiServer(options = {}) {
     "GET /api/guard/policies",
     "POST /api/guard/output",
     "POST /api/pipeline/run",
+    "POST /api/jarvis",
     "POST /api/ask",
     "GET /api/sync/status",
     "GET /api/sync/drift",
@@ -2692,6 +2694,38 @@ export function createNexusApiServer(options = {}) {
           pipeline: result
         });
         await recordApiMetric("api.pipeline.run", requestStartedAt);
+        return;
+      }
+
+      if (method === "POST" && pathname === "/api/jarvis") {
+        const body = asRecord(await readJsonBody(request));
+        const task = typeof body.task === "string" ? body.task.trim() : "";
+
+        if (!task) {
+          sendErrorJson(response, 400, {
+            requestId,
+            code: "missing_task",
+            message: "body.task (string) is required"
+          });
+          return;
+        }
+
+        const jarvisResult = await runJarvisCommand({
+          task,
+          workspace: apiWorkspaceRoot,
+          project: typeof body.project === "string" ? body.project : "nexus",
+          tokenBudget: typeof body.tokenBudget === "number" ? body.tokenBudget : 350,
+          maxChunks: typeof body.maxChunks === "number" ? body.maxChunks : 6,
+          maxOutputTokens: typeof body.maxOutputTokens === "number" ? body.maxOutputTokens : 2000,
+          apiKey: process.env.ANTHROPIC_API_KEY ?? "",
+          saveMemory: body.saveMemory !== false
+        });
+
+        sendJson(response, jarvisResult.status === "blocked" ? 422 : 200, jarvisResult);
+        await recordApiMetric("api.jarvis", requestStartedAt, {
+          command: "api.jarvis",
+          degraded: jarvisResult.status !== "completed"
+        });
         return;
       }
 

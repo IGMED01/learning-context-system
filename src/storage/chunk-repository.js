@@ -12,6 +12,7 @@
 
 import { mkdir, readFile, writeFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { tokenize, slugify, termFrequency, inverseDocumentFrequency, tfidfScore } from "../utils/text-utils.js";
 
 /**
  * @typedef {import("../types/core-contracts.d.ts").Chunk} Chunk
@@ -21,118 +22,7 @@ import path from "node:path";
  * @typedef {import("../types/core-contracts.d.ts").ChunkRepositoryStats} ChunkRepositoryStats
  */
 
-// ── Constants ────────────────────────────────────────────────────────
-
-/** Common stopwords filtered from search queries and documents */
-const STOPWORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "by", "de", "del", "el", "en",
-  "es", "for", "from", "has", "he", "in", "is", "it", "its", "la", "las",
-  "lo", "los", "of", "on", "or", "que", "se", "the", "to", "un", "una",
-  "was", "were", "will", "with", "y"
-]);
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-/**
- * Slugify a project id for use as a directory name.
- * @param {string} value
- * @returns {string}
- */
-function slugify(value) {
-  const slug = value
-    .toLowerCase()
-    .replace(/\s+/gu, " ")
-    .trim()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/(^-|-$)/gu, "");
-
-  return slug || "_default";
-}
-
 // ── TF-IDF Search Engine ─────────────────────────────────────────────
-
-/**
- * Tokenize text into normalized terms, filtering stopwords.
- * @param {string} text
- * @returns {string[]}
- */
-function tokenize(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\u00e0-\u024f]+/gu, " ")
-    .split(/\s+/u)
-    .filter((t) => t.length > 1 && !STOPWORDS.has(t));
-}
-
-/**
- * Compute term frequency: count of each term / total terms.
- * @param {string[]} tokens
- * @returns {Map<string, number>}
- */
-function termFrequency(tokens) {
-  /** @type {Map<string, number>} */
-  const counts = new Map();
-
-  for (const token of tokens) {
-    counts.set(token, (counts.get(token) ?? 0) + 1);
-  }
-
-  const total = tokens.length || 1;
-  /** @type {Map<string, number>} */
-  const tf = new Map();
-
-  for (const [term, count] of counts) {
-    tf.set(term, count / total);
-  }
-
-  return tf;
-}
-
-/**
- * Compute inverse document frequency for query terms across a corpus.
- * @param {string[]} queryTerms
- * @param {Map<string, number>[]} documentTFs
- * @returns {Map<string, number>}
- */
-function inverseDocumentFrequency(queryTerms, documentTFs) {
-  const N = documentTFs.length || 1;
-  /** @type {Map<string, number>} */
-  const idf = new Map();
-
-  for (const term of queryTerms) {
-    let docsWithTerm = 0;
-
-    for (const tf of documentTFs) {
-      if (tf.has(term)) {
-        docsWithTerm++;
-      }
-    }
-
-    // Smoothed IDF: log((N + 1) / (docsWithTerm + 1)) + 1
-    idf.set(term, Math.log((N + 1) / (docsWithTerm + 1)) + 1);
-  }
-
-  return idf;
-}
-
-/**
- * Score a single document against query terms using TF-IDF.
- * @param {Map<string, number>} docTF
- * @param {string[]} queryTerms
- * @param {Map<string, number>} idf
- * @returns {number}
- */
-function tfidfScore(docTF, queryTerms, idf) {
-  let score = 0;
-
-  for (const term of queryTerms) {
-    const tf = docTF.get(term) ?? 0;
-    const idfVal = idf.get(term) ?? 1;
-    score += tf * idfVal;
-  }
-
-  return score;
-}
 
 /**
  * Build searchable text from a chunk.
@@ -151,7 +41,7 @@ function chunkToSearchText(chunk) {
  * @returns {string}
  */
 function projectDir(baseDir, projectId) {
-  return path.join(baseDir, slugify(projectId));
+  return path.join(baseDir, slugify(projectId, { fallback: "_default" }));
 }
 
 /**

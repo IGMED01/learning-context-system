@@ -17,33 +17,12 @@
  * @typedef {import("../types/core-contracts.d.ts").BM25Result} BM25Result
  */
 
+import { tokenize } from "../utils/text-utils.js";
+
 // ── Constants ────────────────────────────────────────────────────────
 
 const K1 = 1.5;
 const B = 0.75;
-
-/** Common stopwords filtered from search queries and documents */
-const STOPWORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "by", "de", "del", "el", "en",
-  "es", "for", "from", "has", "he", "in", "is", "it", "its", "la", "las",
-  "lo", "los", "of", "on", "or", "que", "se", "the", "to", "un", "una",
-  "was", "were", "will", "with", "y"
-]);
-
-// ── Tokenizer ────────────────────────────────────────────────────────
-
-/**
- * Tokenize text into normalized terms, filtering stopwords.
- * @param {string} text
- * @returns {string[]}
- */
-function tokenize(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\u00e0-\u024f]+/gu, " ")
-    .split(/\s+/u)
-    .filter((t) => t.length > 1 && !STOPWORDS.has(t));
-}
 
 // ── Factory ──────────────────────────────────────────────────────────
 

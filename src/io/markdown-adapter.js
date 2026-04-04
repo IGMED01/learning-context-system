@@ -8,20 +8,10 @@ import {
   resolveSecurityPolicy
 } from "../security/secret-redaction.js";
 import { defaultChunkSignals, legalDocSignals, registerAdapter } from "./source-adapter.js";
+import { slugify } from "../utils/text-utils.js";
 
 const MAX_SECTION_CHARS = 4000;
 const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".rst"]);
-
-/**
- * @param {string} value
- */
-function slugify(value) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "")
-    || "document";
-}
 
 /**
  * @param {string} value
@@ -216,7 +206,7 @@ export const markdownAdapter = {
 
         stats.includedFiles += 1;
         const relativePath = toPosixPath(relative(resolvedPath, filePath)) || basename(filePath);
-        const fileSlug = slugify(basename(filePath, extname(filePath)));
+        const fileSlug = slugify(basename(filePath, extname(filePath)), { fallback: "document" });
         const isLegal = /normativ|ley|decreto|resoluci[oó]n|c[oó]digo|reglament|ordenanza|art[ií]culo/i.test(
           `${basename(filePath)} ${text.slice(0, 500)}`
         );

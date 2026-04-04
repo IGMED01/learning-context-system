@@ -2,6 +2,7 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { slugify } from "../utils/text-utils.js";
 
 /**
  * @typedef {{
@@ -100,17 +101,6 @@ const FOUNDATION_AXIOM_MAP = {
   }
 };
 
-/**
- * @param {string} value
- * @returns {string}
- */
-function slugify(value) {
-  return String(value)
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/(^-|-$)/gu, "") || "axiom";
-}
 
 /**
  * @param {string} value
@@ -158,10 +148,10 @@ function parseFoundationalVault(raw, sourcePath) {
     const normalized = normalizeStatement(statement);
     const mapped = FOUNDATION_AXIOM_MAP[normalized];
     axioms.push({
-      id: mapped?.id ?? slugify(statement),
+      id: mapped?.id ?? slugify(statement, { fallback: "axiom" }),
       statement,
       type: mapped?.type ?? "axiom",
-      topic: mapped?.topic ?? `axioms/${slugify(statement)}`,
+      topic: mapped?.topic ?? `axioms/${slugify(statement, { fallback: "axiom" })}`,
       protected: true,
       source: "obsidian",
       domain: mapped?.domain ?? [],
@@ -197,10 +187,10 @@ function parseBulletFile(raw, sourcePath, type, domain) {
     }
 
     axioms.push({
-      id: slugify(statement),
+      id: slugify(statement, { fallback: "axiom" }),
       statement,
       type,
-      topic: `${type}/${slugify(statement)}`,
+      topic: `${type}/${slugify(statement, { fallback: "axiom" })}`,
       protected: type !== "lesson",
       source: "agents",
       domain,
@@ -232,10 +222,10 @@ function parseDecisionFile(raw, sourcePath) {
     }
 
     axioms.push({
-      id: slugify(title || statement),
+      id: slugify(title || statement, { fallback: "axiom" }),
       statement,
       type: "decision",
-      topic: `decision/${slugify(title || statement)}`,
+      topic: `decision/${slugify(title || statement, { fallback: "axiom" })}`,
       protected: true,
       source: "agents",
       domain: [],
@@ -267,10 +257,10 @@ function parseLessonFile(raw, sourcePath) {
     }
 
     axioms.push({
-      id: slugify(title || statement),
+      id: slugify(title || statement, { fallback: "axiom" }),
       statement,
       type: "lesson",
-      topic: `lesson/${slugify(title || statement)}`,
+      topic: `lesson/${slugify(title || statement, { fallback: "axiom" })}`,
       protected: false,
       source: "agents",
       domain: ["memory-architecture"],

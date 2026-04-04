@@ -8,20 +8,10 @@ import {
   resolveSecurityPolicy
 } from "../security/secret-redaction.js";
 import { defaultChunkSignals, legalDocSignals, registerAdapter } from "./source-adapter.js";
+import { slugify } from "../utils/text-utils.js";
 
 const MAX_CHUNK_CHARS = 4000;
 const MAX_PAGE_CHARS = 8000;
-
-/**
- * @param {string} value
- */
-function slugify(value) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "")
-    || "document";
-}
 
 /**
  * @param {string} value
@@ -182,7 +172,7 @@ export const pdfAdapter = {
 
         stats.includedFiles += 1;
         const relativePath = toPosixPath(relative(resolvedPath, pdfPath)) || basename(pdfPath);
-        const fileSlug = slugify(basename(pdfPath, ".pdf"));
+        const fileSlug = slugify(basename(pdfPath, ".pdf"), { fallback: "document" });
         const isLegal = /normativ|ley|decreto|resoluci[oó]n|c[oó]digo|reglament|ordenanza/i.test(
           `${basename(pdfPath)} ${text.slice(0, 500)}`
         );
@@ -224,7 +214,7 @@ export const pdfAdapter = {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         allChunks.push({
-          id: `pdf-error-${slugify(basename(pdfPath, ".pdf"))}`,
+          id: `pdf-error-${slugify(basename(pdfPath, ".pdf"), { fallback: "document" })}`,
           source: `pdf://${basename(pdfPath)}`,
           kind: "doc",
           content: `[PDF extraction failed: ${basename(pdfPath)}] ${message}`,

@@ -3,6 +3,7 @@
 import { buildTeachRecallQueries } from "./recall-queries.js";
 import { findRelevantMemories } from "./find-relevant-memories.js";
 import { memoryEntriesToChunks } from "./memory-utils.js";
+import { sleep, toErrorMessage } from "../utils/text-utils.js";
 
 /** @typedef {import("../types/core-contracts.d.ts").MemoryRecallState} MemoryRecallState */
 /** @typedef {import("../types/core-contracts.d.ts").TeachRecallResolution} TeachRecallResolution */
@@ -19,15 +20,8 @@ const DEFAULT_SIDE_QUERY_MAX_QUERIES = 3;
 /**
  * @param {unknown} error
  */
-function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * @param {unknown} error
- */
 function shouldRetryRecallError(error) {
-  const normalized = errorMessage(error).toLowerCase();
+  const normalized = toErrorMessage(error).toLowerCase();
 
   return (
     /etimedout|timed out|timeout/u.test(normalized) ||
@@ -38,18 +32,7 @@ function shouldRetryRecallError(error) {
   );
 }
 
-/**
- * @param {number} milliseconds
- */
-function sleep(milliseconds) {
-  if (milliseconds <= 0) {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
-}
+// sleep imported from ../utils/text-utils.js
 
 /**
  * @param {string} query
@@ -251,7 +234,7 @@ export async function resolveTeachRecall(input) {
             typeof memoryResult.failureKind === "string" ? memoryResult.failureKind : "";
         }
       } catch (error) {
-        lastProviderError = errorMessage(error);
+        lastProviderError = toErrorMessage(error);
 
         if (input.strictRecall) {
           throw error;
@@ -374,7 +357,7 @@ export async function resolveTeachRecall(input) {
         firstMatchIndex: -1,
         selectedChunks: 0,
         suppressedChunks: 0,
-        error: error instanceof Error ? error.message : String(error)
+        error: toErrorMessage(error)
       }
     };
   }
