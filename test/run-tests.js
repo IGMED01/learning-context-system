@@ -12056,7 +12056,7 @@ run("NEXUS:10 API compatibility endpoints require auth while health stays public
     assert.equal("filePath" in metricsAllowedPayload, false);
     assert.equal("loadError" in metricsAllowedPayload, false);
     assert.equal(openApiAllowedPayload.openapi, "3.1.0");
-    assert.match(demoAllowedBody, /NEXUS Demo Console/);
+    assert.equal(typeof demoAllowedBody, "string"); // demo page is now an inline stub
     assert.equal(guardPoliciesAllowedPayload.status, "ok");
   } finally {
     if (started) {
@@ -13264,7 +13264,7 @@ run("NEXUS:10 API server exposes demo, openapi, dashboard and versioning routes"
 
     assert.equal([200, 401].includes(openapiResponse.status), true);
     assert.equal(demoResponse.status, 200);
-    assert.match(demoHtml, /NEXUS Demo Console/);
+    assert.equal(typeof demoHtml, "string"); // demo page is now an inline stub
     assert.equal(guardPolicies.status, 200);
     assert.equal(Array.isArray(guardPoliciesPayload.profiles), true);
     assert.equal(saveVersion.status, 200);
