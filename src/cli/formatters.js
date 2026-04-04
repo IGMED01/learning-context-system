@@ -35,7 +35,8 @@
  *     rememberError: string,
  *     rememberRedactionCount: number,
  *     rememberSensitivePathCount: number
- *   }
+ *   },
+ *   securityTeaching?: import("../types/core-contracts.d.ts").SecurityTeachingBlock
  * }} LearningPacketRenderResult
  */
 
@@ -236,6 +237,28 @@ export function formatLearningPacketAsText(packet, options = {}) {
     lines.push(`- Remember error: ${packet.autoMemory.rememberError}`);
   }
 
+  if (packet.securityTeaching?.enabled) {
+    lines.push("");
+    lines.push("Security teaching:");
+    lines.push(`- Focus mode: ${packet.securityTeaching.focusMode}`);
+    lines.push(`- Enforcement: ${packet.securityTeaching.enforcement || "warn-block-critical"}`);
+    lines.push(`- Risk: ${packet.securityTeaching.risk?.id || "security-misconfiguration"}`);
+    lines.push(`- Critical: ${packet.securityTeaching.critical ? "yes" : "no"}`);
+    lines.push(`- Blocked: ${packet.securityTeaching.blocked ? "yes" : "no"}`);
+    if (packet.securityTeaching.rule) {
+      lines.push(`- Rule: ${packet.securityTeaching.rule}`);
+    }
+    if (packet.securityTeaching.why) {
+      lines.push(`- Why: ${packet.securityTeaching.why}`);
+    }
+    if (packet.securityTeaching.fix) {
+      lines.push(`- Fix: ${packet.securityTeaching.fix}`);
+    }
+    if (packet.securityTeaching.practice) {
+      lines.push(`- Practice: ${packet.securityTeaching.practice}`);
+    }
+  }
+
   if (debug) {
     lines.push("");
     lines.push("Recall debug:");
@@ -387,16 +410,26 @@ export function formatLearningPacketAsText(packet, options = {}) {
  *   query?: string,
  *   type?: string,
  *   scope?: string,
+ *   language?: string,
+ *   securityOnly?: boolean,
+ *   isolationMode?: "strict" | "relaxed",
  *   limit?: number | null,
  *   stdout?: string,
  *   dataDir?: string,
  *   filePath?: string,
  *   provider?: string,
+ *   providerChain?: string[],
+ *   fallbackProvider?: string,
  *   degraded?: boolean,
  *   warning?: string,
  *   error?: string,
  *   failureKind?: string,
- *   fixHint?: string
+ *   fixHint?: string,
+ *   security?: {
+ *     riskIds?: string[],
+ *     confidence?: number,
+ *     isolationApplied?: boolean
+ *   }
  * }} result
  * @param {{ debug?: boolean }} [options]
  */
@@ -408,8 +441,17 @@ export function formatMemoryRecallAsText(result, options = {}) {
     `Query: ${result.query || "none"}`,
     `Type filter: ${result.type || "none"}`,
     `Scope: ${result.scope || "none"}`,
+    `Language filter: ${result.language || "none"}`,
+    `Security only: ${result.securityOnly ? "yes" : "no"}`,
+    `Isolation mode: ${result.isolationMode || "strict"}`,
     `Limit: ${result.limit ?? "default"}`,
     `Provider: ${result.provider || "memory"}`,
+    `Provider chain: ${
+      Array.isArray(result.providerChain) && result.providerChain.length
+        ? result.providerChain.join(" -> ")
+        : "n/a"
+    }`,
+    `Fallback provider: ${result.fallbackProvider || "none"}`,
     `Data dir: ${result.dataDir || "unknown"}`,
     `Fallback file: ${result.filePath || "none"}`,
     `Degraded: ${result.degraded ? "yes" : "no"}`,
@@ -436,12 +478,22 @@ export function formatMemoryRecallAsText(result, options = {}) {
     lines.push(`Fix hint: ${result.fixHint}`);
   }
 
+  if (result.security) {
+    lines.push(
+      `Security risk ids: ${Array.isArray(result.security.riskIds) && result.security.riskIds.length ? result.security.riskIds.join(", ") : "none"}`
+    );
+    lines.push(`Security confidence: ${typeof result.security.confidence === "number" ? result.security.confidence.toFixed(3) : "0.000"}`);
+    lines.push(`Security isolation applied: ${result.security.isolationApplied === false ? "no" : "yes"}`);
+  }
+
   if (debug) {
     lines.push("");
     lines.push("Recall debug:");
     lines.push(`- Query provided: ${result.query ? "yes" : "no"}`);
     lines.push(`- Scope filter active: ${result.scope ? "yes" : "no"}`);
     lines.push(`- Type filter active: ${result.type ? "yes" : "no"}`);
+    lines.push(`- Language filter active: ${result.language ? "yes" : "no"}`);
+    lines.push(`- Isolation mode: ${result.isolationMode || "strict"}`);
   }
 
   return lines.join("\n");
@@ -894,6 +946,7 @@ export function usageText() {
     "  init     -> creates learning-context.config.json with safe defaults",
     "  sync-knowledge -> appends a durable learning note into a Notion page",
     "  ingest-security -> converts Prowler findings JSON into LCS chunk JSON",
+    "  learn-security -> distills security findings into durable security-rule memories",
     "  select   -> ranks and selects high-value context chunks",
     "  teach    -> builds a teaching packet (with automatic recall by default)",
     "  readme   -> generates a learning README from selected context",
@@ -912,18 +965,19 @@ export function usageText() {
     "  node src/cli.js doctor [--config <file>] [--format json|text]",
     "  node src/cli.js doctor-memory [--config <file>] [--project <name>] [--memory-base-dir <dir>] [--format json|text]",
     "  node src/cli.js memory-stats [--config <file>] [--project <name>] [--memory-base-dir <dir>] [--format json|text]",
-    "  node src/cli.js prune-memory [--config <file>] [--project <name>] [--memory-base-dir <dir>] [--memory-quarantine-dir <dir>] [--apply true|false] [--plan-approved true] [--format json|text]",
-    "  node src/cli.js compact-memory [--config <file>] [--project <name>] [--topic <key>] [--memory-base-dir <dir>] [--memory-quarantine-dir <dir>] [--apply true|false] [--plan-approved true] [--format json|text]",
+    "  node src/cli.js prune-memory [--config <file>] [--project <name>] [--memory-base-dir <dir>] [--memory-quarantine-dir <dir>] [--apply true|false] [--plan-approved true] [--execute-approved true] [--post-task-summary <text>] [--post-task-learned <text>] [--post-task-next <text>] [--format json|text]",
+    "  node src/cli.js compact-memory [--config <file>] [--project <name>] [--topic <key>] [--memory-base-dir <dir>] [--memory-quarantine-dir <dir>] [--apply true|false] [--plan-approved true] [--execute-approved true] [--post-task-summary <text>] [--post-task-learned <text>] [--post-task-next <text>] [--format json|text]",
     "  node src/cli.js init [--config <file>] [--force true|false] [--format json|text]",
-    "  node src/cli.js sync-knowledge [--config <file>] --title <text> (--content <text> | --message <text>) [--project <name>] [--source <text>] [--tags a,b] [--notion-token <token>] [--notion-page-id <id>] [--plan-approved true] [--format json|text]",
-    "  node src/cli.js ingest-security --input <prowler.json> [--status-filter all|non-pass|fail] [--max-findings 200] [--output <file>] [--plan-approved true] [--format json|text]",
+    "  node src/cli.js sync-knowledge [--config <file>] --title <text> (--content <text> | --message <text>) [--project <name>] [--source <text>] [--tags a,b] [--notion-token <token>] [--notion-page-id <id>] [--plan-approved true] [--execute-approved true] [--post-task-summary <text>] [--post-task-learned <text>] [--post-task-next <text>] [--format json|text]",
+    "  node src/cli.js ingest-security --input <prowler.json> [--status-filter all|non-pass|fail] [--max-findings 200] [--output <file>] [--plan-approved true] [--execute-approved true] [--post-task-summary <text>] [--post-task-learned <text>] [--post-task-next <text>] [--format json|text]",
+    "  node src/cli.js learn-security --input <prowler.json> [--project <name>] [--source local|ci] [--status-filter all|non-pass|fail] [--max-findings 200] [--min-confidence 0.72] [--memory-language <name>] [--changed-files a,b] [--strict-isolation true|false] [--dry-run true|false] [--memory-backend resilient|parallel|local-only] [--memory-quarantine-dir <dir>] [--plan-approved true] [--execute-approved true] [--post-task-summary <text>] [--post-task-learned <text>] [--post-task-next <text>] [--format json|text]",
     "  node src/cli.js select [--config <file>] (--input <file> | --workspace <dir>) --focus <text> [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
-    "  node src/cli.js teach [--config <file>] (--input <file> | --workspace <dir>) --task <text> --objective <text> [--changed-files a,b] [--project <name>] [--recall-query <text>] [--memory-limit 3] [--memory-type <name>] [--memory-scope <name>] [--memory-backend resilient|local-only] [--auto-recall true|false] [--no-recall] [--strict-recall true|false] [--auto-remember true|false] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--debug] [--format json|text]",
-    "  node src/cli.js readme [--config <file>] [--workspace <dir>] [--input <file>] [--focus <text>] [--task <text>] [--objective <text>] [--title <text>] [--output <file>] [--plan-approved true] [--format json|text]",
-    "  node src/cli.js recall [--config <file>] [--project <name>] [--query <text>] [--type <name>] [--scope <name>] [--limit 5] [--memory-backend resilient|local-only] [--degraded-recall true|false] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--debug] [--format json|text]",
-    "  node src/cli.js remember [--config <file>] --title <text> (--content <text> | --message <text>) [--project <name>] [--type <name>] [--scope <name>] [--topic <key>] [--memory-backend resilient|local-only] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--plan-approved true] [--format json|text]",
-    "  node src/cli.js close [--config <file>] --summary <text> [--learned <text>] [--next <text>] [--title <text>] [--project <name>] [--type <name>] [--scope <name>] [--memory-backend resilient|local-only] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--plan-approved true] [--format json|text]",
-    "  node src/cli.js shell [--project <name>] [--workspace <dir>] [--memory-backend resilient|local-only] [--format text|json]",
+    "  node src/cli.js teach [--config <file>] (--input <file> | --workspace <dir>) --task <text> --objective <text> [--changed-files a,b] [--project <name>] [--recall-query <text>] [--memory-limit 3] [--memory-type <name>] [--memory-scope <name>] [--memory-language <name>] [--memory-isolation strict|relaxed] [--security-focus auto|on|off] [--memory-backend resilient|parallel|local-only] [--auto-recall true|false] [--no-recall] [--strict-recall true|false] [--auto-remember true|false] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--obsidian-vault <dir>] [--token-budget 350] [--max-chunks 6] [--min-score 0.25] [--plan-approved true] [--execute-approved true] [--post-task-summary <text>] [--post-task-learned <text>] [--post-task-next <text>] [--debug] [--format json|text]",
+    "  node src/cli.js readme [--config <file>] [--workspace <dir>] [--input <file>] [--focus <text>] [--task <text>] [--objective <text>] [--title <text>] [--output <file>] [--plan-approved true] [--execute-approved true] [--post-task-summary <text>] [--post-task-learned <text>] [--post-task-next <text>] [--format json|text]",
+    "  node src/cli.js recall [--config <file>] [--project <name>] [--query <text>] [--type <name>] [--scope <name>] [--memory-language <name>] [--security-only true|false] [--memory-isolation strict|relaxed] [--limit 5] [--memory-backend resilient|parallel|local-only] [--degraded-recall true|false] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--obsidian-vault <dir>] [--debug] [--format json|text]",
+    "  node src/cli.js remember [--config <file>] --title <text> (--content <text> | --message <text>) [--project <name>] [--type <name>] [--scope <name>] [--topic <key>] [--memory-language <name>] [--memory-isolation strict|relaxed] [--memory-backend resilient|parallel|local-only] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--obsidian-vault <dir>] [--plan-approved true] [--execute-approved true] [--post-task-summary <text>] [--post-task-learned <text>] [--post-task-next <text>] [--format json|text]",
+    "  node src/cli.js close [--config <file>] --summary <text> [--learned <text>] [--next <text>] [--title <text>] [--project <name>] [--type <name>] [--scope <name>] [--memory-language <name>] [--memory-isolation strict|relaxed] [--memory-backend resilient|parallel|local-only] [--external-battery true|false] [--engram-bin <file>] [--engram-data-dir <dir>] [--local-memory-fallback true|false] [--memory-fallback-file <file>] [--obsidian-vault <dir>] [--plan-approved true] [--execute-approved true] [--format json|text]",
+    "  node src/cli.js shell [--project <name>] [--workspace <dir>] [--memory-backend resilient|parallel|local-only] [--format text|json]",
     "",
     "Input file format:",
     '  { "chunks": [ { "id": "x", "source": "src/file.ts", "kind": "code", "content": "..." } ] }',
@@ -939,17 +993,23 @@ export function usageText() {
     "  sync-knowledge appends heading + metadata + markdown content blocks (headings/lists/paragraphs) into your Notion page.",
     "  sync-knowledge can read NOTION_TOKEN / NOTION_API_KEY and NOTION_PARENT_PAGE_ID from env if flags are omitted.",
     "  ingest-security converts Prowler report JSON into chunk JSON compatible with select/teach/readme input.",
+    "  learn-security distills findings into security-rule memories with dedupe + quarantine safeguards.",
     "  --workspace scans the local repository and builds chunks automatically.",
     "  learning-context.config.json is loaded automatically when present.",
     "  readme defaults to --workspace . when no input source is provided.",
     "  teach recalls durable memory automatically unless you pass --no-recall.",
+    "  teach --security-focus auto|on|off enables security side-queries and Rule/Why/Fix/Practice guardrails.",
     "  auto recall can be disabled globally with memory.autoRecall or per command with --auto-recall false.",
     "  auto remember can be enabled with --auto-remember true or memory.autoRemember=true.",
-    "  memory backend defaults to resilient (local JSONL + optional external battery), configurable with memory.backend or --memory-backend.",
+    "  memory backend defaults to resilient (local JSONL + optional external battery); use parallel to read/write local+obsidian together.",
+    "  memory isolation defaults to strict and can be relaxed with --memory-isolation relaxed.",
+    "  recall --security-only true limits results to security memories with risk/severity metadata.",
+    "  use --memory-language (or changed-files in teach) to enforce language-aware recall and prevent cross-project language drift.",
     "  Engram is treated as an optional external battery only; use --external-battery false to disable that contingency tier.",
     "  auto remember always sanitizes sensitive paths and redacts secret-like fragments before save.",
     "  teach now tries multiple smarter recall queries before giving up.",
-    "  safety gate can enforce write-plan approval (--plan-approved true) and scope limits from config.safety.",
+    "  safety gate can enforce write-plan approval (--plan-approved true) and execute approval (--execute-approved true).",
+    "  safety gate can require a structured post-task note (--post-task-summary/--post-task-learned/--post-task-next) before write commands.",
     "  safety gate can also block oversized token budgets above config.safety.maxTokenBudget.",
     "  safety gate can require explicit focus for workspace scans and block weak-focus debug traces.",
     "  recall can return a degraded result when semantic/external memory tiers are unavailable and degraded mode is enabled.",

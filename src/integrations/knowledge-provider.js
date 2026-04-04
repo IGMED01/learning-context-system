@@ -7,6 +7,19 @@
  *   content: string,
  *   project?: string,
  *   type?: string,
+ *   scope?: string,
+ *   topic?: string,
+ *   language?: string,
+ *   sector?: string,
+ *   memoryType?: string,
+ *   severity?: string,
+ *   confidence?: number,
+ *   riskTaxonomy?: string,
+ *   rule?: string,
+ *   antiPattern?: string,
+ *   fixPattern?: string,
+ *   practicePrompt?: string,
+ *   securityCritical?: boolean,
  *   source?: string,
  *   tags?: string[],
  *   createdAt?: string,
@@ -260,4 +273,3 @@ export function withRetry(provider, retryPolicy) {
     }
   };
 }
-

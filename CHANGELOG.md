@@ -7,6 +7,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-02
+
+### Added
+- Added parallel memory runtime with dual-provider support (`local + obsidian`) through `src/memory/parallel-memory-client.js`.
+- Added Obsidian memory provider adapter (`src/memory/obsidian-memory-provider.js`) with project-scoped read/write compatibility for `remember`/`close`/`recall`/`teach`.
+- Added shared advanced memory ranking module (`src/memory/memory-search-ranking.js`) for metadata gating, hybrid lexical ranking, recency weighting, path affinity scoring, and cross-provider deduplication.
+- Added strict memory isolation controls (`memory.isolation`, `--memory-isolation`) and language-aware filters (`--memory-language`) across recall and teach flows.
+
+### Changed
+- Extended memory backend strategy with `parallel` mode (`--memory-backend parallel`) while keeping `resilient` and `local-only` compatibility.
+- Teach auto-recall and auto-remember now propagate language/isolation context to reduce cross-language drift (for example Go knowledge surfacing during JavaScript tasks).
+- Obsidian vault export/sync now uses project-first sectorization (`skills`, `tools`, `projects`, `learning-packets`, fallback `memories`) while preserving type metadata.
+- Recall output now exposes isolation and provider-chain diagnostics in both text and JSON observability payloads.
+- Updated doctor diagnostics for parallel mode to report Obsidian second-memory readiness.
+- Marked local vault path `NEXUS/learning-context-system/` as gitignored local-only knowledge.
+
+### Contracts
+- CLI/config contracts extended additively for:
+  - `memory.backend = parallel`
+  - `memory.isolation = strict|relaxed`
+  - language-aware memory filters/options in recall/teach/remember/close
+- No breaking JSON contract change.
+
 ## [0.3.0] - 2026-04-02
 
 ### Added

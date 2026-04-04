@@ -13,7 +13,14 @@ export { runEvalSuite, loadEvalSuite, scoreAccuracy, scoreRelevance } from "./ev
 export { createTrace } from "./observability/trace.js";
 export { recordRequest, getMetricsSnapshot, registerAlertRule } from "./observability/live-metrics.js";
 export { executeWorkflow, registerStepExecutor } from "./orchestration/workflow-engine.js";
-export { createSession, getSession, addTurn, buildConversationContext } from "./orchestration/conversation-manager.js";
+export {
+  createSession,
+  getSession,
+  addTurn,
+  buildConversationContext,
+  loadSessionHistory,
+  flushSessionHistory
+} from "./orchestration/conversation-manager.js";
 export { executeAction, executeActions } from "./orchestration/action-executor.js";
 export { withRetry } from "./orchestration/retry-policy.js";
 export { savePromptVersion, getCurrentPrompt, rollbackPrompt, listPrompts } from "./versioning/prompt-versioning.js";

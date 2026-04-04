@@ -14,6 +14,7 @@
 import type { ConversationSession, ConversationTurn } from "../types/core-contracts.d.ts";
 
 import { randomUUID } from "node:crypto";
+import { createSessionHistoryStore } from "./session-history.js";
 
 // ── Session Store ────────────────────────────────────────────────────
 
@@ -50,6 +51,7 @@ let policyCacheHits = 0;
 let policyRecomputations = 0;
 let contextCacheHits = 0;
 let contextComputations = 0;
+const sessionHistoryStore = createSessionHistoryStore();
 const CONTRADICTION_NEGATIVE_TOKENS = new Set([
   "no",
   "not",
@@ -760,6 +762,7 @@ export function addTurn(
   updateContradictionState(session);
   session.updatedAt = turn.timestamp;
   invalidateSessionContextCache(sessionId);
+  void sessionHistoryStore.enqueueTurn(sessionId, turn).catch(() => undefined);
 
   return turn;
 }
@@ -955,6 +958,17 @@ export function resetAllSessions(): void {
   policyRecomputations = 0;
   contextCacheHits = 0;
   contextComputations = 0;
+}
+
+export async function loadSessionHistory(
+  sessionId: string,
+  limit: number = 40
+): Promise<ConversationTurn[]> {
+  return sessionHistoryStore.loadRecent(sessionId, limit);
+}
+
+export async function flushSessionHistory(sessionId: string): Promise<void> {
+  await sessionHistoryStore.flush(sessionId);
 }
 
 export function getConversationMemoizationStats() {

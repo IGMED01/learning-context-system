@@ -53,6 +53,7 @@ import { resolveTeachRecall } from "./teach-recall.js";
  *   },
  *   memoryType?: string,
  *   memoryScope?: string,
+ *   memoryLanguage?: string,
  *   security?: AutoMemorySecurityOptions
  * }} AutoRememberPayloadInput
  */
@@ -70,6 +71,7 @@ import { resolveTeachRecall } from "./teach-recall.js";
  *   title: string,
  *   content: string,
  *   type: string,
+ *   language?: string,
  *   scope: string,
  *   project?: string,
  *   security: AutoMemorySecurityMeta
@@ -116,7 +118,13 @@ function sanitizePathList(values, securityPolicy) {
  *   limit?: number,
  *   scope?: string,
  *   type?: string,
+ *   language?: string,
+ *   isolationMode?: "strict" | "relaxed",
  *   strictRecall?: boolean,
+ *   alreadySurfacedMemoryIds?: string[],
+ *   usedTools?: string[],
+ *   sideQueryCandidateMultiplier?: number,
+ *   sideQueryMaxQueries?: number,
  *   baseChunks?: Chunk[],
  *   search: (query: string, options?: MemorySearchOptions) => Promise<MemorySearchResult>
  * }} input
@@ -140,7 +148,13 @@ export async function resolveAutoTeachRecall(input) {
     limit: input.limit,
     scope: input.scope,
     type: input.type,
+    language: input.language,
+    isolationMode: input.isolationMode,
     strictRecall: input.strictRecall,
+    alreadySurfacedMemoryIds: input.alreadySurfacedMemoryIds,
+    usedTools: input.usedTools,
+    sideQueryCandidateMultiplier: input.sideQueryCandidateMultiplier,
+    sideQueryMaxQueries: input.sideQueryMaxQueries,
     baseChunks: input.baseChunks,
     search: input.search
   });
@@ -179,6 +193,10 @@ export function buildTeachAutoRememberPayload(input) {
   const title = `Teach loop - ${compactText(input.task || "learning", 52)}`;
   const scope = input.memoryScope || "project";
   const type = input.memoryType || "learning";
+  const language =
+    typeof input.memoryLanguage === "string" && input.memoryLanguage.trim()
+      ? input.memoryLanguage.trim().toLowerCase()
+      : "";
   const recall = input.recallState;
   const securityPolicy = resolveSecurityPolicy({
     ...(input.security ?? {}),
@@ -237,6 +255,7 @@ export function buildTeachAutoRememberPayload(input) {
     title,
     content: redaction.content,
     type,
+    ...(language ? { language } : {}),
     scope,
     project: input.project,
     security: {

@@ -17,6 +17,7 @@
     "limit": 3,
     "scope": "project",
     "backend": "resilient",
+    "isolation": "strict",
     "autoRecall": true,
     "autoRemember": false,
     "strictRecall": false,
@@ -33,7 +34,15 @@
     "redactSensitiveContent": true,
     "ignoreGeneratedFiles": true,
     "allowSensitivePaths": [],
-    "extraSensitivePathFragments": []
+    "extraSensitivePathFragments": [],
+    "learning": {
+      "enabled": true,
+      "sources": ["local", "ci"],
+      "enforcement": "warn-block-critical",
+      "minConfidence": 0.72,
+      "strictIsolation": true,
+      "defaultFocus": "auto"
+    }
   },
   "scan": {
     "ignoreDirs": [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs"]
@@ -53,6 +62,8 @@
   },
   "safety": {
     "requirePlanForWrite": false,
+    "requireExecuteApprovalForWrite": false,
+    "requireStructuredPostTaskForWrite": false,
     "allowedScopePaths": [],
     "maxTokenBudget": 700,
     "requireExplicitFocusForWorkspaceScan": true,

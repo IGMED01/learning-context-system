@@ -6,6 +6,7 @@ import { purgeExpiredTempMemories } from "./memory-hygiene.js";
 import { createChunkRepository } from "../storage/chunk-repository.js";
 import { buildCloseSummaryContent } from "./memory-utils.js";
 import { atomicWrite } from "../integrations/fs-safe.js";
+import { rankHybridMemoryEntries } from "./memory-search-ranking.js";
 
 /**
  * @typedef {import("../types/core-contracts.d.ts").MemoryEntry} MemoryEntry
@@ -106,6 +107,28 @@ function tokenize(text) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {string}
+ */
+function normalizeLanguageToken(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+/**
+ * @param {MemoryEntry | Record<string, unknown>} entry
+ */
+function isSecurityEntry(entry) {
+  const type = normalizeLanguageToken(String(entry.type ?? ""));
+  const riskTaxonomy = normalizeLanguageToken(String(entry.riskTaxonomy ?? ""));
+  const severity = normalizeLanguageToken(String(entry.severity ?? ""));
+  return (
+    type.includes("security") ||
+    Boolean(riskTaxonomy) ||
+    ["critical", "high", "medium", "low"].includes(severity)
+  );
+}
+
+/**
  * Compute term frequency: count of each term / total terms.
  * @param {string[]} tokens
  * @returns {Map<string, number>}
@@ -195,13 +218,24 @@ function entryToSearchText(entry) {
  * Search entries using TF-IDF ranking.
  * @param {MemoryEntry[]} entries
  * @param {string} query
- * @param {{ project?: string, scope?: string, type?: string, limit?: number }} options
+ * @param {{
+ *   project?: string,
+ *   scope?: string,
+ *   type?: string,
+ *   language?: string,
+ *   securityOnly?: boolean,
+ *   isolationMode?: "strict" | "relaxed",
+ *   limit?: number
+ * }} options
  * @returns {ScoredEntry[]}
  */
 function searchWithTFIDF(entries, query, options) {
+  const targetLanguage = normalizeLanguageToken(options.language);
+  const isolationMode = options.isolationMode ?? "strict";
+
   // Pre-filter by metadata
   const candidates = entries.filter((entry) => {
-    if (options.project && entry.project && entry.project !== options.project) {
+    if (options.project && entry.project !== options.project) {
       return false;
     }
 
@@ -211,6 +245,21 @@ function searchWithTFIDF(entries, query, options) {
 
     if (options.type && entry.type !== options.type) {
       return false;
+    }
+
+    if (options.securityOnly === true && !isSecurityEntry(entry)) {
+      return false;
+    }
+
+    if (targetLanguage) {
+      const entryLanguage = normalizeLanguageToken(entry.language);
+      if (isolationMode === "strict") {
+        if (entryLanguage !== targetLanguage) {
+          return false;
+        }
+      } else if (entryLanguage && entryLanguage !== targetLanguage) {
+        return false;
+      }
     }
 
     return true;
@@ -264,6 +313,37 @@ function searchWithTFIDF(entries, query, options) {
   });
 
   return scored.slice(0, limit);
+}
+
+/**
+ * @param {MemoryEntry[]} entries
+ * @param {MemorySearchOptions} options
+ */
+function buildSecuritySearchSummary(entries, options) {
+  const riskIds = [
+    ...new Set(
+      entries
+        .map((entry) => {
+          const candidate = entry.riskTaxonomy;
+          return typeof candidate === "string" ? candidate.trim() : "";
+        })
+        .filter(Boolean)
+    )
+  ];
+  const confidenceValues = /** @type {number[]} */ (
+    entries
+      .map((entry) => entry.confidence)
+      .filter((value) => typeof value === "number" && Number.isFinite(value))
+  );
+  const confidence = confidenceValues.length
+    ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+    : 0;
+
+  return {
+    riskIds,
+    confidence: Number(confidence.toFixed(3)),
+    isolationApplied: options.isolationMode !== "relaxed"
+  };
 }
 
 // ── Persistence Layer ────────────────────────────────────────────────
@@ -379,6 +459,10 @@ async function readEntries(filePath) {
           title: typeof candidate.title === "string" ? candidate.title : "Untitled memory",
           content: typeof candidate.content === "string" ? candidate.content : "",
           type: typeof candidate.type === "string" ? candidate.type : "learning",
+          language:
+            typeof candidate.language === "string" && candidate.language.trim()
+              ? candidate.language.trim()
+              : undefined,
           project: typeof candidate.project === "string" ? candidate.project : "",
           scope: typeof candidate.scope === "string" ? candidate.scope : "project",
           topic: typeof candidate.topic === "string" ? candidate.topic : "",
@@ -441,6 +525,10 @@ function extractHygieneMetadata(record) {
     metadata.reviewStatus = record.reviewStatus.trim();
   }
 
+  if (typeof record.language === "string" && record.language.trim()) {
+    metadata.language = record.language.trim().toLowerCase();
+  }
+
   if (typeof record.protected === "boolean") {
     metadata.protected = record.protected;
   }
@@ -465,6 +553,38 @@ function extractHygieneMetadata(record) {
     record.reviewReasons.every((item) => typeof item === "string")
   ) {
     metadata.reviewReasons = [...record.reviewReasons];
+  }
+
+  if (typeof record.severity === "string" && record.severity.trim()) {
+    metadata.severity = record.severity.trim().toLowerCase();
+  }
+
+  if (typeof record.confidence === "number" && Number.isFinite(record.confidence)) {
+    metadata.confidence = Math.max(0, Math.min(1, record.confidence));
+  }
+
+  if (typeof record.riskTaxonomy === "string" && record.riskTaxonomy.trim()) {
+    metadata.riskTaxonomy = record.riskTaxonomy.trim();
+  }
+
+  if (typeof record.rule === "string" && record.rule.trim()) {
+    metadata.rule = record.rule.trim();
+  }
+
+  if (typeof record.antiPattern === "string" && record.antiPattern.trim()) {
+    metadata.antiPattern = record.antiPattern.trim();
+  }
+
+  if (typeof record.fixPattern === "string" && record.fixPattern.trim()) {
+    metadata.fixPattern = record.fixPattern.trim();
+  }
+
+  if (typeof record.practicePrompt === "string" && record.practicePrompt.trim()) {
+    metadata.practicePrompt = record.practicePrompt.trim();
+  }
+
+  if (typeof record.securityCritical === "boolean") {
+    metadata.securityCritical = record.securityCritical;
   }
 
   return metadata;
@@ -508,6 +628,10 @@ function mapChunksToEntries(chunks) {
           typeof metadata.type === "string" && metadata.type
             ? metadata.type
             : "learning",
+        language:
+          typeof metadata.language === "string" && metadata.language.trim()
+            ? metadata.language.trim()
+            : undefined,
         project:
           typeof metadata.project === "string" ? metadata.project : "",
         scope:
@@ -644,7 +768,9 @@ function toSearchStdout(entries) {
   entries.forEach((entry, index) => {
     lines.push(`[${index + 1}] #${entry.id} (${entry.type}) - ${entry.title}`);
     lines.push(`    ${truncate(entry.content, 220)}`);
-    lines.push(`    ${entry.createdAt} | project: ${entry.project || "local"} | scope: ${entry.scope}`);
+    lines.push(
+      `    ${entry.createdAt} | project: ${entry.project || "local"} | scope: ${entry.scope}${entry.language ? ` | language: ${entry.language}` : ""}`
+    );
     lines.push("");
   });
 
@@ -667,7 +793,7 @@ function toContextStdout(entries, project) {
     lines.push(
       `${index + 1}. [${entry.type}] ${entry.title} (${entry.createdAt})${
         entry.project ? ` | project: ${entry.project}` : ""
-      }`
+      }${entry.language ? ` | language: ${entry.language}` : ""}`
     );
   });
 
@@ -737,18 +863,31 @@ export function createLocalMemoryStore(options = {}) {
       : await readAllTempEntries(baseDir);
 
     const allEntries = [...entries, ...tempEntries];
-
-    const results = searchWithTFIDF(allEntries, query, {
+    const requestedLimit = Math.max(1, Math.trunc(searchOptions.limit ?? 5));
+    const tfidfCandidates = searchWithTFIDF(allEntries, query, {
       project: searchOptions.project,
       scope: searchOptions.scope,
       type: searchOptions.type,
-      limit: searchOptions.limit
+      language: searchOptions.language,
+      isolationMode: searchOptions.isolationMode,
+      limit: Math.max(requestedLimit, requestedLimit * 4)
     });
+    const reranked = rankHybridMemoryEntries(
+      tfidfCandidates.map((item) => item.entry),
+      {
+        query,
+        options: {
+          ...searchOptions,
+          limit: requestedLimit
+        }
+      }
+    );
 
     return {
-      entries: results.map((r) => r.entry),
-      stdout: toSearchStdout(results.map((r) => r.entry)),
-      provider: "local"
+      entries: reranked,
+      stdout: toSearchStdout(reranked),
+      provider: "local",
+      security: buildSecuritySearchSummary(reranked, searchOptions)
     };
   }
 
@@ -793,6 +932,10 @@ export function createLocalMemoryStore(options = {}) {
       title: input.title,
       content: input.content,
       type: input.type ?? "learning",
+      language:
+        typeof input.language === "string" && input.language.trim()
+          ? input.language.trim().toLowerCase()
+          : undefined,
       project: input.project ?? "",
       scope: input.scope ?? "project",
       topic: input.topic ?? "",
@@ -919,7 +1062,7 @@ export function createLocalMemoryStore(options = {}) {
       : await readAllEntries(baseDir);
 
     const filtered = entries
-      .filter((entry) => !project || !entry.project || entry.project === project)
+      .filter((entry) => !project || entry.project === project)
       .slice(0, 5);
 
     return {
@@ -970,6 +1113,10 @@ export function createLocalMemoryStore(options = {}) {
       title: input.title,
       content: input.content,
       type: input.type ?? "learning",
+      language:
+        typeof input.language === "string" && input.language.trim()
+          ? input.language.trim().toLowerCase()
+          : "",
       project: input.project ?? "",
       scope: input.scope ?? "project",
       topic: input.topic ?? "",
@@ -998,6 +1145,7 @@ export function createLocalMemoryStore(options = {}) {
       title,
       content,
       type: input.type ?? "learning",
+      language: input.language,
       project: input.project,
       scope: input.scope ?? "project",
       ...extractHygieneMetadata(asRecord(input))

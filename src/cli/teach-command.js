@@ -2,6 +2,8 @@
 
 import { buildLearningPacket } from "../learning/mentor-loop.js";
 import { createLocalMemoryStore } from "../memory/local-memory-store.js";
+import { createObsidianMemoryProvider } from "../memory/obsidian-memory-provider.js";
+import { createParallelMemoryClient } from "../memory/parallel-memory-client.js";
 import { createResilientMemoryClient } from "../memory/resilient-memory-client.js";
 import {
   buildAcceptedMemoryMetadata,
@@ -13,7 +15,12 @@ import {
   resolveAutoTeachRecall
 } from "../memory/memory-auto-orchestrator.js";
 import { createAxiomInjector } from "../memory/axiom-injector.js";
-import { legacySearchStdoutToEntries } from "../memory/memory-utils.js";
+import { legacySearchStdoutToEntries, memoryEntriesToChunks } from "../memory/memory-utils.js";
+import {
+  buildSecuritySideQueries,
+  buildSecurityTeachingBlock,
+  DEFAULT_SECURITY_ENFORCEMENT
+} from "../security/security-learning-loop.js";
 import { formatLearningPacketAsText } from "./formatters.js";
 import {
   assertNumberRules,
@@ -58,6 +65,7 @@ import {
  *     rememberRedactionCount: number,
  *     rememberSensitivePathCount: number
  *   },
+ *   securityTeaching?: import("../types/core-contracts.d.ts").SecurityTeachingBlock,
  *   debug?: {
  *     selectedOrigins: Record<string, number>,
  *     suppressedOrigins: Record<string, number>,
@@ -85,8 +93,8 @@ import {
 
 /**
  * @typedef {{
- *   memoryClient?: ReturnType<typeof createResilientMemoryClient>,
- *   engramClient?: ReturnType<typeof createResilientMemoryClient>,
+ *   memoryClient?: import("../types/core-contracts.d.ts").MemoryProvider,
+ *   engramClient?: import("../types/core-contracts.d.ts").MemoryProvider,
  *   axiomInjector?: { retrieve?: (context?: Record<string, unknown>) => Promise<Array<Record<string, unknown>>> }
  * }} AppDependencies
  */
@@ -104,6 +112,58 @@ function getInjectedMemoryClient(dependencies = {}) {
   }
 
   return null;
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"resilient" | "parallel" | "local-only"}
+ */
+function parseMemoryBackendMode(value) {
+  if (!value || value === "true") {
+    return "resilient";
+  }
+
+  if (value === "engram-only") {
+    return "resilient";
+  }
+
+  if (value === "resilient" || value === "parallel" || value === "local-only") {
+    return value;
+  }
+
+  throw new Error("Option --memory-backend must be one of: resilient, parallel, local-only.");
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"strict" | "relaxed"}
+ */
+function parseMemoryIsolationMode(value) {
+  if (!value || value === "true") {
+    return "strict";
+  }
+
+  if (value === "strict" || value === "relaxed") {
+    return value;
+  }
+
+  throw new Error("Option --memory-isolation must be one of: strict, relaxed.");
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"auto" | "on" | "off"}
+ */
+function parseSecurityFocusMode(value) {
+  if (!value || value === "true") {
+    return "auto";
+  }
+
+  if (value === "auto" || value === "on" || value === "off") {
+    return value;
+  }
+
+  throw new Error("Option --security-focus must be one of: auto, on, off.");
 }
 
 /**
@@ -135,7 +195,7 @@ function getInjectedMemoryClient(dependencies = {}) {
 
 /**
  * @param {AppDependencies} [dependencies]
- * @returns {ReturnType<typeof createResilientMemoryClient>}
+ * @returns {import("../types/core-contracts.d.ts").MemoryProvider}
  */
 function getMemoryClient(options, dependencies = {}) {
   const injectedMemoryClient = getInjectedMemoryClient(dependencies);
@@ -143,10 +203,31 @@ function getMemoryClient(options, dependencies = {}) {
     return injectedMemoryClient;
   }
 
+  const backendMode = parseMemoryBackendMode(options["memory-backend"]);
+  const isolationMode = parseMemoryIsolationMode(options["memory-isolation"]);
+
   const local = createLocalMemoryStore({
     filePath: options["memory-fallback-file"],
     baseDir: options["memory-base-dir"]
   });
+
+  if (backendMode === "local-only") {
+    return local;
+  }
+
+  if (backendMode === "parallel") {
+    const obsidian = createObsidianMemoryProvider({
+      cwd: process.cwd(),
+      vaultDir: options["obsidian-vault"],
+      pollIntervalMs: numberOption(options, "obsidian-poll-interval-ms", 30_000)
+    });
+
+    return createParallelMemoryClient({
+      primary: /** @type {any} */ (local),
+      secondary: /** @type {any} */ (obsidian),
+      isolation: isolationMode
+    });
+  }
 
   return createResilientMemoryClient({
     primary: local,
@@ -155,9 +236,18 @@ function getMemoryClient(options, dependencies = {}) {
 }
 
 /**
- * @param {ReturnType<typeof createResilientMemoryClient>} memoryClient
+ * @param {import("../types/core-contracts.d.ts").MemoryProvider} memoryClient
  * @param {string} query
- * @param {{ project?: string, scope?: string, type?: string, limit?: number }} [options]
+ * @param {{
+ *   project?: string,
+ *   scope?: string,
+ *   type?: string,
+ *   language?: string,
+ *   securityOnly?: boolean,
+ *   isolationMode?: "strict" | "relaxed",
+ *   changedFiles?: string[],
+ *   limit?: number
+ * }} [options]
  */
 async function searchMemoryClient(memoryClient, query, options = {}) {
   if (typeof memoryClient.search === "function") {
@@ -191,7 +281,7 @@ async function searchMemoryClient(memoryClient, query, options = {}) {
 }
 
 /**
- * @param {ReturnType<typeof createResilientMemoryClient>} memoryClient
+ * @param {import("../types/core-contracts.d.ts").MemoryProvider} memoryClient
  * @param {import("../types/core-contracts.d.ts").MemorySaveInput} input
  */
 async function saveMemoryClient(memoryClient, input) {
@@ -316,6 +406,45 @@ function buildAxiomFocusTerms(changedFiles, task, objective, focus) {
 }
 
 /**
+ * @param {string[]} changedFiles
+ * @returns {string}
+ */
+function inferMemoryLanguage(changedFiles) {
+  /** @type {Record<string, string>} */
+  const extensionLanguageMap = {
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".go": "go",
+    ".py": "python",
+    ".java": "java",
+    ".rb": "ruby",
+    ".rs": "rust",
+    ".php": "php",
+    ".cs": "csharp"
+  };
+
+  /** @type {Map<string, number>} */
+  const scores = new Map();
+
+  for (const file of changedFiles) {
+    const normalized = String(file ?? "").trim().toLowerCase();
+    const extension = normalized.match(/\.[a-z0-9]+$/u)?.[0] ?? "";
+    const language = extensionLanguageMap[extension];
+    if (!language) {
+      continue;
+    }
+    scores.set(language, (scores.get(language) ?? 0) + 1);
+  }
+
+  const ranked = [...scores.entries()].sort((left, right) => right[1] - left[1]);
+  return ranked[0]?.[0] ?? "";
+}
+
+/**
  * @param {string} message
  */
 function classifyRememberStatus(message) {
@@ -396,6 +525,18 @@ function buildTeachObservability(packet, durationMs, degraded) {
       coveredKinds,
       injectedKinds: 0,
       skippedReasons
+    },
+    security: {
+      recallAttempted:
+        packet.memoryRecall.enabled === true &&
+        packet.memoryRecall.queriesTried.some((query) => /security|risk|guard|auth|token|secret/iu.test(query)),
+      recallHit:
+        packet.memoryRecall.recoveredChunks > 0 &&
+        packet.memoryRecall.matchedQueries.some((query) => /security|risk|guard|auth|token|secret/iu.test(query)),
+      criticalBlocked: packet.securityTeaching?.blocked === true,
+      falsePositiveBlock: false,
+      memorySaved: packet.autoMemory?.rememberSaved ? 1 : 0,
+      quarantined: packet.autoMemory?.rememberStatus === "quarantined" ? 1 : 0
     }
   };
 }
@@ -419,8 +560,35 @@ export async function runTeachCommand(input) {
   const axiomMinScore = parseScoreEnv(process.env.LCS_TEACH_AXIOM_MIN_MATCH_SCORE, 0.5);
   const axiomMinMatches = parseIntegerEnv(process.env.LCS_TEACH_AXIOM_MIN_MATCHES, 1);
   const memoryClient = getMemoryClient(options, dependencies);
+  const securityLearningConfig =
+    loadedConfig.config.security &&
+    typeof loadedConfig.config.security === "object" &&
+    loadedConfig.config.security.learning &&
+    typeof loadedConfig.config.security.learning === "object"
+      ? /** @type {Record<string, unknown>} */ (loadedConfig.config.security.learning)
+      : {};
   const memoryScope = options["memory-scope"] ?? "project";
   const memoryType = options["memory-type"];
+  const memoryIsolation = parseMemoryIsolationMode(
+    options["memory-isolation"] ?? loadedConfig.config.memory.isolation
+  );
+  const explicitMemoryLanguage =
+    typeof options["memory-language"] === "string" ? options["memory-language"].trim().toLowerCase() : "";
+  const inferredMemoryLanguage = inferMemoryLanguage(changedFiles);
+  const memoryLanguage = explicitMemoryLanguage || inferredMemoryLanguage;
+  const securityFocus = parseSecurityFocusMode(
+    options["security-focus"] ??
+      (typeof securityLearningConfig.defaultFocus === "string"
+        ? String(securityLearningConfig.defaultFocus)
+        : "auto")
+  );
+  const securityLearningEnabled = securityLearningConfig.enabled !== false;
+  const securityEnforcement =
+    typeof securityLearningConfig.enforcement === "string"
+      ? String(securityLearningConfig.enforcement)
+      : DEFAULT_SECURITY_ENFORCEMENT;
+  const securityStrictIsolation =
+    securityLearningConfig.strictIsolation !== false && memoryIsolation !== "relaxed";
   const noRecall = booleanOption(options, "no-recall", false);
   const autoRecall = booleanOption(options, "auto-recall", loadedConfig.config.memory.autoRecall);
   const strictRecall = booleanOption(
@@ -437,7 +605,9 @@ export async function runTeachCommand(input) {
     min: 1,
     integer: true
   });
-  const teachChunks = await resolveAutoTeachRecall({
+  const alreadySurfacedMemoryIds = listOption(options, "already-surfaced-memory-ids");
+  const usedTools = listOption(options, "used-tools");
+  let teachChunks = await resolveAutoTeachRecall({
     task,
     objective,
     focus,
@@ -449,10 +619,136 @@ export async function runTeachCommand(input) {
     limit: memoryLimit,
     scope: memoryScope,
     type: memoryType,
+    language: memoryLanguage,
+    isolationMode: memoryIsolation,
     strictRecall,
+    alreadySurfacedMemoryIds,
+    usedTools,
     baseChunks: payload.chunks,
-    search: (query, searchOptions) => searchMemoryClient(memoryClient, query, searchOptions)
+    search: (query, searchOptions) =>
+      searchMemoryClient(memoryClient, query, {
+        ...searchOptions,
+        isolationMode: memoryIsolation,
+        changedFiles,
+        language: searchOptions?.language ?? memoryLanguage
+      })
   });
+  /** @type {import("../types/core-contracts.d.ts").MemoryEntry[]} */
+  let recoveredSecurityEntries = [];
+
+  if (
+    securityLearningEnabled &&
+    securityFocus !== "off" &&
+    teachChunks.memoryRecall.enabled === true
+  ) {
+    const securitySideQueries = buildSecuritySideQueries({
+      task,
+      objective,
+      focus,
+      changedFiles,
+      recentRiskTaxonomyIds: []
+    });
+
+    if (securitySideQueries.length) {
+      /** @type {Map<string, import("../types/core-contracts.d.ts").MemoryEntry>} */
+      const sideEntriesById = new Map();
+      /** @type {string[]} */
+      const securityQueriesTried = [];
+      /** @type {string[]} */
+      const securityQueriesMatched = [];
+      const maxSecurityQueries = Math.min(3, securitySideQueries.length);
+
+      for (const securityQuery of securitySideQueries.slice(0, maxSecurityQueries)) {
+        securityQueriesTried.push(securityQuery);
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const sideResult = await searchMemoryClient(memoryClient, securityQuery, {
+            project: options.project,
+            scope: memoryScope,
+            type: undefined,
+            language: memoryLanguage,
+            securityOnly: true,
+            isolationMode: memoryIsolation,
+            changedFiles,
+            limit: Math.max(2, memoryLimit)
+          });
+          const entries = Array.isArray(sideResult.entries) ? sideResult.entries : [];
+          const securityEntries = entries.filter((entry) => {
+            const type = String(entry.type ?? "").toLowerCase();
+            const riskTaxonomy = /** @type {Record<string, unknown>} */ (entry).riskTaxonomy;
+            return type.includes("security") || typeof riskTaxonomy === "string";
+          });
+
+          if (securityEntries.length) {
+            securityQueriesMatched.push(securityQuery);
+          }
+
+          for (const entry of securityEntries) {
+            const id = String(entry.id ?? "").trim() || `${securityQuery}:${entry.title}`;
+            if (!sideEntriesById.has(id)) {
+              sideEntriesById.set(id, entry);
+            }
+          }
+        } catch {
+          // ignore security side-query failures to keep teach stable
+        }
+      }
+
+      recoveredSecurityEntries = [...sideEntriesById.values()].slice(0, Math.max(memoryLimit, 3));
+
+      if (securityQueriesTried.length) {
+        const mergedQueries = [
+          ...(Array.isArray(teachChunks.memoryRecall.queriesTried)
+            ? teachChunks.memoryRecall.queriesTried
+            : []),
+          ...securityQueriesTried
+        ];
+        teachChunks.memoryRecall.queriesTried = [...new Set(mergedQueries)];
+      }
+
+      if (securityQueriesMatched.length) {
+        const sideChunks = memoryEntriesToChunks(recoveredSecurityEntries, {
+          query: securityQueriesMatched[0],
+          project: options.project
+        });
+        const knownIds = new Set(teachChunks.chunks.map((chunk) => chunk.id));
+        const uniqueSideChunks = sideChunks.filter((chunk) => !knownIds.has(chunk.id));
+
+        if (uniqueSideChunks.length) {
+          teachChunks = {
+            ...teachChunks,
+            chunks: [...teachChunks.chunks, ...uniqueSideChunks],
+            memoryRecall: {
+              ...teachChunks.memoryRecall,
+              status: "recalled",
+              reason:
+                teachChunks.memoryRecall.reason ||
+                (teachChunks.memoryRecall.recoveredChunks > 0 ? "" : "security-side-query"),
+              matchedQueries: [
+                ...new Set([
+                  ...(Array.isArray(teachChunks.memoryRecall.matchedQueries)
+                    ? teachChunks.memoryRecall.matchedQueries
+                    : []),
+                  ...securityQueriesMatched
+                ])
+              ],
+              recoveredChunks: teachChunks.memoryRecall.recoveredChunks + uniqueSideChunks.length,
+              recoveredMemoryIds: [
+                ...new Set([
+                  ...(Array.isArray(teachChunks.memoryRecall.recoveredMemoryIds)
+                    ? teachChunks.memoryRecall.recoveredMemoryIds
+                    : []),
+                  ...uniqueSideChunks.map((chunk) => chunk.id)
+                ])
+              ],
+              sideQueryUsed: true
+            }
+          };
+        }
+      }
+    }
+  }
+
   const packet = buildLearningPacket({
     task,
     objective,
@@ -556,6 +852,22 @@ export async function runTeachCommand(input) {
         : {})
     }
   });
+  packetWithMemory.securityTeaching = buildSecurityTeachingBlock({
+    mode: securityFocus,
+    task,
+    objective,
+    changedFiles,
+    selectedContext: packetWithMemory.selectedContext,
+    recoveredSecurityEntries,
+    enforcement: securityEnforcement
+  });
+  if (packetWithMemory.securityTeaching?.enabled) {
+    const riskLabel = packetWithMemory.securityTeaching.risk?.label || "security best practices";
+    packetWithMemory.teachingChecklist = [
+      ...packetWithMemory.teachingChecklist,
+      `Security guardrail: apply "${riskLabel}" with explicit tests and safe defaults.`
+    ];
+  }
   packetWithMemory.autoMemory = {
     autoRecallEnabled: teachChunks.autoRecallEnabled === true,
     autoRememberEnabled: autoRemember,
@@ -568,7 +880,7 @@ export async function runTeachCommand(input) {
     rememberSensitivePathCount: 0
   };
 
-  if (autoRemember) {
+  if (autoRemember && packetWithMemory.securityTeaching?.blocked !== true) {
     packetWithMemory.autoMemory.rememberAttempted = true;
 
     try {
@@ -594,6 +906,7 @@ export async function runTeachCommand(input) {
         },
         memoryType,
         memoryScope,
+        memoryLanguage,
         security: loadedConfig.config.security
       });
       packetWithMemory.autoMemory.rememberRedactionCount = rememberInput.security.redactionCount;
@@ -616,6 +929,7 @@ export async function runTeachCommand(input) {
           title: rememberInput.title,
           content: rememberInput.content,
           type: rememberInput.type,
+          language: rememberInput.language,
           scope: rememberInput.scope,
           project: rememberInput.project,
           sourceKind: "auto-remember",
@@ -629,6 +943,7 @@ export async function runTeachCommand(input) {
           title: rememberInput.title,
           content: rememberInput.content,
           type: rememberInput.type,
+          language: rememberInput.language,
           scope: rememberInput.scope,
           project: rememberInput.project,
           ...buildAcceptedMemoryMetadata(hygiene, { sourceKind: "auto-remember" })
@@ -645,6 +960,11 @@ export async function runTeachCommand(input) {
       packetWithMemory.autoMemory.rememberStatus = classifyRememberStatus(rememberError);
       packetWithMemory.autoMemory.rememberError = rememberError;
     }
+  } else if (autoRemember && packetWithMemory.securityTeaching?.blocked === true) {
+    packetWithMemory.autoMemory.rememberAttempted = false;
+    packetWithMemory.autoMemory.rememberSaved = false;
+    packetWithMemory.autoMemory.rememberStatus = "failed";
+    packetWithMemory.autoMemory.rememberError = "blocked by critical security guardrail";
   }
 
   if (debugEnabled) {
@@ -668,6 +988,15 @@ export async function runTeachCommand(input) {
   ) {
     warnings.push(
       "Auto recall skipped: low-signal task. Add --changed-files or --recall-query to force memory recall."
+    );
+  }
+
+  if (
+    packetWithMemory.memoryRecall.status === "empty" &&
+    packetWithMemory.memoryRecall.reason === "already-surfaced"
+  ) {
+    warnings.push(
+      "Auto recall skipped repeated memories: all candidate memories were already surfaced in this flow."
     );
   }
 
@@ -703,16 +1032,24 @@ export async function runTeachCommand(input) {
     );
   }
 
+  if (packetWithMemory.securityTeaching?.blocked) {
+    warnings.push(
+      `Critical security block: ${packetWithMemory.securityTeaching.reasons?.join(", ") || "policy enforcement"}`
+    );
+  }
+
+  const blockedBySecurity = packetWithMemory.securityTeaching?.blocked === true;
   const degraded =
     packetWithMemory.memoryRecall.degraded === true ||
     Boolean(
       packetWithMemory.autoMemory?.rememberError &&
         packetWithMemory.autoMemory.rememberSaved === false
-    );
+    ) ||
+    blockedBySecurity;
   const observability = buildTeachObservability(packetWithMemory, Date.now() - startedAt, degraded);
 
   return {
-    exitCode: 0,
+    exitCode: blockedBySecurity ? 1 : 0,
     stdout:
       format === "text"
         ? formatLearningPacketAsText(packetWithMemory, { debug: debugEnabled })
@@ -735,7 +1072,8 @@ export async function runTeachCommand(input) {
       degraded,
       selection: observability.selection,
       recall: observability.recall,
-      sdd: observability.sdd
+      sdd: observability.sdd,
+      security: observability.security
     }
   };
 }

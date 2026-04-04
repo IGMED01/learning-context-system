@@ -22,7 +22,8 @@ export interface ProjectMemoryConfig {
   limit: number;
   scope: string;
   type: string;
-  backend: "resilient" | "local-only";
+  backend: "resilient" | "local-only" | "parallel";
+  isolation: "strict" | "relaxed";
   strictRecall: boolean;
   degradedRecall: boolean;
   autoRecall: boolean;
@@ -42,6 +43,16 @@ export interface ProjectSecurityConfig {
   ignoreGeneratedFiles: boolean;
   allowSensitivePaths: string[];
   extraSensitivePathFragments: string[];
+  learning: ProjectSecurityLearningConfig;
+}
+
+export interface ProjectSecurityLearningConfig {
+  enabled: boolean;
+  sources: string[];
+  enforcement: "warn-block-critical" | "warn-only" | "off";
+  minConfidence: number;
+  strictIsolation: boolean;
+  defaultFocus: "auto" | "on" | "off";
 }
 
 export interface ProjectScanConfig {
@@ -76,6 +87,8 @@ export interface ProjectSyncConfig {
 
 export interface ProjectSafetyConfig {
   requirePlanForWrite: boolean;
+  requireExecuteApprovalForWrite: boolean;
+  requireStructuredPostTaskForWrite: boolean;
   allowedScopePaths: string[];
   maxTokenBudget: number;
   requireExplicitFocusForWorkspaceScan: boolean;
@@ -208,6 +221,7 @@ export function defaultProjectConfig(): ProjectConfig {
       scope: "project",
       type: "",
       backend: "resilient",
+      isolation: "strict",
       strictRecall: false,
       degradedRecall: true,
       autoRecall: true,
@@ -224,7 +238,15 @@ export function defaultProjectConfig(): ProjectConfig {
       redactSensitiveContent: true,
       ignoreGeneratedFiles: true,
       allowSensitivePaths: [],
-      extraSensitivePathFragments: []
+      extraSensitivePathFragments: [],
+      learning: {
+        enabled: true,
+        sources: ["local", "ci"],
+        enforcement: "warn-block-critical",
+        minConfidence: 0.72,
+        strictIsolation: true,
+        defaultFocus: "auto"
+      }
     },
     scan: {
       ignoreDirs: [".tmp", ".cache", "tmp", ".turbo", ".next", "out", ".lcs", ".claude", ".atl", ".engram"],
@@ -250,6 +272,8 @@ export function defaultProjectConfig(): ProjectConfig {
     },
     safety: {
       requirePlanForWrite: false,
+      requireExecuteApprovalForWrite: false,
+      requireStructuredPostTaskForWrite: false,
       allowedScopePaths: [],
       maxTokenBudget: 700,
       requireExplicitFocusForWorkspaceScan: true,
@@ -290,6 +314,18 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
     assertObject(config.security, "Project config.security");
   }
 
+  if (
+    config.security &&
+    typeof config.security === "object" &&
+    !Array.isArray(config.security) &&
+    (config.security as Record<string, unknown>).learning !== undefined
+  ) {
+    assertObject(
+      (config.security as Record<string, unknown>).learning,
+      "Project config.security.learning"
+    );
+  }
+
   if (config.scan !== undefined) {
     assertObject(config.scan, "Project config.scan");
   }
@@ -315,6 +351,10 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
   const memory = config.memory;
   const engram = config.engram;
   const security = config.security;
+  const securityLearning: Partial<ProjectSecurityLearningConfig> | undefined =
+    security && typeof security.learning === "object" && security.learning && !Array.isArray(security.learning)
+      ? (security.learning as Partial<ProjectSecurityLearningConfig>)
+      : undefined;
   const scan = config.scan;
   const sync = config.sync;
   const safety = config.safety;
@@ -332,13 +372,50 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
     memoryBackend !== undefined &&
     memoryBackend !== "resilient" &&
     memoryBackend !== "engram-only" &&
-    memoryBackend !== "local-only"
+    memoryBackend !== "local-only" &&
+    memoryBackend !== "parallel"
   ) {
-    fail("Project config.memory.backend must be 'resilient' or 'local-only' (legacy alias: 'engram-only').");
+    fail("Project config.memory.backend must be 'resilient', 'parallel', or 'local-only' (legacy alias: 'engram-only').");
   }
 
   const normalizedMemoryBackend = memoryBackend === "engram-only" ? "resilient" : memoryBackend;
+  const memoryIsolation = optionalString(memory?.isolation, "Project config.memory.isolation");
+  if (
+    memoryIsolation !== undefined &&
+    memoryIsolation !== "strict" &&
+    memoryIsolation !== "relaxed"
+  ) {
+    fail("Project config.memory.isolation must be 'strict' or 'relaxed'.");
+  }
   const knowledgeBackend = optionalString(sync?.knowledgeBackend, "Project config.sync.knowledgeBackend");
+
+  const securityEnforcement = optionalString(
+    securityLearning?.enforcement,
+    "Project config.security.learning.enforcement"
+  );
+  if (
+    securityEnforcement !== undefined &&
+    securityEnforcement !== "warn-block-critical" &&
+    securityEnforcement !== "warn-only" &&
+    securityEnforcement !== "off"
+  ) {
+    fail(
+      "Project config.security.learning.enforcement must be 'warn-block-critical', 'warn-only', or 'off'."
+    );
+  }
+
+  const securityDefaultFocus = optionalString(
+    securityLearning?.defaultFocus,
+    "Project config.security.learning.defaultFocus"
+  );
+  if (
+    securityDefaultFocus !== undefined &&
+    securityDefaultFocus !== "auto" &&
+    securityDefaultFocus !== "on" &&
+    securityDefaultFocus !== "off"
+  ) {
+    fail("Project config.security.learning.defaultFocus must be 'auto', 'on', or 'off'.");
+  }
 
   if (
     knowledgeBackend !== undefined &&
@@ -405,6 +482,7 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
       scope: optionalString(memory?.scope, "Project config.memory.scope") ?? defaults.memory.scope,
       type: optionalString(memory?.type, "Project config.memory.type") ?? defaults.memory.type,
       backend: normalizedMemoryBackend ?? defaults.memory.backend,
+      isolation: memoryIsolation ?? defaults.memory.isolation,
       strictRecall:
         optionalBoolean(memory?.strictRecall, "Project config.memory.strictRecall") ??
         defaults.memory.strictRecall,
@@ -452,7 +530,32 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
         optionalStringArray(
           security?.extraSensitivePathFragments,
           "Project config.security.extraSensitivePathFragments"
-        ) ?? defaults.security.extraSensitivePathFragments
+        ) ?? defaults.security.extraSensitivePathFragments,
+      learning: {
+        enabled:
+          optionalBoolean(
+            securityLearning?.enabled,
+            "Project config.security.learning.enabled"
+          ) ?? defaults.security.learning.enabled,
+        sources:
+          optionalStringArray(
+            securityLearning?.sources,
+            "Project config.security.learning.sources"
+          ) ?? defaults.security.learning.sources,
+        enforcement: securityEnforcement ?? defaults.security.learning.enforcement,
+        minConfidence:
+          optionalNumber(
+            securityLearning?.minConfidence,
+            "Project config.security.learning.minConfidence",
+            { min: 0, max: 1 }
+          ) ?? defaults.security.learning.minConfidence,
+        strictIsolation:
+          optionalBoolean(
+            securityLearning?.strictIsolation,
+            "Project config.security.learning.strictIsolation"
+          ) ?? defaults.security.learning.strictIsolation,
+        defaultFocus: securityDefaultFocus ?? defaults.security.learning.defaultFocus
+      }
     },
     scan: {
       ignoreDirs:
@@ -538,6 +641,16 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
       requirePlanForWrite:
         optionalBoolean(safety?.requirePlanForWrite, "Project config.safety.requirePlanForWrite") ??
         defaults.safety.requirePlanForWrite,
+      requireExecuteApprovalForWrite:
+        optionalBoolean(
+          safety?.requireExecuteApprovalForWrite,
+          "Project config.safety.requireExecuteApprovalForWrite"
+        ) ?? defaults.safety.requireExecuteApprovalForWrite,
+      requireStructuredPostTaskForWrite:
+        optionalBoolean(
+          safety?.requireStructuredPostTaskForWrite,
+          "Project config.safety.requireStructuredPostTaskForWrite"
+        ) ?? defaults.safety.requireStructuredPostTaskForWrite,
       allowedScopePaths:
         optionalStringArray(safety?.allowedScopePaths, "Project config.safety.allowedScopePaths") ??
         defaults.safety.allowedScopePaths,
