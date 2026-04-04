@@ -92,7 +92,11 @@ function runContextSelection({ chunks, focus, tokenBudget, maxChunks }) {
   if (!chunks || chunks.length === 0) {
     return { selectedChunks: [], summary: { selectedCount: 0, suppressedCount: 0 } };
   }
-  return selectContextWindow(chunks, { focus, tokenBudget, maxChunks });
+  const result = selectContextWindow(chunks, { focus, tokenBudget, maxChunks });
+  return {
+    selectedChunks: /** @type {unknown[]} */ (result.selected ?? []),
+    summary: result.summary ?? { selectedCount: 0, suppressedCount: 0 }
+  };
 }
 
 /**
@@ -139,7 +143,7 @@ async function runGeneration({ provider, task, memoryContext, selectedChunks, pr
   });
 
   return {
-    output: typeof result === "string" ? result : (result.text ?? ""),
+    output: typeof result === "string" ? result : (result.content ?? ""),
     status: "ok"
   };
 }
@@ -230,7 +234,7 @@ export async function runJarvisCommand(opts) {
   const startedAt = Date.now();
   const taskType = classifyTask(task);
 
-  /** @param {string} phase */
+  /** @param {"proposal" | "codegen" | "review" | "security" | "repair"} phase */
   const modelFor = (phase) => phaseModels[phase] || model;
 
   // ── Auto-load workspace chunks if not provided ────────────────────
@@ -241,7 +245,7 @@ export async function runJarvisCommand(opts) {
         security: securityConfig,
         scan: scanConfig
       });
-      chunks = wsResult.chunks ?? [];
+      chunks = wsResult.payload?.chunks ?? [];
     } catch {
       // Workspace loading failed — continue with empty chunks
       chunks = [];

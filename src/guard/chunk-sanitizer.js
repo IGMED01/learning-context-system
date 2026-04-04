@@ -45,9 +45,9 @@ export function sanitizeChunks(chunks) {
         ? sanitizeChunkContent(record.content)
         : record.content;
 
-    return /** @type {T} */ ({
+    return /** @type {T} */ (/** @type {unknown} */ ({
       ...record,
       content
-    });
+    }));
   });
 }
